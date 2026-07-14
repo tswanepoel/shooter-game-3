@@ -1,2 +1,5 @@
 rules:
+  - "Find and read relevant documentation as needed."
   - "Follow contribution guidelines in the root directory."
+  - "Use code comments only where necessary."
+  - "Keep documentation up to date with code changes."
