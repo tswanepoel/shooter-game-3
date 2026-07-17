@@ -160,6 +160,8 @@ impl GameClient {
     /// Create a client bound to `canvas` and initialize WebGPU.
     #[wasm_bindgen(js_name = create)]
     pub async fn create(canvas: HtmlCanvasElement) -> Result<GameClient, JsValue> {
+        console_error_panic_hook::set_once();
+
         let renderer = Renderer::new(canvas.clone()).await?;
         web_sys::console::log_1(&"WebGPU initialized; blank canvas ready".into());
         Ok(GameClient { renderer, canvas })
