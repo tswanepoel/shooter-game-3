@@ -130,7 +130,7 @@ Hooks are installed when you run `npm install` (`husky` via the `prepare` script
 
 | Hook | Checks |
 |------|--------|
-| **pre-commit** | `cargo fmt --check`, `cargo clippy … -D warnings` |
+| **pre-commit** | `cargo fmt --check`, `cargo clippy … -D warnings`, `lint-staged` (Prettier on staged `web/` + root JS/TS) |
 | **commit-msg** | commitlint (type, **required scope**, header length) |
 
 You don't need to run these manually for a normal commit:

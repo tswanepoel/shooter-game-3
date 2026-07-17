@@ -7,17 +7,15 @@
     "build": "npm run build-wasm && vite build",
     "preview": "npm run build-wasm && vite preview",
     "build-wasm": "cd crates/game-client && wasm-pack build --target web --out-dir ../../pkg",
-    "lint": "eslint src --ext js,ts --fix",
-    "format": "prettier --write src",
+    "format": "prettier --write \"web/**/*.{js,css,html}\" \"*.ts\" \"*.js\"",
+    "format:check": "prettier --check \"web/**/*.{js,css,html}\" \"*.ts\" \"*.js\"",
     "prepare": "husky"
   },
   "lint-staged": {
-    "crates/**/*.rs": [
-      "cargo fmt --check",
-      "cargo clippy"
+    "web/**/*.{js,css,html}": [
+      "prettier --write"
     ],
     "*.{js,ts}": [
-      "eslint --fix",
       "prettier --write"
     ]
   },
@@ -25,9 +23,6 @@
     "@commitlint/cli": "^21.2.1",
     "@commitlint/config-conventional": "^21.2.0",
     "@types/node": "^20.0.0",
-    "@typescript-eslint/eslint-plugin": "^6.0.0",
-    "@typescript-eslint/parser": "^6.0.0",
-    "eslint": "^8.0.0",
     "husky": "^9.1.7",
     "lint-staged": "^17.0.8",
     "prettier": "^3.0.0",
