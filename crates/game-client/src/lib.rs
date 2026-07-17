@@ -1,69 +1,219 @@
-//! WebGPU client for the shooter game
+//! WebGPU client for the shooter game.
 //!
-//! This module handles WebGPU initialization and rendering logic.
+//! Initializes a browser WebGPU surface and clears the canvas each frame.
+//! The render loop is owned by this module (feature 001 scaffolding).
+
+#![cfg(target_arch = "wasm32")]
+
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsCast;
 use web_sys::HtmlCanvasElement;
 
-/// Initialize the WebGPU context
-#[wasm_bindgen]
-pub fn initialize_webgpu(canvas: HtmlCanvasElement) -> Result<(), JsValue> {
-    // Add proper error handling for WebGPU context acquisition
-    let _context = canvas
-        .get_context("webgpu")
-        .map_err(|e| JsValue::from_str(&format!("Failed to get WebGPU context: {:?}", e)))?
-        .ok_or_else(|| JsValue::from_str("WebGPU not supported by browser"))?;
+/// Near-black clear color: blank canvas, slightly tinted so a live GPU clear
+/// is distinguishable from an uninitialized page.
+const CLEAR_COLOR: wgpu::Color = wgpu::Color {
+    r: 0.05,
+    g: 0.06,
+    b: 0.08,
+    a: 1.0,
+};
 
-    // Add device creation error handling
-    // Add proper validation of WebGPU capabilities
-    web_sys::console::log_1(&"WebGPU initialized successfully".into());
-    Ok(())
+type FrameCallback = Rc<RefCell<Option<Closure<dyn FnMut()>>>>;
+
+struct Renderer {
+    surface: wgpu::Surface<'static>,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    config: wgpu::SurfaceConfiguration,
 }
 
-/// Render a single frame with a blank screen
-#[wasm_bindgen]
-pub fn render_frame() -> Result<(), JsValue> {
-    // Render loop implementation - clear screen with black color
-    web_sys::console::log_1(&"Rendering frame...".into());
-    Ok(())
-}
+impl Renderer {
+    async fn new(canvas: HtmlCanvasElement) -> Result<Self, JsValue> {
+        let width = canvas.client_width().max(1) as u32;
+        let height = canvas.client_height().max(1) as u32;
+        canvas.set_width(width);
+        canvas.set_height(height);
 
-/// Start the render loop
-#[wasm_bindgen]
-pub fn start_render_loop() -> Result<(), JsValue> {
-    // Simple render loop using requestAnimationFrame
-    let render_fn = wasm_bindgen::closure::Closure::wrap(Box::new(|| {
-        // Handle potential errors in render_frame
-        if let Err(e) = render_frame() {
-            web_sys::console::error_1(&e);
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::BROWSER_WEBGPU,
+            ..Default::default()
+        });
+
+        let surface = instance
+            .create_surface(wgpu::SurfaceTarget::Canvas(canvas))
+            .map_err(|e| JsValue::from_str(&format!("Failed to create surface: {e}")))?;
+
+        // Canvas path stores its own handle copy; the surface outlives this function.
+        let surface: wgpu::Surface<'static> = unsafe { std::mem::transmute(surface) };
+
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                compatible_surface: Some(&surface),
+                force_fallback_adapter: false,
+            })
+            .await
+            .ok_or_else(|| JsValue::from_str("No WebGPU adapter available"))?;
+
+        let (device, queue) = adapter
+            .request_device(
+                &wgpu::DeviceDescriptor {
+                    label: Some("game-client-device"),
+                    required_features: wgpu::Features::empty(),
+                    required_limits: wgpu::Limits::downlevel_webgl2_defaults()
+                        .using_resolution(adapter.limits()),
+                },
+                None,
+            )
+            .await
+            .map_err(|e| JsValue::from_str(&format!("Failed to create device: {e}")))?;
+
+        let caps = surface.get_capabilities(&adapter);
+        let format = caps
+            .formats
+            .iter()
+            .copied()
+            .find(|f| f.is_srgb())
+            .unwrap_or(caps.formats[0]);
+
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format,
+            width,
+            height,
+            present_mode: caps.present_modes[0],
+            alpha_mode: caps.alpha_modes[0],
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+        surface.configure(&device, &config);
+
+        Ok(Self {
+            surface,
+            device,
+            queue,
+            config,
+        })
+    }
+
+    fn resize_if_needed(&mut self, width: u32, height: u32) {
+        let width = width.max(1);
+        let height = height.max(1);
+        if self.config.width == width && self.config.height == height {
+            return;
         }
-        // Schedule next frame recursively - this is a simplified version
-        // In a real implementation, we'd need to properly manage the closure lifecycle
-    }) as Box<dyn Fn()>);
+        self.config.width = width;
+        self.config.height = height;
+        self.surface.configure(&self.device, &self.config);
+    }
 
-    // Schedule first frame
-    web_sys::window()
-        .ok_or_else(|| JsValue::from_str("No window available"))?
-        .request_animation_frame(render_fn.as_ref().unchecked_ref())
-        .map_err(|e| JsValue::from_str(&format!("Failed to schedule animation frame: {:?}", e)))?;
+    fn render(&mut self) -> Result<(), JsValue> {
+        let frame = self
+            .surface
+            .get_current_texture()
+            .map_err(|e| JsValue::from_str(&format!("Failed to acquire swapchain texture: {e}")))?;
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
 
-    // Keep the closure alive - we'll use a different approach to avoid scope issues
-    std::mem::forget(render_fn);
-    Ok(())
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("frame-encoder"),
+            });
+
+        {
+            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("clear-pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(CLEAR_COLOR),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                occlusion_query_set: None,
+                timestamp_writes: None,
+            });
+        }
+
+        self.queue.submit(std::iter::once(encoder.finish()));
+        frame.present();
+        Ok(())
+    }
 }
 
-/// Clear the canvas with a solid color (black)
+/// Owns the WebGPU renderer and exposes a small JS API.
 #[wasm_bindgen]
-pub fn clear_canvas() -> Result<(), JsValue> {
-    web_sys::console::log_1(&"Clearing canvas...".into());
-    Ok(())
+pub struct GameClient {
+    renderer: Renderer,
+    canvas: HtmlCanvasElement,
 }
 
-/// Get WebGPU capabilities information for debugging
 #[wasm_bindgen]
-pub fn get_webgpu_capabilities() -> Result<JsValue, JsValue> {
-    // This function would normally return detailed WebGPU capabilities
-    // For now, we'll just return a simple success indicator
-    web_sys::console::log_1(&"Getting WebGPU capabilities...".into());
-    Ok(JsValue::TRUE)
+impl GameClient {
+    /// Create a client bound to `canvas` and initialize WebGPU.
+    #[wasm_bindgen(js_name = create)]
+    pub async fn create(canvas: HtmlCanvasElement) -> Result<GameClient, JsValue> {
+        let renderer = Renderer::new(canvas.clone()).await?;
+        web_sys::console::log_1(&"WebGPU initialized; blank canvas ready".into());
+        Ok(GameClient { renderer, canvas })
+    }
+
+    /// Clear and present one frame.
+    #[wasm_bindgen(js_name = renderFrame)]
+    pub fn render_frame(&mut self) -> Result<(), JsValue> {
+        let width = self.canvas.client_width().max(1) as u32;
+        let height = self.canvas.client_height().max(1) as u32;
+        if self.canvas.width() != width || self.canvas.height() != height {
+            self.canvas.set_width(width);
+            self.canvas.set_height(height);
+        }
+        self.renderer.resize_if_needed(width, height);
+        self.renderer.render()
+    }
+
+    /// Drive the render loop with `requestAnimationFrame` from inside WASM.
+    #[wasm_bindgen(js_name = startRenderLoop)]
+    pub fn start_render_loop(self) -> Result<(), JsValue> {
+        let client = Rc::new(RefCell::new(self));
+        let frame_cb: FrameCallback = Rc::new(RefCell::new(None));
+        let frame_cb_clone = frame_cb.clone();
+
+        *frame_cb.borrow_mut() = Some(Closure::new(move || {
+            {
+                let mut client = client.borrow_mut();
+                if let Err(err) = client.render_frame() {
+                    web_sys::console::error_1(&err);
+                }
+            }
+
+            if let Some(window) = web_sys::window() {
+                let cb = frame_cb_clone.borrow();
+                if let Some(closure) = cb.as_ref() {
+                    let _ = window.request_animation_frame(closure.as_ref().unchecked_ref());
+                }
+            }
+        }));
+
+        let window = web_sys::window().ok_or_else(|| JsValue::from_str("No window available"))?;
+        {
+            let cb = frame_cb.borrow();
+            let closure = cb
+                .as_ref()
+                .ok_or_else(|| JsValue::from_str("Render loop closure missing"))?;
+            window
+                .request_animation_frame(closure.as_ref().unchecked_ref())
+                .map_err(|e| JsValue::from_str(&format!("Failed to schedule frame: {e:?}")))?;
+        }
+
+        // Keep the recursive rAF closure alive for the page lifetime.
+        std::mem::forget(frame_cb);
+        Ok(())
+    }
 }
