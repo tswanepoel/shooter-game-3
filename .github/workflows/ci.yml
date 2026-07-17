@@ -42,6 +42,10 @@ jobs:
     - name: Run clippy
       run: cargo clippy --all-targets --all-features --locked -- -D warnings
 
+    # game-client is wasm32-only (`#![cfg(target_arch = "wasm32")]`); host clippy skips its body.
+    - name: Run clippy (wasm32)
+      run: cargo clippy -p game-client --target wasm32-unknown-unknown --locked -- -D warnings
+
     - name: Run fmt
       run: cargo fmt --all -- --check
 
