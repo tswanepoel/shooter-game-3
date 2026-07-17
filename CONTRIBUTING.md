@@ -37,7 +37,7 @@ npm run dev
 - Game logic and state management
 - Uses [`glam`](https://crates.io/crates/glam) for math
 - Uses [`serde`](https://crates.io/crates/serde) for serialization
-- Uses [`rapier3d`](https://crates.io/crates/rapier3d) for physics simulation
+- Physics (e.g. rapier3d) is planned; not wired in yet
 
 ### `game-client` crate
 - WebGPU rendering logic via [`wgpu`](https://crates.io/crates/wgpu)
@@ -75,27 +75,78 @@ npm run dev
 
 ## Commit Message Conventions
 
-This project follows the [Conventional Commits](https://www.conventionalcommits.org/) specification:
+This project follows [Conventional Commits](https://www.conventionalcommits.org/) with a **required scope**. Commitlint rejects messages that omit the scope or use one outside the allow-list.
 
 ```
 <type>(<scope>): <description>
 ```
 
-- **Allowed types:** `feat`, `fix`, `docs`, `refactor`, `chore`
-- Keep the first line under 72 characters
-- Each commit should represent a single logical change — group related changes together rather than mixing unrelated edits in one commit
+### Types (required)
 
-## Pre-commit Hooks
+| Type | Use for |
+|------|---------|
+| `feat` | New user-facing capability |
+| `fix` | Bug fix |
+| `docs` | Documentation only |
+| `refactor` | Code change that is not a feat or fix |
+| `chore` | Tooling, CI, deps, scaffolding, housekeeping |
 
-Pre-commit hooks are installed automatically when you clone the repository. On every commit, they automatically run:
+### Scopes (required — must be one of these)
 
-- `cargo fmt`
-- `cargo clippy`
+| Scope | Paths / meaning |
+|-------|-----------------|
+| `sim` | `crates/game-sim` |
+| `client` | `crates/game-client` |
+| `web` | `web/` |
+| `assets` | `assets/` |
+| `ci` | `.github/` |
+| `infra` | `infra/` |
+| `docs` | `docs/` |
+| `repo` | Root workspace, `package.json`, husky, commitlint, `.gitignore`, README/CONTRIBUTING at root |
 
-You don't need to run them manually — they trigger as part of the normal commit flow:
+### Rules
+
+- Scope is **required** (empty scope fails commitlint)
+- Scope must be from the table above
+- Header (first line) ≤ 72 characters
+- No trailing period on the subject
+- One logical change per commit
+- Prefer **one scope per commit**. If a change spans areas, split the commit. If you must keep it as one, pick the **primary** scope (the bulk of the diff)
+
+### Examples
+
+```bash
+feat(client): initialize wgpu and clear to black
+fix(web): show error when WebGPU is unavailable
+chore(ci): add clippy to the workflow
+chore(repo): require scoped conventional commits
+docs(docs): define empty-scene acceptance criteria
+docs(repo): clarify commit message conventions
+```
+
+## Git Hooks
+
+Hooks are installed when you run `npm install` (`husky` via the `prepare` script).
+
+| Hook | Checks |
+|------|--------|
+| **pre-commit** | `cargo fmt --check`, `cargo clippy … -D warnings` |
+| **commit-msg** | commitlint (type, **required scope**, header length) |
+
+You don't need to run these manually for a normal commit:
 
 ```bash
 git commit -m "feat(client): add reload animation"
+```
+
+Commits without a valid scoped message are rejected, for example:
+
+```bash
+# fails — missing scope
+git commit -m "feat: add reload animation"
+
+# fails — unknown scope
+git commit -m "feat(frontend): add reload animation"
 ```
 
 ## Pull Request Process
