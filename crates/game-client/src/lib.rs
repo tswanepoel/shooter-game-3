@@ -1,7 +1,4 @@
-//! WebGPU client for the shooter game.
-//!
-//! Initializes a browser WebGPU surface and clears the canvas each frame.
-//! The render loop is owned by this module (feature 001 scaffolding).
+//! WebGPU client: surface init, blank clear, and WASM-owned render loop.
 
 #![cfg(target_arch = "wasm32")]
 
@@ -12,8 +9,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::HtmlCanvasElement;
 
-/// Near-black clear color: blank canvas, slightly tinted so a live GPU clear
-/// is distinguishable from an uninitialized page.
+/// Blank clear color (near-black, slightly tinted for a live GPU clear).
 const CLEAR_COLOR: wgpu::Color = wgpu::Color {
     r: 0.05,
     g: 0.06,
@@ -37,7 +33,7 @@ impl Renderer {
         canvas.set_width(width);
         canvas.set_height(height);
 
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::BROWSER_WEBGPU,
             ..Default::default()
         });
@@ -46,12 +42,12 @@ impl Renderer {
             .create_surface(wgpu::SurfaceTarget::Canvas(canvas))
             .map_err(|e| JsValue::from_str(&format!("Failed to create surface: {e}")))?;
 
-        // Canvas path stores its own handle copy; the surface outlives this function.
+        // SAFETY: wgpu copies the canvas handle; the surface is valid for the page lifetime.
         let surface: wgpu::Surface<'static> = unsafe { std::mem::transmute(surface) };
 
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
+                power_preference: wgpu::PowerPreference::None,
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
             })
@@ -63,8 +59,8 @@ impl Renderer {
                 &wgpu::DeviceDescriptor {
                     label: Some("game-client-device"),
                     required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::downlevel_webgl2_defaults()
-                        .using_resolution(adapter.limits()),
+                    required_limits: wgpu::Limits::default().using_resolution(adapter.limits()),
+                    memory_hints: wgpu::MemoryHints::Performance,
                 },
                 None,
             )
@@ -148,7 +144,7 @@ impl Renderer {
     }
 }
 
-/// Owns the WebGPU renderer and exposes a small JS API.
+/// WebGPU renderer bound to a canvas, exposed to JS.
 #[wasm_bindgen]
 pub struct GameClient {
     renderer: Renderer,
@@ -157,7 +153,7 @@ pub struct GameClient {
 
 #[wasm_bindgen]
 impl GameClient {
-    /// Create a client bound to `canvas` and initialize WebGPU.
+    /// Create a client on `canvas` and initialize WebGPU.
     #[wasm_bindgen(js_name = create)]
     pub async fn create(canvas: HtmlCanvasElement) -> Result<GameClient, JsValue> {
         console_error_panic_hook::set_once();
@@ -180,7 +176,7 @@ impl GameClient {
         self.renderer.render()
     }
 
-    /// Drive the render loop with `requestAnimationFrame` from inside WASM.
+    /// Run the frame loop via `requestAnimationFrame`.
     #[wasm_bindgen(js_name = startRenderLoop)]
     pub fn start_render_loop(self) -> Result<(), JsValue> {
         let client = Rc::new(RefCell::new(self));
@@ -214,7 +210,7 @@ impl GameClient {
                 .map_err(|e| JsValue::from_str(&format!("Failed to schedule frame: {e:?}")))?;
         }
 
-        // Keep the recursive rAF closure alive for the page lifetime.
+        // Retain the rAF callback for the page lifetime.
         std::mem::forget(frame_cb);
         Ok(())
     }
