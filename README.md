@@ -76,14 +76,17 @@ npm run build
 | `cargo test` | Run Rust tests |
 | `cargo clippy --all-targets --all-features -- -D warnings` | Run Rust linting |
 | `cargo fmt --all` | Format Rust code |
+| `npm run format` | Format `web/` and root JS/TS with Prettier |
 
 ## Docker Builds
 
-To build the WASM artifacts using Docker for reproducible builds:
+Build WASM artifacts with Docker from the **repository root** (the Dockerfile expects the full workspace as context):
 
 ```bash
-docker build -f infra/docker/wasm-builder/Dockerfile -t shooter-game-wasm-builder infra/docker/wasm-builder
+docker build -f infra/docker/wasm-builder/Dockerfile -t shooter-game-wasm-builder .
 ```
+
+The image packages the release `*.wasm` outputs under `/artifacts`.
 
 ## Development Workflow
 

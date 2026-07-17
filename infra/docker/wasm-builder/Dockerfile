@@ -1,39 +1,31 @@
-# Multi-stage Docker build for reproducible WASM builds
-FROM rust:1.70 as builder
+# Reproducible WASM build. Must be built from the repository root:
+#
+#   docker build -f infra/docker/wasm-builder/Dockerfile -t shooter-game-wasm-builder .
+#
+FROM rust:1-bookworm AS builder
 
-# Install wasm32-unknown-unknown target
 RUN rustup target add wasm32-unknown-unknown
 
-# Install additional build dependencies
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake \
     pkg-config \
     libssl-dev \
-    libvulkan-dev \
-    vulkan-tools \
     && rm -rf /var/lib/apt/lists/*
 
-# Create app directory
 WORKDIR /app
 
-# Copy workspace files
-COPY . .
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
 
-# Build the project for WASM target
-RUN cargo build --release --target wasm32-unknown-unknown
+RUN cargo build --release --target wasm32-unknown-unknown --locked
 
-# Create final image with just the necessary files
-FROM alpine:latest
+# Slim image containing only the built WASM artifacts.
+FROM alpine:3.20
 
 RUN apk --no-cache add ca-certificates
-WORKDIR /root/
 
-# Copy the built WASM files
-COPY --from=builder /app/target/wasm32-unknown-unknown/release/*.wasm .
+WORKDIR /artifacts
 
-# Copy build script
-COPY infra/docker/wasm-builder/build.sh .
+COPY --from=builder /app/target/wasm32-unknown-unknown/release/*.wasm ./
 
-RUN chmod +x ./build.sh
-
-CMD ["./build.sh"]
+CMD ["ls", "-la", "/artifacts"]

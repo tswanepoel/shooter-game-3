@@ -1,0 +1,20 @@
+# Build context is the repository root (see infra/docker/wasm-builder/Dockerfile).
+# Only Cargo manifests + crates are needed for the WASM build.
+.git
+.github
+.husky
+.continue
+target
+node_modules
+pkg
+web
+assets
+docs
+infra
+*.md
+package.json
+package-lock.json
+commitlint.config.js
+vite.config.ts
+.gitignore
+.prettierrc.json
