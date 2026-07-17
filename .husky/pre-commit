@@ -1,0 +1,8 @@
+#!/bin/sh
+# Run cargo fmt and clippy for Rust files
+if command -v cargo >/dev/null 2>&1; then
+  echo "Running cargo fmt..."
+  cargo fmt --check
+  echo "Running cargo clippy..."
+  cargo clippy --all-targets --all-features -- -D warnings
+fi
