@@ -36,12 +36,12 @@ npm run dev
 ### `game-sim` crate
 - Game logic and state management
 - Uses [`glam`](https://crates.io/crates/glam) for math
-- Uses [`serde`](https://crates.io/crates/serde) for serialization
-- Physics (e.g. rapier3d) is planned; not wired in yet
+- Serialization (e.g. serde) and physics (e.g. rapier3d) are planned; not wired in yet
 
 ### `game-client` crate
 - WebGPU rendering logic via [`wgpu`](https://crates.io/crates/wgpu)
 - JavaScript interop via [`wasm-bindgen`](https://crates.io/crates/wasm-bindgen)
+- Depends on `game-sim` so client and server share simulation types
 
 ### Web assets (`web/`)
 - `index.html` — main HTML file with the canvas element

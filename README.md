@@ -35,6 +35,7 @@ A WebGPU-powered shooter game built with Rust and Vite.
 - Rust (stable toolchain)
 - Node.js v16 or higher
 - `wasm32-unknown-unknown` target for Rust
+- [`wasm-pack`](https://rustwasm.github.io/wasm-pack/) (builds the web WASM package under `pkg/`)
 - A WebGPU-capable browser for running the game (see [Browser Support](#browser-support))
 
 ## Getting Started
@@ -44,12 +45,17 @@ A WebGPU-powered shooter game built with Rust and Vite.
    rustup target add wasm32-unknown-unknown
    ```
 
-2. Install Node.js dependencies:
+2. Install `wasm-pack` (if you do not already have it):
+   ```bash
+   cargo install wasm-pack
+   ```
+
+3. Install Node.js dependencies:
    ```bash
    npm install
    ```
 
-3. Start the development server:
+4. Start the development server:
    ```bash
    npm run dev
    ```
