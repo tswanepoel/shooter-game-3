@@ -1,18 +1,19 @@
-// Main application entry point
-import init from '../pkg/game_client.js';
+// Main application entry point: load WASM, bind canvas, start the client loop.
+import init, { GameClient } from '../pkg/game_client.js';
 
 async function run() {
-    try {
-        // Initialize the WASM module
-        await init();
-        
-        // The main function is automatically called by the WASM module
-        // when it's initialized, but we can also call it explicitly if needed
-        console.log('Application initialized successfully');
-    } catch (error) {
-        console.error('Failed to initialize application:', error);
-    }
+  const canvas = document.getElementById('game-canvas');
+  if (!(canvas instanceof HTMLCanvasElement)) {
+    throw new Error('Missing #game-canvas element');
+  }
+
+  await init();
+
+  const client = await GameClient.create(canvas);
+  client.startRenderLoop();
+  console.log('Game client render loop started');
 }
 
-// Start the application
-run();
+run().catch((error) => {
+  console.error('Failed to start application:', error);
+});
