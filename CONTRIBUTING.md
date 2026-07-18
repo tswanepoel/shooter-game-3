@@ -36,12 +36,14 @@ npm run dev
 ### `game-sim` crate
 - Game logic and state management
 - Uses [`glam`](https://crates.io/crates/glam) for math
+- Ground-truth world constants (metres, Y-up, camera/grid quantities) live here; client consumes them
 - Serialization (e.g. serde) and physics (e.g. rapier3d) are planned; not wired in yet
 
 ### `game-client` crate
 - WebGPU rendering logic via [`wgpu`](https://crates.io/crates/wgpu)
 - JavaScript interop via [`wasm-bindgen`](https://crates.io/crates/wasm-bindgen)
-- Depends on `game-sim` so client and server share simulation types
+- Depends on `game-sim` so client and server share simulation types and world constants
+- Client-only debug visuals (e.g. floor grid) must not invent world quantities already defined in `game-sim`
 
 ### Web assets (`web/`)
 - `index.html` — main HTML file with the canvas element
