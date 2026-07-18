@@ -687,7 +687,7 @@ fn maybe_kick_lineup_load(inner: &Rc<RefCell<ClientInner>>) {
     {
         let mut c = inner.borrow_mut();
         c.lineup = LineupState::Loading;
-        c.debug.shell.push_log("lineup: loading characters…");
+        c.debug.shell.push_log("lineup: loading blaster lineup…");
     }
 
     let (device, queue, format) = {

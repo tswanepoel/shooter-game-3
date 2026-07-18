@@ -43,7 +43,7 @@ impl DebugRegistry {
             "draw.lineup",
             CVar {
                 value: CVarValue::Bool(false),
-                help: "client: Kenney character lineup on y = 0 (import check)",
+                help: "client: blaster lineup (armed Kenney row; grip/import check)",
             },
         );
     }
@@ -87,7 +87,7 @@ impl DebugRegistry {
             "  help              this list".into(),
             "  grid [on|off|toggle]  set draw.grid".into(),
             "  flycam|fly [on|off|toggle]  debug flycam (F8)".into(),
-            "  lineup [on|off|toggle]  character kit lineup".into(),
+            "  lineup [on|off|toggle]  blaster lineup (armed characters)".into(),
             "  remount           leave flycam, restore self view".into(),
             "  screenshot|shot   capture frame (F9)".into(),
             "cvars (get: name · set: name <value>):".into(),

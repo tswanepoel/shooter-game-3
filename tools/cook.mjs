@@ -4,7 +4,7 @@
  * Vite publicDir; sole ship tree is web/dist.
  *
  * V1 packs by demand cadence (not authoring kit layout):
- *   kenney-core — character kit for lineup / play
+ *   kenney-core — character + blaster kits for lineup / play
  *
  * Pack format (SGPK v1): magic + JSON header + concatenated raw files (glb/png as-is).
  * No custom GPU formats; loaders still decode glTF/PNG.
@@ -32,7 +32,7 @@ const PACK_VERSION = 1;
 const PACKS = [
   {
     id: 'kenney-core',
-    sources: ['characters'],
+    sources: ['characters', 'blasters'],
     assets() {
       const letters = 'abcdefghijklmnopqr';
       /** @type {AssetEntry[]} */
@@ -49,6 +49,18 @@ const PACKS = [
           kind: 'png',
         });
       }
+      for (const ch of letters) {
+        out.push({
+          id: `blaster-${ch}.mesh`,
+          path: path.join(sourceRoot, 'blasters', 'models', `blaster-${ch}.glb`),
+          kind: 'glb',
+        });
+      }
+      out.push({
+        id: 'blaster.colormap',
+        path: path.join(sourceRoot, 'blasters', 'textures', 'colormap.png'),
+        kind: 'png',
+      });
       return out;
     },
   },

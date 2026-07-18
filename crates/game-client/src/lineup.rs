@@ -1,9 +1,10 @@
-//! Debug character lineup (Kenney kit). Kit facts: `assets/source/characters/README.md`.
+//! Debug blaster lineup (feature 011): each blaster held by a Kenney character.
+//! Kit facts: `assets/source/characters/README.md`, `assets/source/blasters/README.md`.
 //! Loads via cook pack `kenney-core` (feature 010), not source paths.
 
 use std::io::Cursor;
 
-use glam::{Mat4, Vec3};
+use glam::{Mat4, Quat, Vec3};
 use wasm_bindgen::JsValue;
 
 use crate::pack;
@@ -11,11 +12,48 @@ use crate::pack;
 const LETTERS: &[u8] = b"abcdefghijklmnopqr";
 /// Pack id from cook manifest (demand-cadence core art).
 const KENNEY_CORE_PACK: &str = "kenney-core";
-/// Kit units → metres (2.7 kit → 1.8 m standing; kit README).
-const KIT_ROOT_SCALE: f32 = 1.0 / 1.5;
-const LINEUP_SPACING_M: f32 = 1.5;
+
+// --- Kit → world metres (independent truths; see kit READMEs) ---
+/// Character authored units → metres (2.7 kit → 1.8 m standing).
+const CHAR_UNITS_TO_M: f32 = 1.0 / 1.5;
+/// Blaster authored units → metres (1:1; do not share character scale).
+const BLASTER_UNITS_TO_M: f32 = 1.0;
+
+/// Row spacing (m); wider than character-only so held weapons clear neighbours.
+const LINEUP_SPACING_M: f32 = 2.0;
 /// Row depth (m); stub cam looks −Z.
 const LINEUP_Z_M: f32 = -6.0;
+
+/// `holding-right` on `arm-right` only (character draw). −90° X: hand axis → character +Z.
+const HOLDING_RIGHT_ROT: Quat = Quat::from_xyzw(
+    std::f32::consts::FRAC_1_SQRT_2,
+    0.0,
+    0.0,
+    -std::f32::consts::FRAC_1_SQRT_2,
+);
+
+/// Per-blaster grip offset in `arm-right` local after hold (character kit units).
+/// Source: `assets/source/blasters/README.md` — keep in sync.
+const BLASTER_GRIP_OFFSETS: [[f32; 3]; 18] = [
+    [0.0, -1.14, 0.34], // a
+    [0.0, -1.00, 0.30], // b
+    [0.0, -1.11, 0.20], // c
+    [0.0, -1.11, 0.18], // d
+    [0.0, -2.34, 0.22], // e
+    [0.0, -1.39, 0.19], // f
+    [0.0, -1.27, 0.22], // g
+    [0.0, -1.25, 0.24], // h
+    [0.0, -0.93, 0.22], // i
+    [0.0, -1.20, 0.15], // j
+    [0.0, -1.09, 0.20], // k
+    [0.0, -1.16, 0.20], // l
+    [0.0, -1.18, 0.26], // m
+    [0.0, -0.99, 0.22], // n
+    [0.0, -1.06, 0.19], // o
+    [0.0, -1.21, 0.14], // p
+    [0.0, -1.28, 0.19], // q
+    [0.0, -1.18, 0.10], // r
+];
 
 const UNLIT_SHADER: &str = r#"
 struct FrameUniforms {
@@ -86,7 +124,8 @@ struct GpuPrimitive {
     index_count: u32,
 }
 
-struct CharacterGpu {
+/// One textured mesh batch (character or blaster).
+struct MeshBatch {
     primitives: Vec<GpuPrimitive>,
     bind_group: wgpu::BindGroup,
     _texture: wgpu::Texture,
@@ -98,7 +137,7 @@ pub struct LineupGpu {
     pipeline: wgpu::RenderPipeline,
     frame_bind_group: wgpu::BindGroup,
     frame_uniform: wgpu::Buffer,
-    characters: Vec<CharacterGpu>,
+    batches: Vec<MeshBatch>,
 }
 
 impl LineupGpu {
@@ -207,7 +246,8 @@ impl LineupGpu {
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
+                // Blaster kit materials are double-sided.
+                cull_mode: None,
                 ..Default::default()
             },
             depth_stencil: Some(wgpu::DepthStencilState {
@@ -226,7 +266,6 @@ impl LineupGpu {
             cache: None,
         });
 
-        // Repeat wrap for kit UV range; linear mips for minification.
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("lineup-albedo-sampler"),
             address_mode_u: wgpu::AddressMode::Repeat,
@@ -239,30 +278,69 @@ impl LineupGpu {
         });
 
         let pack = pack::load_pack(KENNEY_CORE_PACK).await?;
+        let colormap = pack
+            .get("blaster.colormap")
+            .map_err(|e| JsValue::from_str(&e))?;
 
         let n = LETTERS.len();
-        let mut characters = Vec::with_capacity(n);
+        let mut batches = Vec::with_capacity(n * 2);
+
         for (i, &letter) in LETTERS.iter().enumerate() {
             let ch = letter as char;
             let mesh_id = format!("character-{ch}.mesh");
             let albedo_id = format!("character-{ch}.albedo");
-            let glb = pack.get(&mesh_id).map_err(|e| JsValue::from_str(&e))?;
-            let png = pack.get(&albedo_id).map_err(|e| JsValue::from_str(&e))?;
+            let blaster_id = format!("blaster-{ch}.mesh");
+            let char_glb = pack.get(&mesh_id).map_err(|e| JsValue::from_str(&e))?;
+            let char_png = pack.get(&albedo_id).map_err(|e| JsValue::from_str(&e))?;
+            let blaster_glb = pack.get(&blaster_id).map_err(|e| JsValue::from_str(&e))?;
 
             let x = (i as f32 - (n as f32 - 1.0) * 0.5) * LINEUP_SPACING_M;
             let placement = Mat4::from_translation(Vec3::new(x, 0.0, LINEUP_Z_M));
 
-            let character =
-                upload_character(device, queue, &material_bgl, &sampler, glb, png, placement)
-                    .map_err(|e| JsValue::from_str(&format!("character-{ch}: {e}")))?;
-            characters.push(character);
+            let (char_prims, min_y, arm_right_kit) = extract_character_hold(char_glb)
+                .map_err(|e| JsValue::from_str(&format!("character-{ch}: {e}")))?;
+            // Shared path into world metres for both kits (feet on y = 0, row placement).
+            let kit_to_world = placement
+                * Mat4::from_scale(Vec3::splat(CHAR_UNITS_TO_M))
+                * Mat4::from_translation(Vec3::new(0.0, -min_y, 0.0));
+
+            let gpu = UploadCtx {
+                device,
+                queue,
+                material_bgl: &material_bgl,
+                sampler: &sampler,
+            };
+            let char_batch =
+                upload_batch(&gpu, char_png, char_prims, kit_to_world, "lineup-character")
+                    .map_err(|e| JsValue::from_str(&format!("character-{ch} upload: {e}")))?;
+            batches.push(char_batch);
+
+            // Arm hierarchy → grip *position* only. Blaster pose is character-frame:
+            // Ry(π) maps mesh −Z muzzle → character +Z; scale is BLASTER_UNITS_TO_M.
+            let grip_kit =
+                arm_right_kit.transform_point3(Vec3::from_array(BLASTER_GRIP_OFFSETS[i]));
+            let blaster_root = kit_to_world
+                * Mat4::from_translation(grip_kit)
+                * Mat4::from_rotation_y(std::f32::consts::PI)
+                * Mat4::from_scale(Vec3::splat(BLASTER_UNITS_TO_M / CHAR_UNITS_TO_M));
+            let blaster_prims = extract_primitives(blaster_glb)
+                .map_err(|e| JsValue::from_str(&format!("blaster-{ch}: {e}")))?;
+            let blaster_batch = upload_batch(
+                &gpu,
+                colormap,
+                blaster_prims,
+                blaster_root,
+                "lineup-blaster",
+            )
+            .map_err(|e| JsValue::from_str(&format!("blaster-{ch} upload: {e}")))?;
+            batches.push(blaster_batch);
         }
 
         Ok(Self {
             pipeline,
             frame_bind_group,
             frame_uniform,
-            characters,
+            batches,
         })
     }
 
@@ -277,9 +355,9 @@ impl LineupGpu {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.frame_bind_group, &[]);
 
-        for character in &self.characters {
-            pass.set_bind_group(1, &character.bind_group, &[]);
-            for prim in &character.primitives {
+        for batch in &self.batches {
+            pass.set_bind_group(1, &batch.bind_group, &[]);
+            for prim in &batch.primitives {
                 pass.set_vertex_buffer(0, prim.vertex_buffer.slice(..));
                 pass.set_index_buffer(prim.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..prim.index_count, 0, 0..1);
@@ -288,20 +366,25 @@ impl LineupGpu {
     }
 }
 
-fn upload_character(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    material_bgl: &wgpu::BindGroupLayout,
-    sampler: &wgpu::Sampler,
-    glb: &[u8],
+struct UploadCtx<'a> {
+    device: &'a wgpu::Device,
+    queue: &'a wgpu::Queue,
+    material_bgl: &'a wgpu::BindGroupLayout,
+    sampler: &'a wgpu::Sampler,
+}
+
+fn upload_batch(
+    gpu: &UploadCtx<'_>,
     png: &[u8],
-    placement: Mat4,
-) -> Result<CharacterGpu, String> {
+    mut prims: Vec<CpuPrim>,
+    root: Mat4,
+    label: &str,
+) -> Result<MeshBatch, String> {
     let (tex_w, tex_h, rgba) = decode_rgba8(png)?;
     let mips = rgba_mip_levels(tex_w, tex_h, rgba);
     let mip_count = mips.len() as u32;
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("lineup-albedo"),
+    let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
         size: wgpu::Extent3d {
             width: tex_w,
             height: tex_h,
@@ -310,13 +393,12 @@ fn upload_character(
         mip_level_count: mip_count,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        // Display-referred Unorm (matches unlit atlas → Unorm canvas).
         format: wgpu::TextureFormat::Rgba8Unorm,
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
     for (level, (mw, mh, pixels)) in mips.into_iter().enumerate() {
-        queue.write_texture(
+        gpu.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &texture,
                 mip_level: level as u32,
@@ -338,27 +420,22 @@ fn upload_character(
     }
     let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-    let (mut prims, min_y) = extract_primitives(glb)?;
-    // Feet on y = 0, kit → metres, row placement (baked into verts).
-    let feet_snap = Mat4::from_translation(Vec3::new(0.0, -min_y, 0.0));
-    let root = placement * Mat4::from_scale(Vec3::splat(KIT_ROOT_SCALE)) * feet_snap;
-
     let base_color = prims.first().map(|p| p.2).unwrap_or([1.0, 1.0, 1.0, 1.0]);
-    let material_uniform = device.create_buffer(&wgpu::BufferDescriptor {
+    let material_uniform = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("lineup-material"),
         size: std::mem::size_of::<MaterialUniforms>() as u64,
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
-    queue.write_buffer(
+    gpu.queue.write_buffer(
         &material_uniform,
         0,
         bytemuck::bytes_of(&MaterialUniforms { base_color }),
     );
 
-    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+    let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("lineup-material-bg"),
-        layout: material_bgl,
+        layout: gpu.material_bgl,
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
@@ -370,7 +447,7 @@ fn upload_character(
             },
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: wgpu::BindingResource::Sampler(sampler),
+                resource: wgpu::BindingResource::Sampler(gpu.sampler),
             },
         ],
     });
@@ -382,21 +459,23 @@ fn upload_character(
             v.position = p.to_array();
         }
 
-        let vbuf = device.create_buffer(&wgpu::BufferDescriptor {
+        let vbuf = gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("lineup-vertices"),
             size: (verts.len() * std::mem::size_of::<MeshVertex>()) as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        queue.write_buffer(&vbuf, 0, bytemuck::cast_slice(&verts));
+        gpu.queue
+            .write_buffer(&vbuf, 0, bytemuck::cast_slice(&verts));
 
-        let ibuf = device.create_buffer(&wgpu::BufferDescriptor {
+        let ibuf = gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("lineup-indices"),
             size: (indices.len() * std::mem::size_of::<u32>()) as u64,
             usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        queue.write_buffer(&ibuf, 0, bytemuck::cast_slice(&indices));
+        gpu.queue
+            .write_buffer(&ibuf, 0, bytemuck::cast_slice(&indices));
 
         gpu_prims.push(GpuPrimitive {
             vertex_buffer: vbuf,
@@ -405,7 +484,7 @@ fn upload_character(
         });
     }
 
-    Ok(CharacterGpu {
+    Ok(MeshBatch {
         primitives: gpu_prims,
         bind_group,
         _texture: texture,
@@ -416,7 +495,8 @@ fn upload_character(
 
 type CpuPrim = (Vec<MeshVertex>, Vec<u32>, [f32; 4]);
 
-fn extract_primitives(glb: &[u8]) -> Result<(Vec<CpuPrim>, f32), String> {
+/// Character hierarchy with `holding-right` on `arm-right`. Returns arm-right world (kit space).
+fn extract_character_hold(glb: &[u8]) -> Result<(Vec<CpuPrim>, f32, Mat4), String> {
     let gltf = gltf::Gltf::from_slice(glb).map_err(|e| format!("gltf parse: {e}"))?;
     let blob = gltf
         .blob
@@ -425,6 +505,7 @@ fn extract_primitives(glb: &[u8]) -> Result<(Vec<CpuPrim>, f32), String> {
 
     let mut out = Vec::new();
     let mut min_y = f32::INFINITY;
+    let mut arm_right_world = None;
 
     let scene = gltf.default_scene().or_else(|| gltf.scenes().next());
     let roots: Vec<_> = match scene {
@@ -437,7 +518,15 @@ fn extract_primitives(glb: &[u8]) -> Result<(Vec<CpuPrim>, f32), String> {
     }
 
     for node in roots {
-        walk_node(&node, Mat4::IDENTITY, blob, &mut out, &mut min_y)?;
+        walk_node(
+            &node,
+            Mat4::IDENTITY,
+            blob,
+            &mut out,
+            &mut min_y,
+            true,
+            &mut arm_right_world,
+        )?;
     }
 
     if out.is_empty() {
@@ -446,8 +535,85 @@ fn extract_primitives(glb: &[u8]) -> Result<(Vec<CpuPrim>, f32), String> {
     if !min_y.is_finite() {
         min_y = 0.0;
     }
+    let arm = arm_right_world.ok_or_else(|| "missing arm-right node".to_string())?;
 
-    Ok((out, min_y))
+    Ok((out, min_y, arm))
+}
+
+fn extract_primitives(glb: &[u8]) -> Result<Vec<CpuPrim>, String> {
+    let gltf = gltf::Gltf::from_slice(glb).map_err(|e| format!("gltf parse: {e}"))?;
+    let blob = gltf
+        .blob
+        .as_ref()
+        .ok_or_else(|| "GLB missing BIN chunk".to_string())?;
+
+    let mut out = Vec::new();
+    let mut min_y = f32::INFINITY;
+    let mut arm_unused = None;
+
+    let scene = gltf.default_scene().or_else(|| gltf.scenes().next());
+    let roots: Vec<_> = match scene {
+        Some(s) => s.nodes().collect(),
+        None => gltf.nodes().collect(),
+    };
+
+    if roots.is_empty() {
+        return Err("no nodes in glTF".into());
+    }
+
+    for node in roots {
+        walk_node(
+            &node,
+            Mat4::IDENTITY,
+            blob,
+            &mut out,
+            &mut min_y,
+            false,
+            &mut arm_unused,
+        )?;
+    }
+
+    if out.is_empty() {
+        return Err("no mesh primitives".into());
+    }
+
+    Ok(out)
+}
+
+fn local_matrix(node: &gltf::Node<'_>, apply_hold: bool) -> Mat4 {
+    let hold = apply_hold && node.name() == Some("arm-right");
+    match node.transform() {
+        gltf::scene::Transform::Decomposed {
+            translation,
+            rotation,
+            scale,
+        } => {
+            let t = Vec3::from_array(translation);
+            let s = Vec3::from_array(scale);
+            let r = if hold {
+                HOLDING_RIGHT_ROT
+            } else {
+                Quat::from_xyzw(rotation[0], rotation[1], rotation[2], rotation[3])
+            };
+            Mat4::from_scale_rotation_translation(s, r, t)
+        }
+        gltf::scene::Transform::Matrix { matrix } => {
+            let m = Mat4::from_cols_array_2d(&matrix);
+            if !hold {
+                return m;
+            }
+            // Decompose so we can replace rotation with hold pose.
+            let (_scale, _rot, trans) = m.to_scale_rotation_translation();
+            let scale = {
+                // Preserve authored scale from matrix columns lengths.
+                let sx = m.x_axis.truncate().length();
+                let sy = m.y_axis.truncate().length();
+                let sz = m.z_axis.truncate().length();
+                Vec3::new(sx, sy, sz)
+            };
+            Mat4::from_scale_rotation_translation(scale, HOLDING_RIGHT_ROT, trans)
+        }
+    }
 }
 
 fn walk_node(
@@ -456,9 +622,15 @@ fn walk_node(
     blob: &[u8],
     out: &mut Vec<CpuPrim>,
     min_y: &mut f32,
+    apply_hold: bool,
+    arm_right_world: &mut Option<Mat4>,
 ) -> Result<(), String> {
-    let local = Mat4::from_cols_array_2d(&node.transform().matrix());
+    let local = local_matrix(node, apply_hold);
     let world = parent * local;
+
+    if apply_hold && node.name() == Some("arm-right") {
+        *arm_right_world = Some(world);
+    }
 
     if let Some(mesh) = node.mesh() {
         for prim in mesh.primitives() {
@@ -503,7 +675,7 @@ fn walk_node(
     }
 
     for child in node.children() {
-        walk_node(&child, world, blob, out, min_y)?;
+        walk_node(&child, world, blob, out, min_y, apply_hold, arm_right_world)?;
     }
     Ok(())
 }
@@ -554,7 +726,6 @@ fn rgba_mip_levels(width: u32, height: u32, rgba: Vec<u8>) -> Vec<(u32, u32, Vec
 
 fn decode_rgba8(png_bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     let mut decoder = png::Decoder::new(Cursor::new(png_bytes));
-    // Palette PNGs → RGB(A).
     decoder.set_transformations(png::Transformations::EXPAND);
     let mut reader = decoder
         .read_info()
