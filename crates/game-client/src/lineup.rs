@@ -1,4 +1,5 @@
-//! Debug blaster lineup (feature 011): each blaster held by a Kenney character.
+//! Debug blaster lineup (features 011 + 012): each blaster held by a Kenney character,
+//! with magenta balls at every muzzle point.
 //! Kit facts: `assets/source/characters/README.md`, `assets/source/blasters/README.md`.
 //! Loads via cook pack `kenney-core` (feature 010), not source paths.
 
@@ -23,6 +24,11 @@ const BLASTER_UNITS_TO_M: f32 = 1.0;
 const LINEUP_SPACING_M: f32 = 2.0;
 /// Row depth (m); stub cam looks −Z.
 const LINEUP_Z_M: f32 = -6.0;
+
+/// Magenta muzzle marker radius in world metres (feature 012).
+const MUZZLE_MARKER_RADIUS_M: f32 = 0.0175;
+/// Solid magenta (sRGB factors for unlit path).
+const MUZZLE_MARKER_COLOR: [f32; 4] = [1.0, 0.0, 1.0, 1.0];
 
 /// `holding-right` on `arm-right` only (character draw). −90° X: hand axis → character +Z.
 const HOLDING_RIGHT_ROT: Quat = Quat::from_xyzw(
@@ -53,6 +59,34 @@ const BLASTER_GRIP_OFFSETS: [[f32; 3]; 18] = [
     [0.0, -1.21, 0.14], // p
     [0.0, -1.28, 0.19], // q
     [0.0, -1.18, 0.10], // r
+];
+
+/// Per-blaster muzzle points in arm-attachment frame (same space as grip offsets).
+/// Source: `assets/source/blasters/README.md` — keep in sync. Multi-barrel weapons list every exit.
+const BLASTER_MUZZLE_POINTS: &[&[[f32; 3]]] = &[
+    &[[0.0, -1.7, 0.42]],                             // a
+    &[[0.0, -1.39, 0.32]],                            // b
+    &[[0.0, -1.47, 0.23]],                            // c
+    &[[0.0, -1.795, 0.265]],                          // d
+    &[[0.07, -2.34, 0.26]],                           // e
+    &[[0.0, -2.37, 0.26]],                            // f
+    &[[0.0, -1.8, 0.34]],                             // g
+    &[[0.0, -1.73, 0.28]],                            // h
+    &[[0.0, -1.32, 0.26], [0.0, -1.32, 0.15]],        // i
+    &[[-0.045, -1.655, 0.29], [0.045, -1.655, 0.29]], // j
+    &[[0.0, -1.44, 0.18]],                            // k
+    &[[-0.1, -1.58, 0.26], [0.1, -1.58, 0.26]],       // l
+    &[[0.0, -1.65, 0.37]],                            // m
+    &[[0.0, -1.47, 0.32]],                            // n
+    &[
+        [-0.05, -1.35, 0.25],
+        [0.05, -1.35, 0.25],
+        [-0.05, -1.35, 0.15],
+        [0.05, -1.35, 0.15],
+    ], // o
+    &[[0.0, -1.855, 0.235], [0.0, -1.855, 0.14]],     // p
+    &[[0.0, -1.82, 0.28], [0.0, -1.82, 0.06]],        // q
+    &[[0.0, -1.81, 0.23]],                            // r
 ];
 
 const UNLIT_SHADER: &str = r#"
@@ -334,6 +368,23 @@ impl LineupGpu {
             )
             .map_err(|e| JsValue::from_str(&format!("blaster-{ch} upload: {e}")))?;
             batches.push(blaster_batch);
+
+            // Magenta balls at every muzzle (feature 012): arm-attachment frame like grip.
+            for &muzzle_offset in BLASTER_MUZZLE_POINTS[i] {
+                let muzzle_kit = arm_right_kit.transform_point3(Vec3::from_array(muzzle_offset));
+                let muzzle_world = kit_to_world.transform_point3(muzzle_kit);
+                let marker_root = Mat4::from_translation(muzzle_world)
+                    * Mat4::from_scale(Vec3::splat(MUZZLE_MARKER_RADIUS_M));
+                let marker_batch = upload_solid_batch(
+                    &gpu,
+                    unit_sphere_prim(12, 8),
+                    marker_root,
+                    MUZZLE_MARKER_COLOR,
+                    "lineup-muzzle-marker",
+                )
+                .map_err(|e| JsValue::from_str(&format!("muzzle marker {ch}: {e}")))?;
+                batches.push(marker_batch);
+            }
         }
 
         Ok(Self {
@@ -491,6 +542,153 @@ fn upload_batch(
         _texture_view: texture_view,
         _material_uniform: material_uniform,
     })
+}
+
+/// Unlit solid-colour batch (1×1 white albedo × material colour). Used for muzzle markers.
+fn upload_solid_batch(
+    gpu: &UploadCtx<'_>,
+    prim: CpuPrim,
+    root: Mat4,
+    color: [f32; 4],
+    label: &str,
+) -> Result<MeshBatch, String> {
+    let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    gpu.queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &[255, 255, 255, 255],
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(4),
+            rows_per_image: Some(1),
+        },
+        wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+    );
+    let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+    let material_uniform = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("lineup-solid-material"),
+        size: std::mem::size_of::<MaterialUniforms>() as u64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    gpu.queue.write_buffer(
+        &material_uniform,
+        0,
+        bytemuck::bytes_of(&MaterialUniforms { base_color: color }),
+    );
+
+    let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("lineup-solid-material-bg"),
+        layout: gpu.material_bgl,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: material_uniform.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(&texture_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Sampler(gpu.sampler),
+            },
+        ],
+    });
+
+    let (mut verts, indices, _) = prim;
+    for v in &mut verts {
+        let p = root.transform_point3(Vec3::from_array(v.position));
+        v.position = p.to_array();
+    }
+
+    let vbuf = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("lineup-solid-vertices"),
+        size: (verts.len() * std::mem::size_of::<MeshVertex>()) as u64,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    gpu.queue
+        .write_buffer(&vbuf, 0, bytemuck::cast_slice(&verts));
+
+    let ibuf = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("lineup-solid-indices"),
+        size: (indices.len() * std::mem::size_of::<u32>()) as u64,
+        usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    gpu.queue
+        .write_buffer(&ibuf, 0, bytemuck::cast_slice(&indices));
+
+    Ok(MeshBatch {
+        primitives: vec![GpuPrimitive {
+            vertex_buffer: vbuf,
+            index_buffer: ibuf,
+            index_count: indices.len() as u32,
+        }],
+        bind_group,
+        _texture: texture,
+        _texture_view: texture_view,
+        _material_uniform: material_uniform,
+    })
+}
+
+/// Unit sphere (radius 1) as a single primitive; UV unused (solid colour path).
+fn unit_sphere_prim(segments: u32, rings: u32) -> CpuPrim {
+    let segments = segments.max(3);
+    let rings = rings.max(2);
+    let mut verts = Vec::new();
+    let mut indices = Vec::new();
+
+    for ring in 0..=rings {
+        let v = ring as f32 / rings as f32;
+        let phi = v * std::f32::consts::PI;
+        let (sy, cy) = phi.sin_cos();
+        for seg in 0..=segments {
+            let u = seg as f32 / segments as f32;
+            let theta = u * std::f32::consts::TAU;
+            let (sx, cx) = theta.sin_cos();
+            verts.push(MeshVertex {
+                position: [sx * sy, cy, cx * sy],
+                uv: [u, v],
+            });
+        }
+    }
+
+    let stride = segments + 1;
+    for ring in 0..rings {
+        for seg in 0..segments {
+            let i0 = ring * stride + seg;
+            let i1 = i0 + 1;
+            let i2 = i0 + stride;
+            let i3 = i2 + 1;
+            indices.extend_from_slice(&[i0, i2, i1, i1, i2, i3]);
+        }
+    }
+
+    (verts, indices, [1.0, 1.0, 1.0, 1.0])
 }
 
 type CpuPrim = (Vec<MeshVertex>, Vec<u32>, [f32; 4]);

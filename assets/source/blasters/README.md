@@ -108,3 +108,30 @@ Offsets are in **`arm-right` local space after `holding-right`** (character kit 
 | `blaster-p` | `(0, -1.21, 0.14)` |
 | `blaster-q` | `(0, -1.28, 0.19)` |
 | `blaster-r` | `(0, -1.18, 0.10)` |
+
+### Muzzle points
+
+Barrel exits for each blaster (one or more). Offsets use the **same space as grip offsets** — **arm-attachment frame**: **`arm-right` local after `holding-right`**, character-kit / recipe units (not world metres). Values match the Kenney blaster glTF recipe and the historical `muzzlePoints` list per weapon.
+
+Debug lineup draws a magenta ball at **each** listed point (feature 012).
+
+| Blaster | Muzzle points (x, y, z) |
+|---------|-------------------------|
+| `blaster-a` | `(0, -1.7, 0.42)` |
+| `blaster-b` | `(0, -1.39, 0.32)` |
+| `blaster-c` | `(0, -1.47, 0.23)` |
+| `blaster-d` | `(0, -1.795, 0.265)` |
+| `blaster-e` | `(0.07, -2.34, 0.26)` |
+| `blaster-f` | `(0, -2.37, 0.26)` |
+| `blaster-g` | `(0, -1.8, 0.34)` |
+| `blaster-h` | `(0, -1.73, 0.28)` |
+| `blaster-i` | `(0, -1.32, 0.26)`, `(0, -1.32, 0.15)` |
+| `blaster-j` | `(-0.045, -1.655, 0.29)`, `(0.045, -1.655, 0.29)` |
+| `blaster-k` | `(0, -1.44, 0.18)` |
+| `blaster-l` | `(-0.1, -1.58, 0.26)`, `(0.1, -1.58, 0.26)` |
+| `blaster-m` | `(0, -1.65, 0.37)` |
+| `blaster-n` | `(0, -1.47, 0.32)` |
+| `blaster-o` | `(-0.05, -1.35, 0.25)`, `(0.05, -1.35, 0.25)`, `(-0.05, -1.35, 0.15)`, `(0.05, -1.35, 0.15)` |
+| `blaster-p` | `(0, -1.855, 0.235)`, `(0, -1.855, 0.14)` |
+| `blaster-q` | `(0, -1.82, 0.28)`, `(0, -1.82, 0.06)` |
+| `blaster-r` | `(0, -1.81, 0.23)` |
