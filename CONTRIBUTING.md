@@ -50,6 +50,13 @@ npm run dev
 - `style.css` — basic styling for the game canvas
 - `app.js` — WASM module loader and application initializer
 
+### Art assets (`assets/`)
+- **`assets/source/`** — authoring kits (models, textures, kit READMEs). Not served by Vite.
+- **`assets/cooked/`** — cook outputs only (`manifest.json` + hashed packs under `packs/`). Vite `publicDir`. Generated; gitignored. Lands in `web/dist/` on production build.
+- **`web/dist/`** — sole ship tree (Vite JS/CSS/WASM under `/assets/*` + cooked packs/manifest).
+- **`npm run cook`** — thin cook (gather, hash, pack, manifest). Runs automatically before `dev` / `build` / `preview`. Stamp-cache when sources unchanged.
+- Loaders address packs and asset ids from the manifest — not hard-coded source paths. Kit mesh/texture facts stay in source kit READMEs, not root docs.
+
 ## Development Workflow
 
 1. Fork the repository and create a feature branch.

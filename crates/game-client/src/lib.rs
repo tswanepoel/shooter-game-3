@@ -7,6 +7,8 @@ mod debug;
 mod input;
 #[cfg(feature = "debug-tools")]
 mod lineup;
+#[cfg(feature = "debug-tools")]
+mod pack;
 mod view;
 
 use std::cell::RefCell;

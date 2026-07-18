@@ -3,13 +3,14 @@
   "version": "0.1.0",
   "description": "A WebGPU shooter game built with Rust and Vite",
   "scripts": {
-    "dev": "npm run build-wasm && vite",
-    "build": "npm run build-wasm:release && vite build",
-    "preview": "npm run build-wasm:release && vite preview",
+    "cook": "node tools/cook.mjs",
+    "dev": "npm run cook && npm run build-wasm && vite",
+    "build": "npm run cook && npm run build-wasm:release && vite build",
+    "preview": "npm run cook && npm run build-wasm:release && vite preview",
     "build-wasm": "cd crates/game-client && wasm-pack build --target web --out-dir ../../pkg",
     "build-wasm:release": "cd crates/game-client && wasm-pack build --target web --out-dir ../../pkg -- --no-default-features",
-    "format": "prettier --write \"web/**/*.{js,css,html}\" \"*.ts\" \"*.js\"",
-    "format:check": "prettier --check \"web/**/*.{js,css,html}\" \"*.ts\" \"*.js\"",
+    "format": "prettier --write \"web/**/*.{js,css,html}\" \"*.ts\" \"*.js\" \"tools/**/*.mjs\"",
+    "format:check": "prettier --check \"web/**/*.{js,css,html}\" \"*.ts\" \"*.js\" \"tools/**/*.mjs\"",
     "prepare": "husky"
   },
   "lint-staged": {

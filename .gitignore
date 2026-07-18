@@ -23,3 +23,6 @@ Thumbs.db
 
 # Local debug tool output (screenshots, captures — never commit)
 /debug/
+
+# Cook outputs (source kits live under assets/source/)
+/assets/cooked/

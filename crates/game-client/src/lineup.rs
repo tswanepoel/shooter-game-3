@@ -1,14 +1,16 @@
-//! Debug character lineup (Kenney kit). See `assets/characters/README.md`.
+//! Debug character lineup (Kenney kit). Kit facts: `assets/source/characters/README.md`.
+//! Loads via cook pack `kenney-core` (feature 010), not source paths.
 
 use std::io::Cursor;
 
 use glam::{Mat4, Vec3};
-use wasm_bindgen::JsCast;
 use wasm_bindgen::JsValue;
-use wasm_bindgen_futures::JsFuture;
-use web_sys::Response;
+
+use crate::pack;
 
 const LETTERS: &[u8] = b"abcdefghijklmnopqr";
+/// Pack id from cook manifest (demand-cadence core art).
+const KENNEY_CORE_PACK: &str = "kenney-core";
 /// Kit units → metres (2.7 kit → 1.8 m standing; kit README).
 const KIT_ROOT_SCALE: f32 = 1.0 / 1.5;
 const LINEUP_SPACING_M: f32 = 1.5;
@@ -236,28 +238,23 @@ impl LineupGpu {
             ..Default::default()
         });
 
+        let pack = pack::load_pack(KENNEY_CORE_PACK).await?;
+
         let n = LETTERS.len();
         let mut characters = Vec::with_capacity(n);
         for (i, &letter) in LETTERS.iter().enumerate() {
             let ch = letter as char;
-            let glb_url = format!("/characters/models/character-{ch}.glb");
-            let png_url = format!("/characters/textures/texture-{ch}.png");
-            let glb = fetch_bytes(&glb_url).await?;
-            let png = fetch_bytes(&png_url).await?;
+            let mesh_id = format!("character-{ch}.mesh");
+            let albedo_id = format!("character-{ch}.albedo");
+            let glb = pack.get(&mesh_id).map_err(|e| JsValue::from_str(&e))?;
+            let png = pack.get(&albedo_id).map_err(|e| JsValue::from_str(&e))?;
 
             let x = (i as f32 - (n as f32 - 1.0) * 0.5) * LINEUP_SPACING_M;
             let placement = Mat4::from_translation(Vec3::new(x, 0.0, LINEUP_Z_M));
 
-            let character = upload_character(
-                device,
-                queue,
-                &material_bgl,
-                &sampler,
-                &glb,
-                &png,
-                placement,
-            )
-            .map_err(|e| JsValue::from_str(&format!("character-{ch}: {e}")))?;
+            let character =
+                upload_character(device, queue, &material_bgl, &sampler, glb, png, placement)
+                    .map_err(|e| JsValue::from_str(&format!("character-{ch}: {e}")))?;
             characters.push(character);
         }
 
@@ -289,25 +286,6 @@ impl LineupGpu {
             }
         }
     }
-}
-
-async fn fetch_bytes(url: &str) -> Result<Vec<u8>, JsValue> {
-    let window = web_sys::window().ok_or_else(|| JsValue::from_str("no window"))?;
-    let resp_val = JsFuture::from(window.fetch_with_str(url)).await?;
-    let resp: Response = resp_val
-        .dyn_into()
-        .map_err(|_| JsValue::from_str("fetch response type"))?;
-    if !resp.ok() {
-        return Err(JsValue::from_str(&format!(
-            "fetch {url} failed: HTTP {}",
-            resp.status()
-        )));
-    }
-    let buf = JsFuture::from(resp.array_buffer()?).await?;
-    let arr = js_sys::Uint8Array::new(&buf);
-    let mut bytes = vec![0u8; arr.length() as usize];
-    arr.copy_to(&mut bytes);
-    Ok(bytes)
 }
 
 fn upload_character(

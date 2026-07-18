@@ -6,6 +6,7 @@ Kit facts for loaders. Engine commands and debug UI live elsewhere.
 
 - **Pack:** Blocky Characters 2.0 — Kenney ([kenney.nl](https://www.kenney.nl)), CC0
 - **Export:** UnityGLTF → binary glTF (`.glb`)
+- **Repo path:** `assets/source/characters/` (authoring kit; cook packs live under `assets/cooked/`, not this tree)
 - **Layout:**
   - `models/character-{a…r}.glb` — geometry + materials (no embedded image bytes)
   - `textures/texture-{a…r}.png` — matching albedo atlas (often **indexed/palette** PNG; expand to RGB(A) on load)

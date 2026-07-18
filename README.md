@@ -20,8 +20,12 @@ A WebGPU-powered shooter game built with Rust and Vite.
 ├── crates/
 │   ├── game-client/     # WebGPU frontend using Rust and wgpu
 │   └── game-sim/        # Server-side game logic using Rust and glam
-├── web/                 # Web frontend assets (HTML, CSS, JS)
-├── assets/              # Game assets (models, textures)
+├── web/                 # Web frontend source (HTML, CSS, JS)
+│   └── dist/            # Sole ship tree (Vite build + cooked packs)
+├── assets/
+│   ├── source/          # Authoring kits (not served)
+│   └── cooked/          # Cook outputs (Vite publicDir → lands in web/dist)
+├── tools/               # Build helpers (e.g. asset cook)
 ├── infra/docker/        # Docker configuration for WASM builds
 ├── docs/                # Documentation
 ├── CONTRIBUTING.md      # Contribution guidelines
@@ -60,7 +64,7 @@ A WebGPU-powered shooter game built with Rust and Vite.
    npm run dev
    ```
 
-Running `npm run dev` compiles the Rust WASM module and then starts the Vite dev server with hot-reload. See [Development Workflow](#development-workflow) for details.
+Running `npm run dev` cooks art packs, compiles the Rust WASM module, then starts the Vite dev server with hot-reload. See [Development Workflow](#development-workflow) for details.
 
 ### Browser Support
 
@@ -96,10 +100,13 @@ The image packages the release `*.wasm` outputs under `/artifacts`.
 
 ## Development Workflow
 
-`npm run dev` runs a two-step process:
+`npm run dev` / `npm run build` run:
 
-1. Compiles the Rust WASM module
-2. Starts the Vite development server with hot-reload
+1. **Cook** art — `npm run cook` gathers `assets/source/` into hashed packs under `assets/cooked/` (manifest + packs). Skips when sources unchanged.
+2. Compiles the Rust WASM module (`wasm-pack`)
+3. Starts Vite (dev) or emits the production bundle under `web/dist/` (build)
+
+Vite serves cook outputs from `assets/cooked/` (not authoring kits). Production copies them into `web/dist/` alongside Vite’s hashed `/assets/*` chunks. JS/WASM stay their own bundle; art is not embedded in the Vite JS graph. Kit facts live next to the source kits (e.g. `assets/source/characters/README.md`).
 
 ### Input session
 

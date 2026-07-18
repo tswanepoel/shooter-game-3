@@ -75,8 +75,9 @@ export default defineConfig({
   build: {
     target: 'es2020',
   },
-  // Ship kit + textures at `/characters/...` (repo `assets/` → dist root).
-  publicDir: path.resolve(repoRoot, 'assets'),
+  // Serve cook outputs only (packs + manifest). Source kits are not public.
+  // Sole ship tree is web/dist (Vite chunks under /assets/* + this publicDir).
+  publicDir: path.resolve(repoRoot, 'assets', 'cooked'),
   server: {
     port: 3000,
     host: true,
