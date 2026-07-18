@@ -10,7 +10,8 @@ crate-type = ["cdylib", "rlib"]
 default = ["debug-tools"]
 # In-engine debug shell, command/cvar registry, host bridge, blaster lineup.
 # Production strip: wasm-pack build -- --no-default-features
-debug-tools = ["dep:egui", "dep:egui-wgpu", "dep:gltf", "dep:png", "dep:serde", "dep:serde_json", "dep:sha2"]
+# Self body/blaster (013) always ships; kit load deps are not debug-gated.
+debug-tools = ["dep:egui", "dep:egui-wgpu"]
 
 [dependencies]
 wgpu = "24"
@@ -38,10 +39,10 @@ game-sim = { path = "../game-sim" }
 egui = { version = "0.31", optional = true }
 egui-wgpu = { version = "0.31", optional = true }
 # Kit marks KHR_materials_unlit as required; enable so parse does not reject the GLBs.
-gltf = { version = "1.4", default-features = false, features = ["utils", "names", "KHR_materials_unlit", "extensions"], optional = true }
-png = { version = "0.17", optional = true }
-serde = { version = "1", features = ["derive"], optional = true }
-serde_json = { version = "1", optional = true }
-sha2 = { version = "0.10", optional = true }
+gltf = { version = "1.4", default-features = false, features = ["utils", "names", "KHR_materials_unlit", "extensions"] }
+png = "0.17"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
 getrandom = { version = "0.2", features = ["js"] }
 js-sys = "0.3"

@@ -112,6 +112,10 @@ Vite serves cook outputs from `assets/cooked/` (not authoring kits). Production 
 
 **Click the canvas once** to enter the in-game input session (browser pointer lock). That owns look and game keys until the browser ejects (Esc, blur, leave tab). Click again to resume. Game modes (including flycam) do not lock or unlock the pointer.
 
+### Player self
+
+The default view mounts on the player **self**: a standing Kenney body with a held blaster (`character-a` + `blaster-a` until loadout exists). The camera sits at a local **eye offset** from the feet origin and looks along self facing. Production and dev both load this path; kit facts stay in the source kit READMEs.
+
 ### Debug tools
 
 With `npm run dev`, press **`` ` ``** (backtick) for the in-game developer console. Production builds (`npm run build`) omit debug tools.

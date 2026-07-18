@@ -4,8 +4,10 @@
 //! World space: 1 unit = 1 metre, Y-up, XZ ground plane.
 
 mod config;
+mod self_state;
 
 pub use config::*;
+pub use self_state::*;
 
 use glam::Vec3;
 

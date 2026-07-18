@@ -7,15 +7,16 @@ mod debug;
 mod input;
 #[cfg(feature = "debug-tools")]
 mod lineup;
-#[cfg(feature = "debug-tools")]
+mod mesh_unlit;
 mod pack;
+mod self_present;
 mod view;
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use game_sim::{
-    CAMERA_FAR_M, CAMERA_NEAR_M, CAMERA_VERTICAL_FOV_RAD, DEBUG_GRID_HALF_EXTENT_M,
+    SelfState, CAMERA_FAR_M, CAMERA_NEAR_M, CAMERA_VERTICAL_FOV_RAD, DEBUG_GRID_HALF_EXTENT_M,
     GRID_MAJOR_EVERY, GRID_MINOR_SPACING_M,
 };
 use glam::Mat4;
@@ -28,6 +29,7 @@ use debug::{DebugHost, DebugTools};
 use input::{install_input_handlers, InputSession};
 #[cfg(feature = "debug-tools")]
 use lineup::{LineupGpu, LineupState};
+use self_present::{SelfGpu, SelfPresentState};
 #[cfg(feature = "debug-tools")]
 use view::FlyInput;
 use view::ViewController;
@@ -321,6 +323,7 @@ impl Renderer {
     fn render_scene(
         &mut self,
         draw_grid: bool,
+        self_body: Option<&SelfGpu>,
         #[cfg(feature = "debug-tools")] lineup: Option<&LineupGpu>,
     ) -> Result<wgpu::SurfaceTexture, JsValue> {
         let frame = self
@@ -359,6 +362,10 @@ impl Renderer {
                 occlusion_query_set: None,
                 timestamp_writes: None,
             });
+
+            if let Some(body) = self_body {
+                body.draw(&mut pass);
+            }
 
             #[cfg(feature = "debug-tools")]
             if let Some(lineup) = lineup {
@@ -501,8 +508,10 @@ pub(crate) struct ClientInner {
     canvas: HtmlCanvasElement,
     /// Buffer / CSS size (HiDPI).
     pixels_per_point: f32,
+    pub(crate) self_state: SelfState,
     pub(crate) view: ViewController,
     pub(crate) session: InputSession,
+    self_present: SelfPresentState,
     #[cfg(feature = "debug-tools")]
     pub(crate) debug: DebugTools,
     #[cfg(feature = "debug-tools")]
@@ -542,7 +551,7 @@ impl ClientInner {
             self.last_frame_secs = now;
 
             let want_fly = self.debug.flycam_wanted();
-            if let Some(msg) = self.view.sync_fly_intent(want_fly) {
+            if let Some(msg) = self.view.sync_fly_intent(want_fly, &self.self_state) {
                 self.debug.shell.push_log(msg.to_string());
                 if !want_fly {
                     self.fly_input.clear_keys();
@@ -565,7 +574,17 @@ impl ClientInner {
             let _ = self.session.take_look_px();
         }
 
-        let view_proj = self.renderer.write_view_proj(self.view.view_matrix());
+        let view_proj = self
+            .renderer
+            .write_view_proj(self.view.view_matrix(&self.self_state));
+
+        if let SelfPresentState::Ready(gpu) = &self.self_present {
+            gpu.write_view_proj(&self.renderer.queue, view_proj);
+        }
+        let self_ref = match &self.self_present {
+            SelfPresentState::Ready(gpu) => Some(gpu),
+            _ => None,
+        };
 
         #[cfg(feature = "debug-tools")]
         let draw_grid = self.debug.draw_grid();
@@ -584,13 +603,11 @@ impl ClientInner {
                 LineupState::Ready(gpu) if want_lineup => Some(gpu),
                 _ => None,
             };
-            self.renderer.render_scene(draw_grid, lineup_ref)?
+            self.renderer
+                .render_scene(draw_grid, self_ref, lineup_ref)?
         };
         #[cfg(not(feature = "debug-tools"))]
-        let frame = {
-            let _ = view_proj;
-            self.renderer.render_scene(draw_grid)?
-        };
+        let frame = self.renderer.render_scene(draw_grid, self_ref)?;
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -662,6 +679,48 @@ impl ClientInner {
 
         Ok(())
     }
+}
+
+fn maybe_kick_self_load(inner: &Rc<RefCell<ClientInner>>) {
+    let should_start = {
+        let c = inner.borrow();
+        matches!(c.self_present, SelfPresentState::Idle)
+    };
+    if !should_start {
+        return;
+    }
+
+    {
+        let mut c = inner.borrow_mut();
+        c.self_present = SelfPresentState::Loading;
+    }
+
+    let (device, queue, format, self_state) = {
+        let c = inner.borrow();
+        (
+            c.renderer.device.clone(),
+            c.renderer.queue.clone(),
+            c.renderer.config.format,
+            c.self_state.clone(),
+        )
+    };
+
+    let inner = inner.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        let result = SelfGpu::load(&device, &queue, format, MSAA_SAMPLE_COUNT, &self_state).await;
+        let mut c = inner.borrow_mut();
+        match result {
+            Ok(gpu) => {
+                web_sys::console::log_1(&"self: body and blaster ready".into());
+                c.self_present = SelfPresentState::Ready(gpu);
+            }
+            Err(err) => {
+                let msg = err.as_string().unwrap_or_else(|| format!("{err:?}"));
+                web_sys::console::error_1(&JsValue::from_str(&format!("self load failed: {msg}")));
+                c.self_present = SelfPresentState::Failed(msg);
+            }
+        }
+    });
 }
 
 #[cfg(feature = "debug-tools")]
@@ -752,8 +811,9 @@ impl GameClient {
         console_error_panic_hook::set_once();
 
         let renderer = Renderer::new(canvas.clone()).await?;
+        let self_state = SelfState::default_loadout();
         let view = ViewController::new();
-        renderer.write_view_proj(view.view_matrix());
+        renderer.write_view_proj(view.view_matrix(&self_state));
 
         #[cfg(feature = "debug-tools")]
         let debug = DebugTools::new(&renderer.device, renderer.config.format);
@@ -763,8 +823,10 @@ impl GameClient {
             renderer,
             canvas,
             pixels_per_point: ppp,
+            self_state,
             view,
             session: InputSession::new(),
+            self_present: SelfPresentState::Idle,
             #[cfg(feature = "debug-tools")]
             debug,
             #[cfg(feature = "debug-tools")]
@@ -776,7 +838,7 @@ impl GameClient {
         }));
 
         web_sys::console::log_1(
-            &"WebGPU initialized; empty scene ready (click canvas to capture input)".into(),
+            &"WebGPU initialized; self mount ready (click canvas to capture input)".into(),
         );
         Ok(GameClient { inner })
     }
@@ -802,6 +864,7 @@ impl GameClient {
         let frame_cb_clone = frame_cb.clone();
 
         *frame_cb.borrow_mut() = Some(Closure::new(move || {
+            maybe_kick_self_load(&client);
             #[cfg(feature = "debug-tools")]
             maybe_kick_lineup_load(&client);
 

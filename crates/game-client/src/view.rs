@@ -1,9 +1,6 @@
-//! Single render view: mount (self) or debug flycam controller.
-//!
-//! Pose source only — not a second camera system. Mount uses shared eye-height
-//! ground truth from `game-sim`. Flycam is view-only free inspection.
+//! Single render view: mount (self) or debug flycam.
 
-use game_sim::STANDING_EYE_HEIGHT_M;
+use game_sim::SelfState;
 use glam::{Mat4, Vec3};
 
 /// Default flycam move speed (m/s). Client presentation, not world ground truth.
@@ -21,9 +18,7 @@ const MAX_PITCH_RAD: f32 = std::f32::consts::FRAC_PI_2 - 0.05;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ViewMode {
-    /// Attached to self (stub eye pose until a real body exists).
     Mounted,
-    /// Debug free-fly; does not move a sim body.
     #[cfg(feature = "debug-tools")]
     Flycam,
 }
@@ -32,25 +27,25 @@ enum ViewMode {
 #[derive(Debug, Clone, Copy)]
 struct FlyPose {
     position: Vec3,
-    /// Yaw around Y (rad). 0 looks along −Z (same as the stub mount).
+    /// Yaw around Y (rad). 0 looks along **+Z**.
     yaw: f32,
-    /// Pitch (rad). Positive looks up.
     pitch: f32,
 }
 
 #[cfg(feature = "debug-tools")]
 impl FlyPose {
-    fn from_mount() -> Self {
+    fn from_self(self_state: &SelfState) -> Self {
         Self {
-            position: stub_mount_eye(),
-            yaw: 0.0,
+            position: self_state.eye_world(),
+            yaw: self_state.yaw,
             pitch: 0.0,
         }
     }
 
     fn forward(self) -> Vec3 {
         let cp = self.pitch.cos();
-        Vec3::new(-self.yaw.sin() * cp, self.pitch.sin(), -self.yaw.cos() * cp)
+        // Match SelfState::facing at pitch 0: (sin yaw, 0, cos yaw).
+        Vec3::new(self.yaw.sin() * cp, self.pitch.sin(), self.yaw.cos() * cp)
     }
 }
 
@@ -128,7 +123,7 @@ impl ViewController {
         Self {
             mode: ViewMode::Mounted,
             #[cfg(feature = "debug-tools")]
-            fly: FlyPose::from_mount(),
+            fly: FlyPose::from_self(&SelfState::default_loadout()),
         }
     }
 
@@ -137,39 +132,40 @@ impl ViewController {
         self.mode == ViewMode::Flycam
     }
 
-    /// Enter debug flycam, seeding from the stub mount pose.
     #[cfg(feature = "debug-tools")]
-    pub fn enter_flycam(&mut self) {
+    pub fn enter_flycam(&mut self, self_state: &SelfState) {
         if self.mode == ViewMode::Mounted {
-            self.fly = FlyPose::from_mount();
+            self.fly = FlyPose::from_self(self_state);
         }
         self.mode = ViewMode::Flycam;
     }
 
-    /// Leave flycam and remount the self (stub) vantage.
     #[cfg(feature = "debug-tools")]
-    pub fn leave_flycam(&mut self) {
+    pub fn leave_flycam(&mut self, self_state: &SelfState) {
         self.mode = ViewMode::Mounted;
-        self.fly = FlyPose::from_mount();
+        self.fly = FlyPose::from_self(self_state);
     }
 
-    /// Sync mode from the debug `cam.fly` intent. Returns a short status if mode changed.
+    /// Sync mode from `cam.fly`. Returns a status line if mode changed.
     #[cfg(feature = "debug-tools")]
-    pub fn sync_fly_intent(&mut self, want_fly: bool) -> Option<&'static str> {
+    pub fn sync_fly_intent(
+        &mut self,
+        want_fly: bool,
+        self_state: &SelfState,
+    ) -> Option<&'static str> {
         match (want_fly, self.is_flycam()) {
             (true, false) => {
-                self.enter_flycam();
+                self.enter_flycam(self_state);
                 Some("flycam on")
             }
             (false, true) => {
-                self.leave_flycam();
+                self.leave_flycam(self_state);
                 Some("flycam off (remounted)")
             }
             _ => None,
         }
     }
 
-    /// Apply flycam from held keys and a look delta (pixels) from the input session.
     #[cfg(feature = "debug-tools")]
     pub fn update_flycam(&mut self, dt: f32, input: &FlyInput, look_px: glam::Vec2) {
         if self.mode != ViewMode::Flycam {
@@ -217,26 +213,18 @@ impl ViewController {
         }
     }
 
-    pub fn view_matrix(&self) -> Mat4 {
-        let (eye, forward) = self.eye_and_forward();
+    pub fn view_matrix(&self, self_state: &SelfState) -> Mat4 {
+        let (eye, forward) = self.eye_and_forward(self_state);
         Mat4::look_to_rh(eye, forward, Vec3::Y)
     }
 
-    fn eye_and_forward(&self) -> (Vec3, Vec3) {
+    fn eye_and_forward(&self, self_state: &SelfState) -> (Vec3, Vec3) {
         match self.mode {
-            ViewMode::Mounted => (stub_mount_eye(), stub_mount_forward()),
+            ViewMode::Mounted => (self_state.eye_world(), self_state.facing()),
             #[cfg(feature = "debug-tools")]
             ViewMode::Flycam => (self.fly.position, self.fly.forward()),
         }
     }
-}
-
-fn stub_mount_eye() -> Vec3 {
-    Vec3::new(0.0, STANDING_EYE_HEIGHT_M, 0.0)
-}
-
-fn stub_mount_forward() -> Vec3 {
-    Vec3::NEG_Z
 }
 
 #[cfg(all(test, feature = "debug-tools"))]
@@ -244,46 +232,51 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mount_is_eye_height_looking_neg_z() {
+    fn mount_uses_self_eye_looking_plus_z() {
         let v = ViewController::new();
-        let (eye, forward) = v.eye_and_forward();
-        assert!((eye.y - STANDING_EYE_HEIGHT_M).abs() < 1e-5);
-        assert!(forward.dot(Vec3::NEG_Z) > 0.99);
+        let s = SelfState::default_loadout();
+        let (eye, forward) = v.eye_and_forward(&s);
+        assert!((eye - s.eye_world()).length() < 1e-5);
+        assert!(forward.dot(Vec3::Z) > 0.99);
         assert!(!v.is_flycam());
     }
 
     #[test]
-    fn enter_leave_flycam() {
+    fn enter_leave_flycam_remounts_self() {
         let mut v = ViewController::new();
-        assert_eq!(v.sync_fly_intent(true), Some("flycam on"));
+        let s = SelfState::default_loadout();
+        assert_eq!(v.sync_fly_intent(true, &s), Some("flycam on"));
         assert!(v.is_flycam());
-        assert_eq!(v.sync_fly_intent(false), Some("flycam off (remounted)"));
+        assert_eq!(v.sync_fly_intent(false, &s), Some("flycam off (remounted)"));
         assert!(!v.is_flycam());
-        let (eye, _) = v.eye_and_forward();
-        assert!((eye.y - STANDING_EYE_HEIGHT_M).abs() < 1e-5);
+        let (eye, forward) = v.eye_and_forward(&s);
+        assert!((eye - s.eye_world()).length() < 1e-5);
+        assert!(forward.dot(Vec3::Z) > 0.99);
     }
 
     #[test]
     fn flycam_moves_forward() {
         let mut v = ViewController::new();
-        v.enter_flycam();
+        let s = SelfState::default_loadout();
+        v.enter_flycam(&s);
         let input = FlyInput {
             forward: true,
             ..Default::default()
         };
         v.update_flycam(1.0, &input, glam::Vec2::ZERO);
-        let (eye, _) = v.eye_and_forward();
-        // Looking −Z: forward move decreases z.
-        assert!(eye.z < -1.0);
+        let (eye, _) = v.eye_and_forward(&s);
+        // Looking +Z: forward move increases z.
+        assert!(eye.z > s.eye_world().z + 1.0);
     }
 
     #[test]
     fn flycam_ws_follows_pitch() {
         let mut v = ViewController::new();
-        v.enter_flycam();
+        let s = SelfState::default_loadout();
+        v.enter_flycam(&s);
         // Pitch up ~45°, then hold W for 1s — should gain altitude.
         v.update_flycam(0.0, &FlyInput::default(), glam::Vec2::new(0.0, -400.0));
-        let y0 = v.eye_and_forward().0.y;
+        let y0 = v.eye_and_forward(&s).0.y;
         v.update_flycam(
             1.0,
             &FlyInput {
@@ -292,7 +285,7 @@ mod tests {
             },
             glam::Vec2::ZERO,
         );
-        let y1 = v.eye_and_forward().0.y;
+        let y1 = v.eye_and_forward(&s).0.y;
         assert!(
             y1 > y0 + 1.0,
             "expected look-relative climb, y0={y0} y1={y1}"

@@ -3,9 +3,6 @@
 //! World space: 1 unit = 1 metre, Y-up, XZ ground plane.
 //! Values are pure data — not behaviour. Prefer naming the real-world driver.
 
-/// Standing adult eye height (metres). Stub self mount until a real body owns the view.
-pub const STANDING_EYE_HEIGHT_M: f32 = 1.7;
-
 /// Vertical field of view for the player/mounted view (radians).
 ///
 /// Not a physical constant of the world; a deliberate projection choice (~75°).
@@ -27,7 +24,6 @@ pub const GRID_MAJOR_EVERY: u32 = 10;
 pub const DEBUG_GRID_HALF_EXTENT_M: f32 = 50.0;
 
 const _: () = {
-    assert!(STANDING_EYE_HEIGHT_M > 1.0 && STANDING_EYE_HEIGHT_M < 2.5);
     assert!(CAMERA_NEAR_M > 0.0);
     assert!(CAMERA_FAR_M > CAMERA_NEAR_M);
     assert!(GRID_MINOR_SPACING_M > 0.0);
