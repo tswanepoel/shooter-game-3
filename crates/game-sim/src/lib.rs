@@ -1,11 +1,15 @@
-//! Game simulation logic crate
+//! Game simulation logic crate.
 //!
-//! This crate contains all the server-side game logic and state management
-//! using glam for math operations.
+//! Shared ground-truth world data and (later) authoritative sim state.
+//! World space: 1 unit = 1 metre, Y-up, XZ ground plane.
+
+mod config;
+
+pub use config::*;
 
 use glam::Vec3;
 
-/// A basic game entity with position and velocity
+/// A basic game entity with position and velocity.
 #[derive(Debug, Clone)]
 pub struct Entity {
     pub position: Vec3,
@@ -13,7 +17,7 @@ pub struct Entity {
 }
 
 impl Entity {
-    /// Creates a new entity at the given position
+    /// Creates a new entity at the given position.
     pub fn new(position: Vec3) -> Self {
         Self {
             position,
@@ -21,13 +25,13 @@ impl Entity {
         }
     }
 
-    /// Updates the entity's position based on its velocity
+    /// Updates the entity's position based on its velocity.
     pub fn update(&mut self, delta_time: f32) {
         self.position += self.velocity * delta_time;
     }
 }
 
-/// Basic game state
+/// Basic game state.
 #[derive(Debug, Clone)]
 pub struct GameState {
     pub entities: Vec<Entity>,
@@ -40,19 +44,19 @@ impl Default for GameState {
 }
 
 impl GameState {
-    /// Creates a new game state
+    /// Creates a new game state.
     pub fn new() -> Self {
         Self {
             entities: Vec::new(),
         }
     }
 
-    /// Adds an entity to the game state
+    /// Adds an entity to the game state.
     pub fn add_entity(&mut self, entity: Entity) {
         self.entities.push(entity);
     }
 
-    /// Updates all entities in the game state
+    /// Updates all entities in the game state.
     pub fn update(&mut self, delta_time: f32) {
         for entity in &mut self.entities {
             entity.update(delta_time);
