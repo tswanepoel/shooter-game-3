@@ -1,12 +1,15 @@
 //! WebGPU client: mounted self view of an empty scene with a debug grid.
 //! Input session owns pointer/keyboard after first click (007).
 //! Optional debug flycam (feature `debug-tools`) unmounts for free inspection.
+//! Debug character lineup (008) when `draw.lineup` is on.
 
 #![cfg(target_arch = "wasm32")]
 
 #[cfg(feature = "debug-tools")]
 mod debug;
 mod input;
+#[cfg(feature = "debug-tools")]
+mod lineup;
 mod view;
 
 use std::cell::RefCell;
@@ -24,6 +27,8 @@ use web_sys::HtmlCanvasElement;
 #[cfg(feature = "debug-tools")]
 use debug::{DebugHost, DebugTools};
 use input::{install_input_handlers, InputSession};
+#[cfg(feature = "debug-tools")]
+use lineup::{LineupGpu, LineupState};
 #[cfg(feature = "debug-tools")]
 use view::FlyInput;
 use view::ViewController;
@@ -142,11 +147,13 @@ impl Renderer {
             .map_err(|e| JsValue::from_str(&format!("Failed to create device: {e}")))?;
 
         let caps = surface.get_capabilities(&adapter);
+        // Canvas prefers Unorm storage. Stay in display-referred space end-to-end (unlit
+        // atlas path): no sRGB view encode here — that oversaturates under browser present.
         let format = caps
             .formats
             .iter()
             .copied()
-            .find(|f| f.is_srgb())
+            .find(|f| !f.is_srgb())
             .unwrap_or(caps.formats[0]);
 
         let config = wgpu::SurfaceConfiguration {
@@ -280,18 +287,24 @@ impl Renderer {
         self.depth_view = create_depth_view(&self.device, width, height);
     }
 
-    fn write_view_proj(&self, view: Mat4) {
+    fn write_view_proj(&self, view: Mat4) -> Mat4 {
         let aspect = self.config.width as f32 / self.config.height as f32;
         let proj =
             perspective_rh_wgpu(CAMERA_VERTICAL_FOV_RAD, aspect, CAMERA_NEAR_M, CAMERA_FAR_M);
+        let view_proj = proj * view;
         let uniforms = FrameUniforms {
-            view_proj: (proj * view).to_cols_array_2d(),
+            view_proj: view_proj.to_cols_array_2d(),
         };
         self.queue
             .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+        view_proj
     }
 
-    fn render_scene(&mut self, draw_grid: bool) -> Result<wgpu::SurfaceTexture, JsValue> {
+    fn render_scene(
+        &mut self,
+        draw_grid: bool,
+        #[cfg(feature = "debug-tools")] lineup: Option<&LineupGpu>,
+    ) -> Result<wgpu::SurfaceTexture, JsValue> {
         let frame = self
             .surface
             .get_current_texture()
@@ -328,6 +341,11 @@ impl Renderer {
                 occlusion_query_set: None,
                 timestamp_writes: None,
             });
+
+            #[cfg(feature = "debug-tools")]
+            if let Some(lineup) = lineup {
+                lineup.draw(&mut pass);
+            }
 
             if draw_grid {
                 pass.set_pipeline(&self.pipeline);
@@ -425,6 +443,8 @@ pub(crate) struct ClientInner {
     pub(crate) fly_input: FlyInput,
     #[cfg(feature = "debug-tools")]
     last_frame_secs: f64,
+    #[cfg(feature = "debug-tools")]
+    lineup: LineupState,
 }
 
 impl ClientInner {
@@ -486,14 +506,32 @@ impl ClientInner {
             let _ = self.session.take_look_px();
         }
 
-        self.renderer.write_view_proj(self.view.view_matrix());
+        let view_proj = self.renderer.write_view_proj(self.view.view_matrix());
 
         #[cfg(feature = "debug-tools")]
         let draw_grid = self.debug.draw_grid();
         #[cfg(not(feature = "debug-tools"))]
         let draw_grid = true;
 
-        let frame = self.renderer.render_scene(draw_grid)?;
+        #[cfg(feature = "debug-tools")]
+        let frame = {
+            let want_lineup = self.debug.draw_lineup();
+            if want_lineup {
+                if let LineupState::Ready(gpu) = &self.lineup {
+                    gpu.write_view_proj(&self.renderer.queue, view_proj);
+                }
+            }
+            let lineup_ref = match &self.lineup {
+                LineupState::Ready(gpu) if want_lineup => Some(gpu),
+                _ => None,
+            };
+            self.renderer.render_scene(draw_grid, lineup_ref)?
+        };
+        #[cfg(not(feature = "debug-tools"))]
+        let frame = {
+            let _ = view_proj;
+            self.renderer.render_scene(draw_grid)?
+        };
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -569,6 +607,64 @@ impl ClientInner {
     }
 }
 
+/// If lineup is wanted and not yet loading/ready, mark Loading and spawn the fetch/upload.
+#[cfg(feature = "debug-tools")]
+fn maybe_kick_lineup_load(inner: &Rc<RefCell<ClientInner>>) {
+    // When the cvar is off, drop Failed → Idle so the next enable can retry once.
+    {
+        let mut c = inner.borrow_mut();
+        if !c.debug.draw_lineup() {
+            if matches!(c.lineup, LineupState::Failed(_)) {
+                c.lineup = LineupState::Idle;
+            }
+            return;
+        }
+    }
+
+    let should_start = {
+        let c = inner.borrow();
+        matches!(c.lineup, LineupState::Idle)
+    };
+    if !should_start {
+        return;
+    }
+
+    {
+        let mut c = inner.borrow_mut();
+        c.lineup = LineupState::Loading;
+        c.debug.shell.push_log("lineup: loading characters…");
+    }
+
+    let (device, queue, format) = {
+        let c = inner.borrow();
+        (
+            c.renderer.device.clone(),
+            c.renderer.queue.clone(),
+            c.renderer.config.format,
+        )
+    };
+
+    let inner = inner.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        let result = LineupGpu::load(&device, &queue, format).await;
+        let mut c = inner.borrow_mut();
+        match result {
+            Ok(gpu) => {
+                c.debug.shell.push_log("lineup: ready");
+                c.lineup = LineupState::Ready(gpu);
+            }
+            Err(err) => {
+                let msg = err.as_string().unwrap_or_else(|| format!("{err:?}"));
+                web_sys::console::error_1(&JsValue::from_str(&format!(
+                    "lineup load failed: {msg}"
+                )));
+                c.debug.shell.push_log(format!("lineup failed: {msg}"));
+                c.lineup = LineupState::Failed(msg);
+            }
+        }
+    });
+}
+
 /// Read the presented canvas and hand a PNG data URL to the host sink (`window.__debugSaveShot`).
 #[cfg(feature = "debug-tools")]
 fn capture_canvas_png(canvas: &HtmlCanvasElement) -> Result<(), JsValue> {
@@ -621,6 +717,8 @@ impl GameClient {
             fly_input: FlyInput::default(),
             #[cfg(feature = "debug-tools")]
             last_frame_secs: 0.0,
+            #[cfg(feature = "debug-tools")]
+            lineup: LineupState::Idle,
         }));
 
         web_sys::console::log_1(
@@ -653,6 +751,9 @@ impl GameClient {
         let frame_cb_clone = frame_cb.clone();
 
         *frame_cb.borrow_mut() = Some(Closure::new(move || {
+            #[cfg(feature = "debug-tools")]
+            maybe_kick_lineup_load(&client);
+
             {
                 let mut client = client.borrow_mut();
                 if let Err(err) = client.render_frame() {

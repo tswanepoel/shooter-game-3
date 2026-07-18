@@ -115,6 +115,7 @@ With `npm run dev`, press **`` ` ``** (backtick) for the in-game developer conso
 | **`` ` ``** | Toggle developer console |
 | **F9** / `screenshot` | Capture frame to `debug/shots/` |
 | **F8** / `flycam` / `remount` | Debug flycam (WASD + mouse look, Q/E up/down, Shift sprint); remount restores the self eye view |
+| `lineup` / `draw.lineup` | Toggle Kenney character lineup (import scale / paint check) |
 
 ## Contributing
 

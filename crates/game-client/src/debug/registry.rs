@@ -39,6 +39,13 @@ impl DebugRegistry {
                 help: "client: debug flycam (view-only unmount; F8)",
             },
         );
+        self.cvars.insert(
+            "draw.lineup",
+            CVar {
+                value: CVarValue::Bool(false),
+                help: "client: Kenney character lineup on y = 0 (import check)",
+            },
+        );
     }
 
     pub fn get_bool(&self, name: &str) -> Option<bool> {
@@ -62,6 +69,7 @@ impl DebugRegistry {
             "help" | "?" => self.cmd_help(),
             "grid" => self.cmd_grid(&args),
             "flycam" | "fly" => self.cmd_flycam(&args),
+            "lineup" => self.cmd_lineup(&args),
             "remount" => {
                 self.set_bool("cam.fly", false);
                 "cam.fly = 0 (remount)".into()
@@ -79,6 +87,7 @@ impl DebugRegistry {
             "  help              this list".into(),
             "  grid [on|off|toggle]  set draw.grid".into(),
             "  flycam|fly [on|off|toggle]  debug flycam (F8)".into(),
+            "  lineup [on|off|toggle]  character kit lineup".into(),
             "  remount           leave flycam, restore self view".into(),
             "  screenshot|shot   capture frame (F9)".into(),
             "cvars (get: name · set: name <value>):".into(),
@@ -104,6 +113,10 @@ impl DebugRegistry {
 
     fn cmd_flycam(&mut self, args: &[&str]) -> String {
         self.cmd_bool_toggle("cam.fly", args, "flycam")
+    }
+
+    fn cmd_lineup(&mut self, args: &[&str]) -> String {
+        self.cmd_bool_toggle("draw.lineup", args, "lineup")
     }
 
     fn cmd_bool_toggle(&mut self, cvar: &str, args: &[&str], usage_name: &str) -> String {
@@ -197,5 +210,18 @@ mod tests {
         assert_eq!(r.get_bool("cam.fly"), Some(true));
         assert!(r.execute("help").contains("cam.fly"));
         assert!(r.execute("help").contains("flycam"));
+    }
+
+    #[test]
+    fn lineup_cvar_commands() {
+        let mut r = DebugRegistry::new();
+        r.register_defaults();
+        assert_eq!(r.get_bool("draw.lineup"), Some(false));
+        assert!(r.execute("lineup on").contains("1"));
+        assert_eq!(r.get_bool("draw.lineup"), Some(true));
+        assert!(r.execute("lineup off").contains("0"));
+        assert!(r.execute("draw.lineup 1").contains("1"));
+        assert!(r.execute("help").contains("draw.lineup"));
+        assert!(r.execute("help").contains("lineup"));
     }
 }

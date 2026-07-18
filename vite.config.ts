@@ -75,9 +75,14 @@ export default defineConfig({
   build: {
     target: 'es2020',
   },
+  // Ship kit + textures at `/characters/...` (repo `assets/` → dist root).
+  publicDir: path.resolve(repoRoot, 'assets'),
   server: {
     port: 3000,
     host: true,
+    fs: {
+      allow: [repoRoot],
+    },
   },
   plugins: [wasm(), topLevelAwait(), debugShotsPlugin()],
   root: 'web',

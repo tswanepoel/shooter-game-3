@@ -8,9 +8,9 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = ["debug-tools"]
-# In-engine debug shell, command/cvar registry, and host bridge.
+# In-engine debug shell, command/cvar registry, host bridge, character lineup.
 # Production strip: wasm-pack build -- --no-default-features
-debug-tools = ["dep:egui", "dep:egui-wgpu"]
+debug-tools = ["dep:egui", "dep:egui-wgpu", "dep:gltf", "dep:png"]
 
 [dependencies]
 wgpu = "24"
@@ -26,6 +26,8 @@ web-sys = { version = "0.3.67", features = [
   "KeyboardEvent",
   "MouseEvent",
   "Performance",
+  "Request",
+  "Response",
   "WheelEvent",
   "Window",
 ] }
@@ -35,5 +37,8 @@ bytemuck = { version = "1", features = ["derive"] }
 game-sim = { path = "../game-sim" }
 egui = { version = "0.31", optional = true }
 egui-wgpu = { version = "0.31", optional = true }
+# Kit marks KHR_materials_unlit as required; enable so parse does not reject the GLBs.
+gltf = { version = "1.4", default-features = false, features = ["utils", "KHR_materials_unlit", "extensions"], optional = true }
+png = { version = "0.17", optional = true }
 getrandom = { version = "0.2", features = ["js"] }
 js-sys = "0.3"

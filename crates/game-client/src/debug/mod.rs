@@ -63,6 +63,10 @@ impl DebugTools {
         self.registry.get_bool("draw.grid").unwrap_or(true)
     }
 
+    pub fn draw_lineup(&self) -> bool {
+        self.registry.get_bool("draw.lineup").unwrap_or(false)
+    }
+
     /// Whether the registry wants flycam (view syncs this each frame).
     pub fn flycam_wanted(&self) -> bool {
         self.registry.get_bool("cam.fly").unwrap_or(false)
