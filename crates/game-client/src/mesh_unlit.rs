@@ -44,8 +44,7 @@ const BLASTER_GRIP_OFFSETS: [[f32; 3]; 18] = [
     [0.0, -1.18, 0.10], // r
 ];
 
-/// Muzzle points in arm-attachment frame (lineup markers). See blaster kit README.
-#[cfg(feature = "debug-tools")]
+/// Muzzle points in arm-attachment frame. See blaster kit README.
 pub const BLASTER_MUZZLE_POINTS: &[&[[f32; 3]]] = &[
     &[[0.0, -1.7, 0.42]],                             // a
     &[[0.0, -1.39, 0.32]],                            // b
@@ -71,6 +70,11 @@ pub const BLASTER_MUZZLE_POINTS: &[&[[f32; 3]]] = &[
     &[[0.0, -1.82, 0.28], [0.0, -1.82, 0.06]],        // q
     &[[0.0, -1.81, 0.23]],                            // r
 ];
+
+pub fn primary_muzzle_offset(letter_index: usize) -> Vec3 {
+    let pts = BLASTER_MUZZLE_POINTS[letter_index];
+    Vec3::from_array(pts[0])
+}
 
 const UNLIT_SHADER: &str = r#"
 struct FrameUniforms {
@@ -347,6 +351,17 @@ impl UnlitMeshGpu {
         queue.write_buffer(&self.frame_uniform, 0, bytemuck::bytes_of(&uniforms));
     }
 
+    pub fn write_prim_verts(
+        &self,
+        queue: &wgpu::Queue,
+        batch: usize,
+        prim: usize,
+        verts: &[MeshVertex],
+    ) {
+        let buf = &self.batches[batch].primitives[prim].vertex_buffer;
+        queue.write_buffer(buf, 0, bytemuck::cast_slice(verts));
+    }
+
     pub fn draw<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.frame_bind_group, &[]);
@@ -380,10 +395,17 @@ pub fn kit_to_world(placement: Mat4, min_y_kit: f32) -> Mat4 {
         * Mat4::from_translation(Vec3::new(0.0, -min_y_kit, 0.0))
 }
 
-pub fn held_blaster_root(kit_to_world: Mat4, arm_right_kit: Mat4, letter_index: usize) -> Mat4 {
+/// Grip from arm; `aim_pitch` positive = look up (weapon line). Lineup passes 0.
+pub fn held_blaster_root(
+    kit_to_world: Mat4,
+    arm_right_kit: Mat4,
+    letter_index: usize,
+    aim_pitch: f32,
+) -> Mat4 {
     let grip_kit = arm_right_kit.transform_point3(grip_offset(letter_index));
     kit_to_world
         * Mat4::from_translation(grip_kit)
+        * Mat4::from_rotation_x(-aim_pitch)
         * Mat4::from_rotation_y(std::f32::consts::PI)
         * Mat4::from_scale(Vec3::splat(BLASTER_UNITS_TO_M / CHAR_UNITS_TO_M))
 }
@@ -392,6 +414,7 @@ pub async fn load_kenney_core() -> Result<Pack, JsValue> {
     pack::load_pack(KENNEY_CORE_PACK).await
 }
 
+#[cfg(feature = "debug-tools")]
 pub fn upload_held_pair(
     gpu: &UploadCtx<'_>,
     pack: &Pack,
@@ -425,7 +448,7 @@ pub fn upload_held_pair(
         k2w,
         &format!("{label}-character"),
     )?;
-    let blaster_root = held_blaster_root(k2w, arm_right_kit, bi);
+    let blaster_root = held_blaster_root(k2w, arm_right_kit, bi, 0.0);
     let blaster_prims = extract_primitives(blaster_glb)?;
     let blaster_batch = upload_batch(
         gpu,
@@ -707,7 +730,191 @@ pub fn unit_sphere_prim(segments: u32, rings: u32) -> CpuPrim {
 
 pub type CpuPrim = (Vec<MeshVertex>, Vec<u32>, [f32; 4]);
 
+/// One skinned-by-node character part: mesh in node-local space + bind local TRS.
+#[derive(Clone)]
+pub struct CharPart {
+    pub name: String,
+    pub parent: Option<usize>,
+    pub bind_local: Mat4,
+    pub local_verts: Vec<MeshVertex>,
+    pub indices: Vec<u32>,
+    pub base_color: [f32; 4],
+}
+
+/// Bind-pose character hierarchy with node-local meshes (no hold applied).
+pub fn extract_character_parts(glb: &[u8]) -> Result<(Vec<CharPart>, f32), String> {
+    let gltf = gltf::Gltf::from_slice(glb).map_err(|e| format!("gltf parse: {e}"))?;
+    let blob = gltf
+        .blob
+        .as_ref()
+        .ok_or_else(|| "GLB missing BIN chunk".to_string())?;
+
+    let scene = gltf.default_scene().or_else(|| gltf.scenes().next());
+    let roots: Vec<_> = match scene {
+        Some(s) => s.nodes().collect(),
+        None => gltf.nodes().collect(),
+    };
+    if roots.is_empty() {
+        return Err("no nodes in glTF".into());
+    }
+
+    let mut parts = Vec::new();
+    let mut min_y = f32::INFINITY;
+    for node in roots {
+        walk_parts(&node, None, blob, &mut parts, &mut min_y)?;
+    }
+    if parts.is_empty() {
+        return Err("no mesh primitives".into());
+    }
+    if !min_y.is_finite() {
+        min_y = 0.0;
+    }
+    Ok((parts, min_y))
+}
+
+fn walk_parts(
+    node: &gltf::Node<'_>,
+    parent: Option<usize>,
+    blob: &[u8],
+    parts: &mut Vec<CharPart>,
+    min_y: &mut f32,
+) -> Result<(), String> {
+    let bind_local = local_matrix(node, false);
+    let idx = parts.len();
+    let mut local_verts = Vec::new();
+    let mut indices = Vec::new();
+    let mut base_color = [1.0, 1.0, 1.0, 1.0];
+    let mut has_mesh = false;
+
+    if let Some(mesh) = node.mesh() {
+        has_mesh = true;
+        for prim in mesh.primitives() {
+            let reader = prim.reader(|buffer| {
+                if buffer.index() == 0 {
+                    Some(blob)
+                } else {
+                    None
+                }
+            });
+            let positions: Vec<[f32; 3]> = reader
+                .read_positions()
+                .ok_or_else(|| "primitive missing POSITION".to_string())?
+                .collect();
+            let uvs: Vec<[f32; 2]> = match reader.read_tex_coords(0) {
+                Some(tc) => tc.into_f32().collect(),
+                None => vec![[0.0, 0.0]; positions.len()],
+            };
+            if uvs.len() != positions.len() {
+                return Err("UV count != position count".into());
+            }
+            let prim_idx: Vec<u32> = match reader.read_indices() {
+                Some(i) => i.into_u32().collect(),
+                None => (0..positions.len() as u32).collect(),
+            };
+            let base = local_verts.len() as u32;
+            for (i, p) in positions.iter().enumerate() {
+                local_verts.push(MeshVertex {
+                    position: *p,
+                    uv: uvs[i],
+                });
+            }
+            for i in prim_idx {
+                indices.push(base + i);
+            }
+            base_color = material_base_color(&prim);
+        }
+    }
+
+    parts.push(CharPart {
+        name: node.name().unwrap_or("").to_string(),
+        parent,
+        bind_local,
+        local_verts,
+        indices,
+        base_color,
+    });
+
+    if has_mesh {
+        let world = node_world_bind(parts, idx);
+        for v in &parts[idx].local_verts {
+            let wp = world.transform_point3(Vec3::from_array(v.position));
+            *min_y = min_y.min(wp.y);
+        }
+    }
+
+    for child in node.children() {
+        walk_parts(&child, Some(idx), blob, parts, min_y)?;
+    }
+    Ok(())
+}
+
+fn node_world_bind(parts: &[CharPart], idx: usize) -> Mat4 {
+    let mut chain = Vec::new();
+    let mut cur = Some(idx);
+    while let Some(i) = cur {
+        chain.push(i);
+        cur = parts[i].parent;
+    }
+    chain.reverse();
+    let mut w = Mat4::IDENTITY;
+    for i in chain {
+        w *= parts[i].bind_local;
+    }
+    w
+}
+
+/// Pose character parts from self aim state. Returns kit-space node worlds and arm-right kit matrix.
+pub fn pose_character_kit(
+    parts: &[CharPart],
+    self_state: &game_sim::SelfState,
+) -> (Vec<Mat4>, Mat4) {
+    let mut locals = Vec::with_capacity(parts.len());
+    for p in parts {
+        let mut local = p.bind_local;
+        match p.name.as_str() {
+            "torso" => {
+                local *= Mat4::from_quat(Quat::from_rotation_x(-self_state.torso_pitch));
+            }
+            "arm-right" => {
+                // Replace bind rotation with hold, then shoulder pitch.
+                let (_s, _r, t) = p.bind_local.to_scale_rotation_translation();
+                let scale = {
+                    let sx = p.bind_local.x_axis.truncate().length();
+                    let sy = p.bind_local.y_axis.truncate().length();
+                    let sz = p.bind_local.z_axis.truncate().length();
+                    Vec3::new(sx, sy, sz)
+                };
+                local = Mat4::from_scale_rotation_translation(scale, HOLDING_RIGHT_ROT, t)
+                    * Mat4::from_quat(Quat::from_rotation_x(-self_state.shoulder_pitch));
+            }
+            "head" => {
+                local *= Mat4::from_quat(Quat::from_rotation_y(self_state.head_yaw))
+                    * Mat4::from_quat(Quat::from_rotation_x(-self_state.head_pitch));
+            }
+            _ => {}
+        }
+        locals.push(local);
+    }
+
+    let mut worlds = vec![Mat4::IDENTITY; parts.len()];
+    for i in 0..parts.len() {
+        worlds[i] = match parts[i].parent {
+            Some(pi) => worlds[pi] * locals[i],
+            None => locals[i],
+        };
+    }
+
+    let arm = parts
+        .iter()
+        .position(|p| p.name == "arm-right")
+        .map(|i| worlds[i])
+        .unwrap_or(Mat4::IDENTITY);
+
+    (worlds, arm)
+}
+
 /// Character with `holding-right` on `arm-right`. Returns arm-right matrix in kit space.
+#[cfg(feature = "debug-tools")]
 pub fn extract_character_hold(glb: &[u8]) -> Result<(Vec<CpuPrim>, f32, Mat4), String> {
     let gltf = gltf::Gltf::from_slice(glb).map_err(|e| format!("gltf parse: {e}"))?;
     let blob = gltf

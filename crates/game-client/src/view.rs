@@ -9,10 +9,11 @@ const FLY_SPEED_M_S: f32 = 6.0;
 /// Sprint multiplier while Shift is held.
 #[cfg(feature = "debug-tools")]
 const FLY_SPRINT_MULT: f32 = 3.0;
-/// Mouse look sensitivity (radians per pixel).
-#[cfg(feature = "debug-tools")]
-const LOOK_SENS_RAD_PER_PX: f32 = 0.0025;
-/// Pitch clamp so the view never flips.
+/// Mouse look sensitivity (radians per pixel). Shared with mounted ocular.
+pub const LOOK_SENS_RAD_PER_PX: f32 = 0.0025;
+/// Discard pathological single-frame pointer spikes (px).
+pub const LOOK_SPIKE_PX: f32 = 48.0;
+/// Pitch clamp so the flycam view never flips.
 #[cfg(feature = "debug-tools")]
 const MAX_PITCH_RAD: f32 = std::f32::consts::FRAC_PI_2 - 0.05;
 
@@ -27,24 +28,22 @@ enum ViewMode {
 #[derive(Debug, Clone, Copy)]
 struct FlyPose {
     position: Vec3,
-    /// Yaw around Y (rad). 0 looks along **+Z**.
     yaw: f32,
     pitch: f32,
 }
 
 #[cfg(feature = "debug-tools")]
 impl FlyPose {
-    fn from_self(self_state: &SelfState) -> Self {
+    fn from_self(self_state: &SelfState, eye: Vec3) -> Self {
         Self {
-            position: self_state.eye_world(),
-            yaw: self_state.yaw,
-            pitch: 0.0,
+            position: eye,
+            yaw: self_state.ocular_yaw,
+            pitch: self_state.ocular_pitch,
         }
     }
 
     fn forward(self) -> Vec3 {
         let cp = self.pitch.cos();
-        // Match SelfState::facing at pitch 0: (sin yaw, 0, cos yaw).
         Vec3::new(self.yaw.sin() * cp, self.pitch.sin(), self.yaw.cos() * cp)
     }
 }
@@ -98,7 +97,6 @@ impl FlyInput {
         )
     }
 
-    /// Clear movement keys (e.g. when leaving flycam or opening the console).
     pub fn clear_keys(&mut self) {
         *self = Self::default();
     }
@@ -110,6 +108,8 @@ pub struct ViewController {
     mode: ViewMode,
     #[cfg(feature = "debug-tools")]
     fly: FlyPose,
+    /// Mounted eye from posed head (updated each frame).
+    mounted_eye: Vec3,
 }
 
 impl Default for ViewController {
@@ -123,8 +123,13 @@ impl ViewController {
         Self {
             mode: ViewMode::Mounted,
             #[cfg(feature = "debug-tools")]
-            fly: FlyPose::from_self(&SelfState::default_loadout()),
+            fly: FlyPose::from_self(&SelfState::default_loadout(), Vec3::new(0.0, 1.52, 0.27)),
+            mounted_eye: Vec3::new(0.0, 1.52, 0.27),
         }
+    }
+
+    pub fn set_mounted_eye(&mut self, eye: Vec3) {
+        self.mounted_eye = eye;
     }
 
     #[cfg(feature = "debug-tools")]
@@ -135,7 +140,7 @@ impl ViewController {
     #[cfg(feature = "debug-tools")]
     pub fn enter_flycam(&mut self, self_state: &SelfState) {
         if self.mode == ViewMode::Mounted {
-            self.fly = FlyPose::from_self(self_state);
+            self.fly = FlyPose::from_self(self_state, self.mounted_eye);
         }
         self.mode = ViewMode::Flycam;
     }
@@ -143,10 +148,9 @@ impl ViewController {
     #[cfg(feature = "debug-tools")]
     pub fn leave_flycam(&mut self, self_state: &SelfState) {
         self.mode = ViewMode::Mounted;
-        self.fly = FlyPose::from_self(self_state);
+        self.fly = FlyPose::from_self(self_state, self.mounted_eye);
     }
 
-    /// Sync mode from `cam.fly`. Returns a status line if mode changed.
     #[cfg(feature = "debug-tools")]
     pub fn sync_fly_intent(
         &mut self,
@@ -177,7 +181,6 @@ impl ViewController {
             .clamp(-MAX_PITCH_RAD, MAX_PITCH_RAD);
 
         let forward = self.fly.forward();
-        // Strafe stays level; W/S follow the look axis (including pitch) for free-fly inspect.
         let flat_right = Vec3::new(forward.x, 0.0, forward.z)
             .normalize_or_zero()
             .cross(Vec3::Y)
@@ -218,9 +221,9 @@ impl ViewController {
         Mat4::look_to_rh(eye, forward, Vec3::Y)
     }
 
-    fn eye_and_forward(&self, self_state: &SelfState) -> (Vec3, Vec3) {
+    pub fn eye_and_forward(&self, self_state: &SelfState) -> (Vec3, Vec3) {
         match self.mode {
-            ViewMode::Mounted => (self_state.eye_world(), self_state.facing()),
+            ViewMode::Mounted => (self.mounted_eye, self_state.ocular_forward()),
             #[cfg(feature = "debug-tools")]
             ViewMode::Flycam => (self.fly.position, self.fly.forward()),
         }
@@ -232,11 +235,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mount_uses_self_eye_looking_plus_z() {
+    fn mount_uses_ocular_looking_plus_z() {
         let v = ViewController::new();
         let s = SelfState::default_loadout();
         let (eye, forward) = v.eye_and_forward(&s);
-        assert!((eye - s.eye_world()).length() < 1e-5);
+        assert!((eye - v.mounted_eye).length() < 1e-5);
         assert!(forward.dot(Vec3::Z) > 0.99);
         assert!(!v.is_flycam());
     }
@@ -249,8 +252,7 @@ mod tests {
         assert!(v.is_flycam());
         assert_eq!(v.sync_fly_intent(false, &s), Some("flycam off (remounted)"));
         assert!(!v.is_flycam());
-        let (eye, forward) = v.eye_and_forward(&s);
-        assert!((eye - s.eye_world()).length() < 1e-5);
+        let (_, forward) = v.eye_and_forward(&s);
         assert!(forward.dot(Vec3::Z) > 0.99);
     }
 
@@ -258,6 +260,7 @@ mod tests {
     fn flycam_moves_forward() {
         let mut v = ViewController::new();
         let s = SelfState::default_loadout();
+        let z0 = v.mounted_eye.z;
         v.enter_flycam(&s);
         let input = FlyInput {
             forward: true,
@@ -265,8 +268,7 @@ mod tests {
         };
         v.update_flycam(1.0, &input, glam::Vec2::ZERO);
         let (eye, _) = v.eye_and_forward(&s);
-        // Looking +Z: forward move increases z.
-        assert!(eye.z > s.eye_world().z + 1.0);
+        assert!(eye.z > z0 + 1.0);
     }
 
     #[test]
@@ -274,7 +276,6 @@ mod tests {
         let mut v = ViewController::new();
         let s = SelfState::default_loadout();
         v.enter_flycam(&s);
-        // Pitch up ~45°, then hold W for 1s — should gain altitude.
         v.update_flycam(0.0, &FlyInput::default(), glam::Vec2::new(0.0, -400.0));
         let y0 = v.eye_and_forward(&s).0.y;
         v.update_flycam(

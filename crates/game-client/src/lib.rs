@@ -9,6 +9,7 @@ mod input;
 mod lineup;
 mod mesh_unlit;
 mod pack;
+mod reticle;
 mod self_present;
 mod view;
 
@@ -29,10 +30,11 @@ use debug::{DebugHost, DebugTools};
 use input::{install_input_handlers, InputSession};
 #[cfg(feature = "debug-tools")]
 use lineup::{LineupGpu, LineupState};
+use reticle::ReticleGpu;
 use self_present::{SelfGpu, SelfPresentState};
 #[cfg(feature = "debug-tools")]
 use view::FlyInput;
-use view::ViewController;
+use view::{ViewController, LOOK_SENS_RAD_PER_PX, LOOK_SPIKE_PX};
 
 const CLEAR_COLOR: wgpu::Color = wgpu::Color {
     r: 0.05,
@@ -109,6 +111,7 @@ struct Renderer {
     uniform_buffer: wgpu::Buffer,
     vertex_buffer: wgpu::Buffer,
     vertex_count: u32,
+    reticle: ReticleGpu,
 }
 
 impl Renderer {
@@ -271,6 +274,8 @@ impl Renderer {
         });
         queue.write_buffer(&vertex_buffer, 0, bytemuck::cast_slice(&grid));
 
+        let reticle = ReticleGpu::new(&device, config.format, MSAA_SAMPLE_COUNT);
+
         Ok(Self {
             surface,
             device,
@@ -286,6 +291,7 @@ impl Renderer {
             uniform_buffer,
             vertex_buffer,
             vertex_count,
+            reticle,
         })
     }
 
@@ -325,6 +331,7 @@ impl Renderer {
         draw_grid: bool,
         self_body: Option<&SelfGpu>,
         #[cfg(feature = "debug-tools")] lineup: Option<&LineupGpu>,
+        draw_reticle: bool,
     ) -> Result<wgpu::SurfaceTexture, JsValue> {
         let frame = self
             .surface
@@ -378,10 +385,13 @@ impl Renderer {
                 pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
                 pass.draw(0..self.vertex_count, 0..1);
             }
+
+            if draw_reticle {
+                self.reticle.draw(&mut pass);
+            }
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
-        // Caller may paint UI on the resolved swapchain, then present.
         Ok(frame)
     }
 }
@@ -512,12 +522,11 @@ pub(crate) struct ClientInner {
     pub(crate) view: ViewController,
     pub(crate) session: InputSession,
     self_present: SelfPresentState,
+    last_frame_secs: f64,
     #[cfg(feature = "debug-tools")]
     pub(crate) debug: DebugTools,
     #[cfg(feature = "debug-tools")]
     pub(crate) fly_input: FlyInput,
-    #[cfg(feature = "debug-tools")]
-    last_frame_secs: f64,
     #[cfg(feature = "debug-tools")]
     lineup: LineupState,
 }
@@ -537,19 +546,27 @@ impl ClientInner {
         }
         self.renderer.resize_if_needed(width, height);
 
+        let now = web_sys::window()
+            .and_then(|w| w.performance())
+            .map(|p| p.now() / 1000.0)
+            .unwrap_or(0.0);
+        let dt = if self.last_frame_secs > 0.0 {
+            (now - self.last_frame_secs).clamp(0.0, 0.1) as f32
+        } else {
+            1.0 / 60.0
+        };
+        self.last_frame_secs = now;
+
+        let look = self.session.take_look_px();
+        let session_ok = self.session.is_active();
+
+        #[cfg(feature = "debug-tools")]
+        let console_open = self.debug.is_open();
+        #[cfg(not(feature = "debug-tools"))]
+        let console_open = false;
+
         #[cfg(feature = "debug-tools")]
         {
-            let now = web_sys::window()
-                .and_then(|w| w.performance())
-                .map(|p| p.now() / 1000.0)
-                .unwrap_or(0.0);
-            let dt = if self.last_frame_secs > 0.0 {
-                (now - self.last_frame_secs).clamp(0.0, 0.1) as f32
-            } else {
-                1.0 / 60.0
-            };
-            self.last_frame_secs = now;
-
             let want_fly = self.debug.flycam_wanted();
             if let Some(msg) = self.view.sync_fly_intent(want_fly, &self.self_state) {
                 self.debug.shell.push_log(msg.to_string());
@@ -558,10 +575,6 @@ impl ClientInner {
                 }
             }
 
-            let look = self.session.take_look_px();
-            let session_ok = self.session.is_active();
-            let console_open = self.debug.is_open();
-
             if session_ok && self.view.is_flycam() && !console_open {
                 self.view.update_flycam(dt, &self.fly_input, look);
             } else if console_open || !session_ok {
@@ -569,14 +582,50 @@ impl ClientInner {
             }
         }
 
+        #[cfg(feature = "debug-tools")]
+        let flycam = self.view.is_flycam();
         #[cfg(not(feature = "debug-tools"))]
-        {
-            let _ = self.session.take_look_px();
+        let flycam = false;
+
+        if session_ok && !console_open && !flycam {
+            let spike = look.x.abs() > LOOK_SPIKE_PX || look.y.abs() > LOOK_SPIKE_PX;
+            if !spike {
+                self.self_state.apply_look(
+                    dt,
+                    -look.x * LOOK_SENS_RAD_PER_PX,
+                    -look.y * LOOK_SENS_RAD_PER_PX,
+                );
+            } else {
+                self.self_state.step_cascade(dt);
+            }
+        } else {
+            self.self_state.step_cascade(dt);
         }
 
-        let view_proj = self
-            .renderer
-            .write_view_proj(self.view.view_matrix(&self.self_state));
+        {
+            let (cam_eye, _) = self.view.eye_and_forward(&self.self_state);
+            if let SelfPresentState::Ready(gpu) = &mut self.self_present {
+                gpu.apply_state(&self.renderer.queue, &self.self_state, Some(cam_eye));
+                self.view.set_mounted_eye(gpu.view.eye);
+            }
+        }
+
+        let (cam_eye, cam_fwd) = self.view.eye_and_forward(&self.self_state);
+        let view_mat = self.view.view_matrix(&self.self_state);
+        let view_proj = self.renderer.write_view_proj(view_mat);
+
+        let reticle_pos = match &self.self_present {
+            SelfPresentState::Ready(gpu) => gpu.view.reticle_world,
+            _ => None,
+        };
+        self.renderer.reticle.update(
+            &self.renderer.queue,
+            view_proj,
+            reticle_pos,
+            cam_eye,
+            cam_fwd,
+            height as f32,
+        );
 
         if let SelfPresentState::Ready(gpu) = &self.self_present {
             gpu.write_view_proj(&self.renderer.queue, view_proj);
@@ -591,6 +640,8 @@ impl ClientInner {
         #[cfg(not(feature = "debug-tools"))]
         let draw_grid = true;
 
+        let draw_reticle = reticle_pos.is_some() && !flycam;
+
         #[cfg(feature = "debug-tools")]
         let frame = {
             let want_lineup = self.debug.draw_lineup();
@@ -604,10 +655,12 @@ impl ClientInner {
                 _ => None,
             };
             self.renderer
-                .render_scene(draw_grid, self_ref, lineup_ref)?
+                .render_scene(draw_grid, self_ref, lineup_ref, draw_reticle)?
         };
         #[cfg(not(feature = "debug-tools"))]
-        let frame = self.renderer.render_scene(draw_grid, self_ref)?;
+        let frame = self
+            .renderer
+            .render_scene(draw_grid, self_ref, draw_reticle)?;
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -827,12 +880,11 @@ impl GameClient {
             view,
             session: InputSession::new(),
             self_present: SelfPresentState::Idle,
+            last_frame_secs: 0.0,
             #[cfg(feature = "debug-tools")]
             debug,
             #[cfg(feature = "debug-tools")]
             fly_input: FlyInput::default(),
-            #[cfg(feature = "debug-tools")]
-            last_frame_secs: 0.0,
             #[cfg(feature = "debug-tools")]
             lineup: LineupState::Idle,
         }));
