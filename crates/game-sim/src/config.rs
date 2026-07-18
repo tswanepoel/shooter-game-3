@@ -3,10 +3,10 @@
 //! World space: 1 unit = 1 metre, Y-up, XZ ground plane.
 //! Values are pure data — not behaviour. Prefer naming the real-world driver.
 
-/// Standing adult eye height (metres). Placeholder until the camera mounts on a body.
+/// Standing adult eye height (metres). Stub self mount until a real body owns the view.
 pub const STANDING_EYE_HEIGHT_M: f32 = 1.7;
 
-/// Vertical field of view for the temporary fixed spectator camera (radians).
+/// Vertical field of view for the player/mounted view (radians).
 ///
 /// Not a physical constant of the world; a deliberate projection choice (~75°).
 pub const CAMERA_VERTICAL_FOV_RAD: f32 = 75.0_f32.to_radians();

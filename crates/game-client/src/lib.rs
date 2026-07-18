@@ -1,24 +1,29 @@
-//! WebGPU client: fixed eye-height view of an empty scene with a debug grid.
+//! WebGPU client: mounted self view of an empty scene with a debug grid.
+//! Optional debug flycam (feature `debug-tools`) unmounts for free inspection.
 
 #![cfg(target_arch = "wasm32")]
 
 #[cfg(feature = "debug-tools")]
 mod debug;
+mod view;
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use game_sim::{
     CAMERA_FAR_M, CAMERA_NEAR_M, CAMERA_VERTICAL_FOV_RAD, DEBUG_GRID_HALF_EXTENT_M,
-    GRID_MAJOR_EVERY, GRID_MINOR_SPACING_M, STANDING_EYE_HEIGHT_M,
+    GRID_MAJOR_EVERY, GRID_MINOR_SPACING_M,
 };
-use glam::{Mat4, Vec3};
+use glam::Mat4;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::HtmlCanvasElement;
 
 #[cfg(feature = "debug-tools")]
 use debug::{install_input_handlers, DebugHost, DebugTools};
+#[cfg(feature = "debug-tools")]
+use view::FlyInput;
+use view::ViewController;
 
 /// Scene clear colour (presentation only).
 const CLEAR_COLOR: wgpu::Color = wgpu::Color {
@@ -246,7 +251,7 @@ impl Renderer {
         });
         queue.write_buffer(&vertex_buffer, 0, bytemuck::cast_slice(&grid));
 
-        let renderer = Self {
+        Ok(Self {
             surface,
             device,
             queue,
@@ -257,9 +262,7 @@ impl Renderer {
             uniform_buffer,
             vertex_buffer,
             vertex_count,
-        };
-        renderer.write_view_proj();
-        Ok(renderer)
+        })
     }
 
     fn resize_if_needed(&mut self, width: u32, height: u32) {
@@ -272,14 +275,10 @@ impl Renderer {
         self.config.height = height;
         self.surface.configure(&self.device, &self.config);
         self.depth_view = create_depth_view(&self.device, width, height);
-        self.write_view_proj();
     }
 
-    fn write_view_proj(&self) {
+    fn write_view_proj(&self, view: Mat4) {
         let aspect = self.config.width as f32 / self.config.height as f32;
-        let eye = Vec3::new(0.0, STANDING_EYE_HEIGHT_M, 0.0);
-        // Look straight ahead along −Z (right-handed, Y-up).
-        let view = Mat4::look_to_rh(eye, Vec3::NEG_Z, Vec3::Y);
         let proj =
             perspective_rh_wgpu(CAMERA_VERTICAL_FOV_RAD, aspect, CAMERA_NEAR_M, CAMERA_FAR_M);
         let uniforms = FrameUniforms {
@@ -415,8 +414,13 @@ fn build_debug_grid() -> Vec<Vertex> {
 pub(crate) struct ClientInner {
     renderer: Renderer,
     canvas: HtmlCanvasElement,
+    pub(crate) view: ViewController,
     #[cfg(feature = "debug-tools")]
     pub(crate) debug: DebugTools,
+    #[cfg(feature = "debug-tools")]
+    pub(crate) fly_input: FlyInput,
+    #[cfg(feature = "debug-tools")]
+    last_frame_secs: f64,
 }
 
 impl ClientInner {
@@ -438,6 +442,37 @@ impl ClientInner {
             self.canvas.set_height(height);
         }
         self.renderer.resize_if_needed(width, height);
+
+        #[cfg(feature = "debug-tools")]
+        {
+            let now = web_sys::window()
+                .and_then(|w| w.performance())
+                .map(|p| p.now() / 1000.0)
+                .unwrap_or(0.0);
+            let dt = if self.last_frame_secs > 0.0 {
+                (now - self.last_frame_secs).clamp(0.0, 0.1) as f32
+            } else {
+                1.0 / 60.0
+            };
+            self.last_frame_secs = now;
+
+            let want_fly = self.debug.flycam_wanted();
+            if let Some(msg) = self.view.sync_fly_intent(want_fly) {
+                self.debug.shell.push_log(msg.to_string());
+                if !want_fly {
+                    self.fly_input.clear_keys();
+                }
+            }
+
+            if self.view.is_flycam() && !self.debug.is_open() {
+                self.view.update_flycam(dt, &mut self.fly_input);
+            } else if self.debug.is_open() {
+                // Don't keep moving while typing in the console.
+                self.fly_input.clear_keys();
+            }
+        }
+
+        self.renderer.write_view_proj(self.view.view_matrix());
 
         #[cfg(feature = "debug-tools")]
         let draw_grid = self.debug.draw_grid();
@@ -555,6 +590,8 @@ impl GameClient {
         console_error_panic_hook::set_once();
 
         let renderer = Renderer::new(canvas.clone()).await?;
+        let view = ViewController::new();
+        renderer.write_view_proj(view.view_matrix());
 
         #[cfg(feature = "debug-tools")]
         let debug = DebugTools::new(&renderer.device, renderer.config.format);
@@ -562,8 +599,13 @@ impl GameClient {
         let inner = Rc::new(RefCell::new(ClientInner {
             renderer,
             canvas,
+            view,
             #[cfg(feature = "debug-tools")]
             debug,
+            #[cfg(feature = "debug-tools")]
+            fly_input: FlyInput::default(),
+            #[cfg(feature = "debug-tools")]
+            last_frame_secs: 0.0,
         }));
 
         web_sys::console::log_1(&"WebGPU initialized; empty scene ready".into());

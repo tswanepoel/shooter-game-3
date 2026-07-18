@@ -105,6 +105,12 @@ The image packages the release `*.wasm` outputs under `/artifacts`.
 
 With `npm run dev`, press **`` ` ``** (backtick) for the in-game developer console. Production builds (`npm run build`) omit debug tools.
 
+| Input / command | Action |
+|---|---|
+| **`` ` ``** | Toggle developer console |
+| **F9** / `screenshot` | Capture frame to `debug/shots/` |
+| **F6** / `flycam` / `remount` | Debug flycam (WASD + mouse look, Q/E up/down, Shift sprint); remount restores the self eye view |
+
 ## Contributing
 
 Contributions are welcome. Please see [CONTRIBUTING.md](CONTRIBUTING.md) for:

@@ -32,6 +32,13 @@ impl DebugRegistry {
                 help: "client: world-space debug grid on y = 0",
             },
         );
+        self.cvars.insert(
+            "cam.fly",
+            CVar {
+                value: CVarValue::Bool(false),
+                help: "client: debug flycam (view-only unmount; F6)",
+            },
+        );
     }
 
     pub fn get_bool(&self, name: &str) -> Option<bool> {
@@ -54,6 +61,11 @@ impl DebugRegistry {
         match head {
             "help" | "?" => self.cmd_help(),
             "grid" => self.cmd_grid(&args),
+            "flycam" | "fly" => self.cmd_flycam(&args),
+            "remount" => {
+                self.set_bool("cam.fly", false);
+                "cam.fly = 0 (remount)".into()
+            }
             // Handled by DebugTools (needs canvas); listed here for help/discovery.
             "screenshot" | "shot" => "__REQUEST_SCREENSHOT__".into(),
             name if self.cvars.contains_key(name) => self.cmd_cvar(name, &args),
@@ -66,6 +78,8 @@ impl DebugRegistry {
             "commands:".into(),
             "  help              this list".into(),
             "  grid [on|off|toggle]  set draw.grid".into(),
+            "  flycam|fly [on|off|toggle]  debug flycam (F6)".into(),
+            "  remount           leave flycam, restore self view".into(),
             "  screenshot|shot   capture frame (F9)".into(),
             "cvars (get: name · set: name <value>):".into(),
         ];
@@ -85,18 +99,26 @@ impl DebugRegistry {
     }
 
     fn cmd_grid(&mut self, args: &[&str]) -> String {
+        self.cmd_bool_toggle("draw.grid", args, "grid")
+    }
+
+    fn cmd_flycam(&mut self, args: &[&str]) -> String {
+        self.cmd_bool_toggle("cam.fly", args, "flycam")
+    }
+
+    fn cmd_bool_toggle(&mut self, cvar: &str, args: &[&str], usage_name: &str) -> String {
         match args.first().copied() {
             None | Some("toggle") => {
-                let cur = self.get_bool("draw.grid").unwrap_or(true);
-                self.set_bool("draw.grid", !cur);
-                format!("draw.grid = {}", !cur as u8)
+                let cur = self.get_bool(cvar).unwrap_or(false);
+                self.set_bool(cvar, !cur);
+                format!("{cvar} = {}", !cur as u8)
             }
             Some(v) => match parse_bool(v) {
                 Some(b) => {
-                    self.set_bool("draw.grid", b);
-                    format!("draw.grid = {}", b as u8)
+                    self.set_bool(cvar, b);
+                    format!("{cvar} = {}", b as u8)
                 }
-                None => "usage: grid [on|off|toggle]".into(),
+                None => format!("usage: {usage_name} [on|off|toggle]"),
             },
         }
     }
@@ -160,5 +182,20 @@ mod tests {
         assert_eq!(r.execute("screenshot"), "__REQUEST_SCREENSHOT__");
         assert!(r.execute("draw.grid 1").contains("1"));
         assert_eq!(r.get_bool("draw.grid"), Some(true));
+    }
+
+    #[test]
+    fn flycam_cvar_commands() {
+        let mut r = DebugRegistry::new();
+        r.register_defaults();
+        assert_eq!(r.get_bool("cam.fly"), Some(false));
+        assert!(r.execute("flycam on").contains("1"));
+        assert_eq!(r.get_bool("cam.fly"), Some(true));
+        assert!(r.execute("remount").contains("0"));
+        assert_eq!(r.get_bool("cam.fly"), Some(false));
+        assert!(r.execute("fly").contains("1")); // toggle
+        assert_eq!(r.get_bool("cam.fly"), Some(true));
+        assert!(r.execute("help").contains("cam.fly"));
+        assert!(r.execute("help").contains("flycam"));
     }
 }

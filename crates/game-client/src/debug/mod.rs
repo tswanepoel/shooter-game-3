@@ -71,6 +71,15 @@ impl DebugTools {
         self.registry.get_bool("draw.grid").unwrap_or(true)
     }
 
+    /// Whether the registry wants flycam (view syncs this each frame).
+    pub fn flycam_wanted(&self) -> bool {
+        self.registry.get_bool("cam.fly").unwrap_or(false)
+    }
+
+    pub fn toggle_flycam_wanted(&mut self) {
+        let _ = self.registry.execute("flycam toggle");
+    }
+
     pub fn is_open(&self) -> bool {
         self.shell.open
     }
@@ -131,15 +140,13 @@ pub fn install_input_handlers(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCanv
         let inner = inner.clone();
         let on_key_down = Closure::<dyn FnMut(KeyboardEvent)>::new(move |event: KeyboardEvent| {
             let mut client = inner.borrow_mut();
-            let debug = &mut client.debug;
-
-            update_modifiers(debug, &event);
+            update_modifiers(&mut client.debug, &event);
 
             // ` / Backquote — ignore key-repeat so hold does not flicker open/close.
             if event.code() == "Backquote" || event.key() == "`" {
                 event.prevent_default();
                 if !event.repeat() {
-                    debug.request_toggle();
+                    client.debug.request_toggle();
                 }
                 return;
             }
@@ -148,25 +155,43 @@ pub fn install_input_handlers(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCanv
             if event.code() == "F9" {
                 event.prevent_default();
                 if !event.repeat() {
-                    debug.request_screenshot();
+                    client.debug.request_screenshot();
                 }
                 return;
             }
 
-            if !debug.is_open() {
+            // F6 — flycam toggle via registry (works with console closed or open).
+            if event.code() == "F6" {
+                event.prevent_default();
+                if !event.repeat() {
+                    client.debug.toggle_flycam_wanted();
+                }
+                return;
+            }
+
+            if !client.debug.is_open() {
+                // Flycam movement when unmounted and shell closed.
+                if client.view.is_flycam() || client.debug.flycam_wanted() {
+                    let code = event.code();
+                    if crate::view::FlyInput::is_fly_key(&code) {
+                        event.prevent_default();
+                        client.fly_input.set_key(&code, true);
+                    }
+                }
                 return;
             }
 
             event.prevent_default();
             event.stop_propagation();
 
+            let modifiers = client.debug.modifiers();
             if let Some(key) = map_egui_key(&event.code()) {
-                debug.push_event(egui::Event::Key {
+                client.debug.push_event(egui::Event::Key {
                     key,
                     physical_key: None,
                     pressed: true,
                     repeat: event.repeat(),
-                    modifiers: debug.modifiers(),
+                    modifiers,
                 });
             }
 
@@ -174,7 +199,7 @@ pub fn install_input_handlers(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCanv
             if key_str.chars().count() == 1 {
                 if let Some(ch) = key_str.chars().next() {
                     if !ch.is_control() {
-                        debug.push_event(egui::Event::Text(ch.to_string()));
+                        client.debug.push_event(egui::Event::Text(ch.to_string()));
                     }
                 }
             }
@@ -189,18 +214,22 @@ pub fn install_input_handlers(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCanv
         let inner = inner.clone();
         let on_key_up = Closure::<dyn FnMut(KeyboardEvent)>::new(move |event: KeyboardEvent| {
             let mut client = inner.borrow_mut();
-            let debug = &mut client.debug;
-            update_modifiers(debug, &event);
-            if !debug.is_open() {
+            update_modifiers(&mut client.debug, &event);
+
+            if !client.debug.is_open() {
+                if client.view.is_flycam() || client.debug.flycam_wanted() {
+                    client.fly_input.set_key(&event.code(), false);
+                }
                 return;
             }
             if let Some(key) = map_egui_key(&event.code()) {
-                debug.push_event(egui::Event::Key {
+                let modifiers = client.debug.modifiers();
+                client.debug.push_event(egui::Event::Key {
                     key,
                     physical_key: None,
                     pressed: false,
                     repeat: false,
-                    modifiers: debug.modifiers(),
+                    modifiers,
                 });
             }
         });
@@ -208,6 +237,25 @@ pub fn install_input_handlers(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCanv
             .add_event_listener_with_callback("keyup", on_key_up.as_ref().unchecked_ref())
             .expect("keyup listener");
         on_key_up.forget();
+    }
+
+    // Window-level move for flycam look (works while pointer is anywhere).
+    {
+        let inner = inner.clone();
+        let on_move = Closure::<dyn FnMut(MouseEvent)>::new(move |event: MouseEvent| {
+            let mut client = inner.borrow_mut();
+            if client.view.is_flycam() && !client.debug.is_open() {
+                let dx = event.movement_x() as f32;
+                let dy = event.movement_y() as f32;
+                if dx != 0.0 || dy != 0.0 {
+                    client.fly_input.add_look_px(dx, dy);
+                }
+            }
+        });
+        window
+            .add_event_listener_with_callback("mousemove", on_move.as_ref().unchecked_ref())
+            .expect("flycam mousemove");
+        on_move.forget();
     }
 
     {
