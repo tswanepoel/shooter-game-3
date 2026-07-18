@@ -20,3 +20,6 @@
 # OS
 .DS_Store
 Thumbs.db
+
+# Local debug tool output (screenshots, captures — never commit)
+/debug/

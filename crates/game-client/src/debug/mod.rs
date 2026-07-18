@@ -26,6 +26,7 @@ pub struct DebugTools {
     pending_events: Vec<egui::Event>,
     modifiers: egui::Modifiers,
     toggle_requested: bool,
+    screenshot_requested: bool,
 }
 
 impl DebugTools {
@@ -38,15 +39,32 @@ impl DebugTools {
             pending_events: Vec::new(),
             modifiers: egui::Modifiers::default(),
             toggle_requested: false,
+            screenshot_requested: false,
         }
     }
 
     pub fn execute(&mut self, line: &str) -> String {
         let out = self.registry.execute(line);
+        if out == "__REQUEST_SCREENSHOT__" {
+            self.request_screenshot();
+            let msg = "screenshot queued".to_string();
+            self.shell.push_log(msg.clone());
+            return msg;
+        }
         if !out.is_empty() {
             self.shell.push_log(out.clone());
         }
         out
+    }
+
+    pub fn request_screenshot(&mut self) {
+        self.screenshot_requested = true;
+    }
+
+    pub fn take_screenshot_request(&mut self) -> bool {
+        let v = self.screenshot_requested;
+        self.screenshot_requested = false;
+        v
     }
 
     pub fn draw_grid(&self) -> bool {
@@ -122,6 +140,15 @@ pub fn install_input_handlers(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCanv
                 event.prevent_default();
                 if !event.repeat() {
                     debug.request_toggle();
+                }
+                return;
+            }
+
+            // F9 — screenshot (works with console closed or open).
+            if event.code() == "F9" {
+                event.prevent_default();
+                if !event.repeat() {
+                    debug.request_screenshot();
                 }
                 return;
             }

@@ -498,8 +498,45 @@ impl ClientInner {
         }
 
         frame.present();
+
+        #[cfg(feature = "debug-tools")]
+        {
+            if self.debug.take_screenshot_request() {
+                if let Err(err) = capture_canvas_png(&self.canvas) {
+                    web_sys::console::error_1(&err);
+                    self.debug.shell.push_log(format!(
+                        "screenshot failed: {}",
+                        err.as_string().unwrap_or_default()
+                    ));
+                } else {
+                    self.debug.shell.push_log("screenshot ok");
+                }
+            }
+        }
+
         Ok(())
     }
+}
+
+/// Read the presented canvas and hand a PNG data URL to the host sink (`window.__debugSaveShot`).
+#[cfg(feature = "debug-tools")]
+fn capture_canvas_png(canvas: &HtmlCanvasElement) -> Result<(), JsValue> {
+    let data_url = canvas
+        .to_data_url_with_type("image/png")
+        .map_err(|e| JsValue::from_str(&format!("canvas toDataURL failed: {e:?}")))?;
+
+    let window = web_sys::window().ok_or_else(|| JsValue::from_str("no window"))?;
+    let handler = js_sys::Reflect::get(&window, &JsValue::from_str("__debugSaveShot"))?;
+    if handler.is_undefined() || handler.is_null() {
+        return Err(JsValue::from_str(
+            "window.__debugSaveShot missing (host sink not installed)",
+        ));
+    }
+    let func = handler
+        .dyn_into::<js_sys::Function>()
+        .map_err(|_| JsValue::from_str("window.__debugSaveShot is not a function"))?;
+    let _ = func.call1(&JsValue::NULL, &JsValue::from_str(&data_url))?;
+    Ok(())
 }
 
 /// WebGPU renderer bound to a canvas, exposed to JS.

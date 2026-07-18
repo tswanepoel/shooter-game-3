@@ -41,4 +41,11 @@ impl DebugHost {
             self.inner.borrow_mut().debug.shell.focus_input = true;
         }
     }
+
+    /// Queue a frame capture (same path as F9 / `screenshot` command).
+    #[wasm_bindgen]
+    pub fn screenshot(&self) -> String {
+        self.inner.borrow_mut().debug.request_screenshot();
+        "screenshot queued".into()
+    }
 }

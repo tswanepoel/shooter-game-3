@@ -54,6 +54,8 @@ impl DebugRegistry {
         match head {
             "help" | "?" => self.cmd_help(),
             "grid" => self.cmd_grid(&args),
+            // Handled by DebugTools (needs canvas); listed here for help/discovery.
+            "screenshot" | "shot" => "__REQUEST_SCREENSHOT__".into(),
             name if self.cvars.contains_key(name) => self.cmd_cvar(name, &args),
             _ => format!("unknown: '{head}'. type 'help'."),
         }
@@ -64,6 +66,7 @@ impl DebugRegistry {
             "commands:".into(),
             "  help              this list".into(),
             "  grid [on|off|toggle]  set draw.grid".into(),
+            "  screenshot|shot   capture frame (F9)".into(),
             "cvars (get: name · set: name <value>):".into(),
         ];
         for (name, cvar) in &self.cvars {
@@ -153,6 +156,8 @@ mod tests {
         assert!(r.execute("grid off").contains("0"));
         assert_eq!(r.get_bool("draw.grid"), Some(false));
         assert!(r.execute("help").contains("draw.grid"));
+        assert!(r.execute("help").contains("screenshot"));
+        assert_eq!(r.execute("screenshot"), "__REQUEST_SCREENSHOT__");
         assert!(r.execute("draw.grid 1").contains("1"));
         assert_eq!(r.get_bool("draw.grid"), Some(true));
     }
