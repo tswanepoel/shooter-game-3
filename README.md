@@ -101,15 +101,20 @@ The image packages the release `*.wasm` outputs under `/artifacts`.
 1. Compiles the Rust WASM module
 2. Starts the Vite development server with hot-reload
 
+### Input session
+
+**Click the canvas once** to enter the in-game input session (browser pointer lock). That owns look and game keys until the browser ejects (Esc, blur, leave tab). Click again to resume. Game modes (including flycam) do not lock or unlock the pointer.
+
 ### Debug tools
 
 With `npm run dev`, press **`` ` ``** (backtick) for the in-game developer console. Production builds (`npm run build`) omit debug tools.
 
 | Input / command | Action |
 |---|---|
+| **Click canvas** | Enter / resume input session |
 | **`` ` ``** | Toggle developer console |
 | **F9** / `screenshot` | Capture frame to `debug/shots/` |
-| **F6** / `flycam` / `remount` | Debug flycam (WASD + mouse look, Q/E up/down, Shift sprint); remount restores the self eye view |
+| **F8** / `flycam` / `remount` | Debug flycam (WASD + mouse look, Q/E up/down, Shift sprint); remount restores the self eye view |
 
 ## Contributing
 

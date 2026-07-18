@@ -1,10 +1,12 @@
 //! WebGPU client: mounted self view of an empty scene with a debug grid.
+//! Input session owns pointer/keyboard after first click (007).
 //! Optional debug flycam (feature `debug-tools`) unmounts for free inspection.
 
 #![cfg(target_arch = "wasm32")]
 
 #[cfg(feature = "debug-tools")]
 mod debug;
+mod input;
 mod view;
 
 use std::cell::RefCell;
@@ -20,7 +22,8 @@ use wasm_bindgen::JsCast;
 use web_sys::HtmlCanvasElement;
 
 #[cfg(feature = "debug-tools")]
-use debug::{install_input_handlers, DebugHost, DebugTools};
+use debug::{DebugHost, DebugTools};
+use input::{install_input_handlers, InputSession};
 #[cfg(feature = "debug-tools")]
 use view::FlyInput;
 use view::ViewController;
@@ -415,6 +418,7 @@ pub(crate) struct ClientInner {
     renderer: Renderer,
     canvas: HtmlCanvasElement,
     pub(crate) view: ViewController,
+    pub(crate) session: InputSession,
     #[cfg(feature = "debug-tools")]
     pub(crate) debug: DebugTools,
     #[cfg(feature = "debug-tools")]
@@ -464,12 +468,22 @@ impl ClientInner {
                 }
             }
 
-            if self.view.is_flycam() && !self.debug.is_open() {
-                self.view.update_flycam(dt, &mut self.fly_input);
-            } else if self.debug.is_open() {
-                // Don't keep moving while typing in the console.
+            let look = self.session.take_look_px();
+            let session_ok = self.session.is_active();
+            let console_open = self.debug.is_open();
+
+            if session_ok && self.view.is_flycam() && !console_open {
+                self.view.update_flycam(dt, &self.fly_input, look);
+            } else if console_open || !session_ok {
+                // Pause fly move while typing or when browser ejected the session.
                 self.fly_input.clear_keys();
             }
+        }
+
+        #[cfg(not(feature = "debug-tools"))]
+        {
+            // Drain look until gameplay consumes it.
+            let _ = self.session.take_look_px();
         }
 
         self.renderer.write_view_proj(self.view.view_matrix());
@@ -600,6 +614,7 @@ impl GameClient {
             renderer,
             canvas,
             view,
+            session: InputSession::new(),
             #[cfg(feature = "debug-tools")]
             debug,
             #[cfg(feature = "debug-tools")]
@@ -608,7 +623,9 @@ impl GameClient {
             last_frame_secs: 0.0,
         }));
 
-        web_sys::console::log_1(&"WebGPU initialized; empty scene ready".into());
+        web_sys::console::log_1(
+            &"WebGPU initialized; empty scene ready (click canvas to capture input)".into(),
+        );
         Ok(GameClient { inner })
     }
 
@@ -628,11 +645,8 @@ impl GameClient {
     /// Run the frame loop via `requestAnimationFrame`.
     #[wasm_bindgen(js_name = startRenderLoop)]
     pub fn start_render_loop(&self) -> Result<(), JsValue> {
-        #[cfg(feature = "debug-tools")]
-        {
-            let canvas = self.inner.borrow().canvas.clone();
-            install_input_handlers(self.inner.clone(), &canvas);
-        }
+        let canvas = self.inner.borrow().canvas.clone();
+        install_input_handlers(self.inner.clone(), &canvas);
 
         let client = self.inner.clone();
         let frame_cb: FrameCallback = Rc::new(RefCell::new(None));

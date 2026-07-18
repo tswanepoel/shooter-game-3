@@ -36,7 +36,7 @@ impl DebugRegistry {
             "cam.fly",
             CVar {
                 value: CVarValue::Bool(false),
-                help: "client: debug flycam (view-only unmount; F6)",
+                help: "client: debug flycam (view-only unmount; F8)",
             },
         );
     }
@@ -78,7 +78,7 @@ impl DebugRegistry {
             "commands:".into(),
             "  help              this list".into(),
             "  grid [on|off|toggle]  set draw.grid".into(),
-            "  flycam|fly [on|off|toggle]  debug flycam (F6)".into(),
+            "  flycam|fly [on|off|toggle]  debug flycam (F8)".into(),
             "  remount           leave flycam, restore self view".into(),
             "  screenshot|shot   capture frame (F9)".into(),
             "cvars (get: name · set: name <value>):".into(),

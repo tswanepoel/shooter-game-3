@@ -6,9 +6,6 @@
 use game_sim::STANDING_EYE_HEIGHT_M;
 use glam::{Mat4, Vec3};
 
-#[cfg(feature = "debug-tools")]
-use glam::Vec2;
-
 /// Default flycam move speed (m/s). Client presentation, not world ground truth.
 #[cfg(feature = "debug-tools")]
 const FLY_SPEED_M_S: f32 = 6.0;
@@ -57,7 +54,7 @@ impl FlyPose {
     }
 }
 
-/// Held-key and look-delta input for the flycam controller.
+/// Held-key input for the flycam controller (look comes from the input session).
 #[cfg(feature = "debug-tools")]
 #[derive(Debug, Default, Clone)]
 pub struct FlyInput {
@@ -68,17 +65,10 @@ pub struct FlyInput {
     pub up: bool,
     pub down: bool,
     pub sprint: bool,
-    /// Accumulated mouse delta (pixels) since last update; cleared after apply.
-    look_px: Vec2,
 }
 
 #[cfg(feature = "debug-tools")]
 impl FlyInput {
-    pub fn add_look_px(&mut self, dx: f32, dy: f32) {
-        self.look_px.x += dx;
-        self.look_px.y += dy;
-    }
-
     pub fn set_key(&mut self, code: &str, pressed: bool) {
         match code {
             "KeyW" | "ArrowUp" => self.forward = pressed,
@@ -111,12 +101,6 @@ impl FlyInput {
                 | "ArrowLeft"
                 | "ArrowRight"
         )
-    }
-
-    fn take_look_px(&mut self) -> Vec2 {
-        let d = self.look_px;
-        self.look_px = Vec2::ZERO;
-        d
     }
 
     /// Clear movement keys (e.g. when leaving flycam or opening the console).
@@ -185,29 +169,30 @@ impl ViewController {
         }
     }
 
+    /// Apply flycam from held keys and a look delta (pixels) from the input session.
     #[cfg(feature = "debug-tools")]
-    pub fn update_flycam(&mut self, dt: f32, input: &mut FlyInput) {
+    pub fn update_flycam(&mut self, dt: f32, input: &FlyInput, look_px: glam::Vec2) {
         if self.mode != ViewMode::Flycam {
             return;
         }
 
-        let look = input.take_look_px();
-        self.fly.yaw -= look.x * LOOK_SENS_RAD_PER_PX;
-        self.fly.pitch =
-            (self.fly.pitch - look.y * LOOK_SENS_RAD_PER_PX).clamp(-MAX_PITCH_RAD, MAX_PITCH_RAD);
+        self.fly.yaw -= look_px.x * LOOK_SENS_RAD_PER_PX;
+        self.fly.pitch = (self.fly.pitch - look_px.y * LOOK_SENS_RAD_PER_PX)
+            .clamp(-MAX_PITCH_RAD, MAX_PITCH_RAD);
 
         let forward = self.fly.forward();
-        let right = forward.cross(Vec3::Y).normalize_or_zero();
-        // Horizontal forward for WASD (stay level when looking up/down).
-        let flat_forward = Vec3::new(forward.x, 0.0, forward.z).normalize_or_zero();
-        let flat_right = Vec3::new(right.x, 0.0, right.z).normalize_or_zero();
+        // Strafe stays level; W/S follow the look axis (including pitch) for free-fly inspect.
+        let flat_right = Vec3::new(forward.x, 0.0, forward.z)
+            .normalize_or_zero()
+            .cross(Vec3::Y)
+            .normalize_or_zero();
 
         let mut wish = Vec3::ZERO;
         if input.forward {
-            wish += flat_forward;
+            wish += forward;
         }
         if input.back {
-            wish -= flat_forward;
+            wish -= forward;
         }
         if input.right {
             wish += flat_right;
@@ -282,13 +267,35 @@ mod tests {
     fn flycam_moves_forward() {
         let mut v = ViewController::new();
         v.enter_flycam();
-        let mut input = FlyInput {
+        let input = FlyInput {
             forward: true,
             ..Default::default()
         };
-        v.update_flycam(1.0, &mut input);
+        v.update_flycam(1.0, &input, glam::Vec2::ZERO);
         let (eye, _) = v.eye_and_forward();
         // Looking −Z: forward move decreases z.
         assert!(eye.z < -1.0);
+    }
+
+    #[test]
+    fn flycam_ws_follows_pitch() {
+        let mut v = ViewController::new();
+        v.enter_flycam();
+        // Pitch up ~45°, then hold W for 1s — should gain altitude.
+        v.update_flycam(0.0, &FlyInput::default(), glam::Vec2::new(0.0, -400.0));
+        let y0 = v.eye_and_forward().0.y;
+        v.update_flycam(
+            1.0,
+            &FlyInput {
+                forward: true,
+                ..Default::default()
+            },
+            glam::Vec2::ZERO,
+        );
+        let y1 = v.eye_and_forward().0.y;
+        assert!(
+            y1 > y0 + 1.0,
+            "expected look-relative climb, y0={y0} y1={y1}"
+        );
     }
 }
