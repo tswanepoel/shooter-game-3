@@ -1,7 +1,4 @@
-//! Debug character lineup: Kenney blocky kit on the ground plane (008).
-//!
-//! Client-only presentation. Load, scale, and paint rules follow
-//! `assets/characters/README.md`.
+//! Debug character lineup (Kenney kit). See `assets/characters/README.md`.
 
 use std::io::Cursor;
 
@@ -11,17 +8,11 @@ use wasm_bindgen::JsValue;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::Response;
 
-/// Kit letters `a`…`r` (one mesh + matching albedo atlas each).
 const LETTERS: &[u8] = b"abcdefghijklmnopqr";
-
-/// Root scale: kit units → world metres (see kit README).
-/// Authored standing height is 2.7 kit units; ÷1.5 → 1.8 m.
+/// Kit units → metres (2.7 kit → 1.8 m standing; kit README).
 const KIT_ROOT_SCALE: f32 = 1.0 / 1.5;
-
-/// Centre-to-centre spacing along the row (metres).
 const LINEUP_SPACING_M: f32 = 1.5;
-
-/// Row depth in front of the stub cam (looks −Z from origin).
+/// Row depth (m); stub cam looks −Z.
 const LINEUP_Z_M: f32 = -6.0;
 
 const UNLIT_SHADER: &str = r#"
@@ -56,7 +47,6 @@ struct VertexOutput {
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
-    // Positions are already in world metres (hierarchy + feet snap + row placement).
     out.clip_position = frame.view_proj * vec4<f32>(in.position, 1.0);
     out.uv = in.uv;
     return out;
@@ -102,7 +92,6 @@ struct CharacterGpu {
     _material_uniform: wgpu::Buffer,
 }
 
-/// GPU resources for the full a–r lineup.
 pub struct LineupGpu {
     pipeline: wgpu::RenderPipeline,
     frame_bind_group: wgpu::BindGroup,
@@ -115,6 +104,7 @@ impl LineupGpu {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         surface_format: wgpu::TextureFormat,
+        sample_count: u32,
     ) -> Result<Self, JsValue> {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("lineup-unlit"),
@@ -207,7 +197,6 @@ impl LineupGpu {
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: surface_format,
-                    // Opaque kit bodies; atlases have no transparency.
                     blend: Some(wgpu::BlendState::REPLACE),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -226,12 +215,16 @@ impl LineupGpu {
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
-            multisample: wgpu::MultisampleState::default(),
+            multisample: wgpu::MultisampleState {
+                count: sample_count,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
             multiview: None,
             cache: None,
         });
 
-        // Wrap UVs (kit uses negative / out-of-range U). Linear filter matches unlit atlas.
+        // Repeat wrap for kit UV range; linear mips for minification.
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("lineup-albedo-sampler"),
             address_mode_u: wgpu::AddressMode::Repeat,
@@ -239,7 +232,7 @@ impl LineupGpu {
             address_mode_w: wgpu::AddressMode::Repeat,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
 
@@ -327,6 +320,8 @@ fn upload_character(
     placement: Mat4,
 ) -> Result<CharacterGpu, String> {
     let (tex_w, tex_h, rgba) = decode_rgba8(png)?;
+    let mips = rgba_mip_levels(tex_w, tex_h, rgba);
+    let mip_count = mips.len() as u32;
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("lineup-albedo"),
         size: wgpu::Extent3d {
@@ -334,43 +329,42 @@ fn upload_character(
             height: tex_h,
             depth_or_array_layers: 1,
         },
-        mip_level_count: 1,
+        mip_level_count: mip_count,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        // Display-referred: PNG bytes stay as-is through sample → unlit → Unorm canvas.
-        // Rgba8UnormSrgb would decode to linear; without matching present encode that crushes
-        // midtones, and with it the browser canvas path oversaturates the whole frame.
+        // Display-referred Unorm (matches unlit atlas → Unorm canvas).
         format: wgpu::TextureFormat::Rgba8Unorm,
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
-    queue.write_texture(
-        wgpu::TexelCopyTextureInfo {
-            texture: &texture,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        &rgba,
-        wgpu::TexelCopyBufferLayout {
-            offset: 0,
-            bytes_per_row: Some(4 * tex_w),
-            rows_per_image: Some(tex_h),
-        },
-        wgpu::Extent3d {
-            width: tex_w,
-            height: tex_h,
-            depth_or_array_layers: 1,
-        },
-    );
+    for (level, (mw, mh, pixels)) in mips.into_iter().enumerate() {
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: level as u32,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &pixels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * mw),
+                rows_per_image: Some(mh),
+            },
+            wgpu::Extent3d {
+                width: mw,
+                height: mh,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
     let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
     let (mut prims, min_y) = extract_primitives(glb)?;
-    // Feet on y = 0, kit → metres, then row placement. Baked into vertices (no mid-pass writes).
+    // Feet on y = 0, kit → metres, row placement (baked into verts).
     let feet_snap = Mat4::from_translation(Vec3::new(0.0, -min_y, 0.0));
     let root = placement * Mat4::from_scale(Vec3::splat(KIT_ROOT_SCALE)) * feet_snap;
 
-    // One material buffer per character (shared by parts; same atlas + factor).
     let base_color = prims.first().map(|p| p.2).unwrap_or([1.0, 1.0, 1.0, 1.0]);
     let material_uniform = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("lineup-material"),
@@ -540,9 +534,49 @@ fn material_base_color(prim: &gltf::Primitive<'_>) -> [f32; 4] {
     prim.material().pbr_metallic_roughness().base_color_factor()
 }
 
+/// Albedo mip chain (box filter).
+fn rgba_mip_levels(width: u32, height: u32, rgba: Vec<u8>) -> Vec<(u32, u32, Vec<u8>)> {
+    let mut levels = Vec::new();
+    let mut w = width.max(1);
+    let mut h = height.max(1);
+    let mut data = rgba;
+    loop {
+        levels.push((w, h, data.clone()));
+        if w == 1 && h == 1 {
+            break;
+        }
+        let nw = (w / 2).max(1);
+        let nh = (h / 2).max(1);
+        let mut next = vec![0u8; (nw * nh * 4) as usize];
+        for y in 0..nh {
+            for x in 0..nw {
+                let x0 = x * 2;
+                let y0 = y * 2;
+                let x1 = (x0 + 1).min(w - 1);
+                let y1 = (y0 + 1).min(h - 1);
+                let mut acc = [0u32; 4];
+                for (sx, sy) in [(x0, y0), (x1, y0), (x0, y1), (x1, y1)] {
+                    let i = ((sy * w + sx) * 4) as usize;
+                    for c in 0..4 {
+                        acc[c] += data[i + c] as u32;
+                    }
+                }
+                let o = ((y * nw + x) * 4) as usize;
+                for c in 0..4 {
+                    next[o + c] = (acc[c] / 4) as u8;
+                }
+            }
+        }
+        w = nw;
+        h = nh;
+        data = next;
+    }
+    levels
+}
+
 fn decode_rgba8(png_bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     let mut decoder = png::Decoder::new(Cursor::new(png_bytes));
-    // Kit atlases are indexed (palette) PNGs — expand to RGB(A) before sampling.
+    // Palette PNGs → RGB(A).
     decoder.set_transformations(png::Transformations::EXPAND);
     let mut reader = decoder
         .read_info()
@@ -579,20 +613,17 @@ fn decode_rgba8(png_bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
             }
             rgba
         }
-        // Unexpanded palette should not appear after EXPAND; keep a clear error if it does.
         other => return Err(format!("unsupported png color type: {other:?}")),
     };
     Ok((w, h, rgba))
 }
 
-/// Load lifecycle for the debug lineup (lazy on first enable).
 #[derive(Default)]
 pub enum LineupState {
     #[default]
     Idle,
     Loading,
     Ready(LineupGpu),
-    /// Last error text (also logged to the console).
     #[allow(dead_code)]
     Failed(String),
 }

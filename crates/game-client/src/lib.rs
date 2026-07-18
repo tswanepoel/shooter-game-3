@@ -1,7 +1,4 @@
-//! WebGPU client: mounted self view of an empty scene with a debug grid.
-//! Input session owns pointer/keyboard after first click (007).
-//! Optional debug flycam (feature `debug-tools`) unmounts for free inspection.
-//! Debug character lineup (008) when `draw.lineup` is on.
+//! WebGPU client: mounted self view, input session, optional debug tools.
 
 #![cfg(target_arch = "wasm32")]
 
@@ -33,7 +30,6 @@ use lineup::{LineupGpu, LineupState};
 use view::FlyInput;
 use view::ViewController;
 
-/// Scene clear colour (presentation only).
 const CLEAR_COLOR: wgpu::Color = wgpu::Color {
     r: 0.05,
     g: 0.06,
@@ -41,9 +37,11 @@ const CLEAR_COLOR: wgpu::Color = wgpu::Color {
     a: 1.0,
 };
 
-/// Soft debug grid colours (RGB + alpha). Alpha blends over the clear colour.
 const MINOR_LINE_COLOR: [f32; 4] = [0.40, 0.45, 0.52, 0.28];
 const MAJOR_LINE_COLOR: [f32; 4] = [0.65, 0.70, 0.78, 0.45];
+
+const MSAA_SAMPLE_COUNT: u32 = 4;
+const MAX_DEVICE_PIXEL_RATIO: f32 = 3.0;
 
 const GRID_SHADER: &str = r#"
 struct FrameUniforms {
@@ -97,6 +95,10 @@ struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
+    max_texture_dim: u32,
+    msaa_color: wgpu::Texture,
+    msaa_color_view: wgpu::TextureView,
+    depth: wgpu::Texture,
     depth_view: wgpu::TextureView,
     pipeline: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
@@ -107,21 +109,16 @@ struct Renderer {
 
 impl Renderer {
     async fn new(canvas: HtmlCanvasElement) -> Result<Self, JsValue> {
-        let width = canvas.client_width().max(1) as u32;
-        let height = canvas.client_height().max(1) as u32;
-        canvas.set_width(width);
-        canvas.set_height(height);
-
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::BROWSER_WEBGPU,
             ..Default::default()
         });
 
         let surface = instance
-            .create_surface(wgpu::SurfaceTarget::Canvas(canvas))
+            .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
             .map_err(|e| JsValue::from_str(&format!("Failed to create surface: {e}")))?;
 
-        // SAFETY: wgpu copies the canvas handle; the surface is valid for the page lifetime.
+        // SAFETY: canvas handle is copied; surface lives for the page.
         let surface: wgpu::Surface<'static> = unsafe { std::mem::transmute(surface) };
 
         let adapter = instance
@@ -132,6 +129,11 @@ impl Renderer {
             })
             .await
             .ok_or_else(|| JsValue::from_str("No WebGPU adapter available"))?;
+
+        let max_texture_dim = adapter.limits().max_texture_dimension_2d;
+        let (width, height, _ppp) = canvas_buffer_size(&canvas, max_texture_dim);
+        canvas.set_width(width);
+        canvas.set_height(height);
 
         let (device, queue) = adapter
             .request_device(
@@ -147,8 +149,7 @@ impl Renderer {
             .map_err(|e| JsValue::from_str(&format!("Failed to create device: {e}")))?;
 
         let caps = surface.get_capabilities(&adapter);
-        // Canvas prefers Unorm storage. Stay in display-referred space end-to-end (unlit
-        // atlas path): no sRGB view encode here — that oversaturates under browser present.
+        // Display-referred Unorm for the unlit atlas path.
         let format = caps
             .formats
             .iter()
@@ -168,7 +169,8 @@ impl Renderer {
         };
         surface.configure(&device, &config);
 
-        let depth_view = create_depth_view(&device, width, height);
+        let (msaa_color, msaa_color_view) = create_msaa_color(&device, format, width, height);
+        let (depth, depth_view) = create_depth(&device, width, height);
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("grid-shader"),
@@ -240,13 +242,17 @@ impl Renderer {
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
-                // Transparent lines: read depth, don't write (avoids self-order artifacts later).
+                // Transparent grid: depth test only.
                 depth_write_enabled: false,
                 depth_compare: wgpu::CompareFunction::Less,
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
-            multisample: wgpu::MultisampleState::default(),
+            multisample: wgpu::MultisampleState {
+                count: MSAA_SAMPLE_COUNT,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
             multiview: None,
             cache: None,
         });
@@ -266,6 +272,10 @@ impl Renderer {
             device,
             queue,
             config,
+            max_texture_dim,
+            msaa_color,
+            msaa_color_view,
+            depth,
             depth_view,
             pipeline,
             bind_group,
@@ -284,7 +294,13 @@ impl Renderer {
         self.config.width = width;
         self.config.height = height;
         self.surface.configure(&self.device, &self.config);
-        self.depth_view = create_depth_view(&self.device, width, height);
+        let (msaa_color, msaa_color_view) =
+            create_msaa_color(&self.device, self.config.format, width, height);
+        let (depth, depth_view) = create_depth(&self.device, width, height);
+        self.msaa_color = msaa_color;
+        self.msaa_color_view = msaa_color_view;
+        self.depth = depth;
+        self.depth_view = depth_view;
     }
 
     fn write_view_proj(&self, view: Mat4) -> Mat4 {
@@ -309,7 +325,7 @@ impl Renderer {
             .surface
             .get_current_texture()
             .map_err(|e| JsValue::from_str(&format!("Failed to acquire swapchain texture: {e}")))?;
-        let view = frame
+        let resolve_view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
@@ -323,18 +339,18 @@ impl Renderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("scene-pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
+                    view: &self.msaa_color_view,
+                    resolve_target: Some(&resolve_view),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(CLEAR_COLOR),
-                        store: wgpu::StoreOp::Store,
+                        store: wgpu::StoreOp::Discard,
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &self.depth_view,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
+                        store: wgpu::StoreOp::Discard,
                     }),
                     stencil_ops: None,
                 }),
@@ -356,14 +372,60 @@ impl Renderer {
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
-        // Return frame so caller can overlay egui then present.
-        // We already submitted scene — egui needs another encoder.
-        // Store view by re-creating from frame after return.
+        // Caller may paint UI on the resolved swapchain, then present.
         Ok(frame)
     }
 }
 
-fn create_depth_view(device: &wgpu::Device, width: u32, height: u32) -> wgpu::TextureView {
+/// `(width, height, pixels_per_point)` — buffer size and buffer/CSS scale.
+fn canvas_buffer_size(canvas: &HtmlCanvasElement, max_dim: u32) -> (u32, u32, f32) {
+    let css_w = canvas.client_width().max(1) as f32;
+    let css_h = canvas.client_height().max(1) as f32;
+    let dpr = web_sys::window()
+        .map(|w| w.device_pixel_ratio() as f32)
+        .unwrap_or(1.0)
+        .clamp(1.0, MAX_DEVICE_PIXEL_RATIO);
+    let mut width = (css_w * dpr).round().max(1.0) as u32;
+    let mut height = (css_h * dpr).round().max(1.0) as u32;
+    let max_dim = max_dim.max(1);
+    if width > max_dim || height > max_dim {
+        let scale = (max_dim as f32 / width as f32).min(max_dim as f32 / height as f32);
+        width = ((width as f32) * scale).floor().max(1.0) as u32;
+        height = ((height as f32) * scale).floor().max(1.0) as u32;
+    }
+    let ppp = width as f32 / css_w;
+    (width, height, ppp)
+}
+
+fn create_msaa_color(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    width: u32,
+    height: u32,
+) -> (wgpu::Texture, wgpu::TextureView) {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("msaa-color"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: MSAA_SAMPLE_COUNT,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    (texture, view)
+}
+
+fn create_depth(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+) -> (wgpu::Texture, wgpu::TextureView) {
     let depth = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("depth"),
         size: wgpu::Extent3d {
@@ -372,16 +434,17 @@ fn create_depth_view(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Te
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
-        sample_count: 1,
+        sample_count: MSAA_SAMPLE_COUNT,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Depth32Float,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         view_formats: &[],
     });
-    depth.create_view(&wgpu::TextureViewDescriptor::default())
+    let view = depth.create_view(&wgpu::TextureViewDescriptor::default());
+    (depth, view)
 }
 
-/// Right-handed perspective, clip depth 0..1 (WebGPU / wgpu / Vulkan).
+/// Right-handed perspective, clip depth 0..1 (WebGPU).
 fn perspective_rh_wgpu(fovy_rad: f32, aspect: f32, z_near: f32, z_far: f32) -> Mat4 {
     let h = 1.0 / (fovy_rad * 0.5).tan();
     let w = h / aspect;
@@ -394,7 +457,7 @@ fn perspective_rh_wgpu(fovy_rad: f32, aspect: f32, z_near: f32, z_far: f32) -> M
     )
 }
 
-/// World-space line list on y = 0 (client debug overlay only).
+/// World-space line list on y = 0.
 fn build_debug_grid() -> Vec<Vertex> {
     let half = DEBUG_GRID_HALF_EXTENT_M;
     let step = GRID_MINOR_SPACING_M;
@@ -431,10 +494,11 @@ fn build_debug_grid() -> Vec<Vertex> {
     vertices
 }
 
-/// Shared client state (render loop + optional debug host).
 pub(crate) struct ClientInner {
     renderer: Renderer,
     canvas: HtmlCanvasElement,
+    /// Buffer / CSS size (HiDPI).
+    pixels_per_point: f32,
     pub(crate) view: ViewController,
     pub(crate) session: InputSession,
     #[cfg(feature = "debug-tools")]
@@ -448,19 +512,14 @@ pub(crate) struct ClientInner {
 }
 
 impl ClientInner {
-    /// egui points → framebuffer pixels.
-    ///
-    /// Canvas buffer is set to CSS client size (not `× devicePixelRatio`), so
-    /// this is always 1.0. Do not use raw `devicePixelRatio` — that double-scales
-    /// the UI. When we add true HiDPI buffers, set ppp = buffer/CSS here.
     #[cfg(feature = "debug-tools")]
     pub(crate) fn pixels_per_point(&self) -> f32 {
-        1.0
+        self.pixels_per_point
     }
 
     fn render_frame(&mut self) -> Result<(), JsValue> {
-        let width = self.canvas.client_width().max(1) as u32;
-        let height = self.canvas.client_height().max(1) as u32;
+        let (width, height, ppp) = canvas_buffer_size(&self.canvas, self.renderer.max_texture_dim);
+        self.pixels_per_point = ppp;
         if self.canvas.width() != width || self.canvas.height() != height {
             self.canvas.set_width(width);
             self.canvas.set_height(height);
@@ -495,14 +554,12 @@ impl ClientInner {
             if session_ok && self.view.is_flycam() && !console_open {
                 self.view.update_flycam(dt, &self.fly_input, look);
             } else if console_open || !session_ok {
-                // Pause fly move while typing or when browser ejected the session.
                 self.fly_input.clear_keys();
             }
         }
 
         #[cfg(not(feature = "debug-tools"))]
         {
-            // Drain look until gameplay consumes it.
             let _ = self.session.take_look_px();
         }
 
@@ -547,7 +604,6 @@ impl ClientInner {
             let screen_h = height as f32 / ppp;
             let raw = self.debug.take_raw_input(screen_w, screen_h, time);
 
-            // Split borrows: run shell UI, then render overlay with GPU handles.
             let full = {
                 let DebugTools {
                     registry, shell, ..
@@ -580,7 +636,6 @@ impl ClientInner {
             }
         }
 
-        // Silence unused when debug-tools off.
         #[cfg(not(feature = "debug-tools"))]
         {
             let _ = view;
@@ -607,10 +662,8 @@ impl ClientInner {
     }
 }
 
-/// If lineup is wanted and not yet loading/ready, mark Loading and spawn the fetch/upload.
 #[cfg(feature = "debug-tools")]
 fn maybe_kick_lineup_load(inner: &Rc<RefCell<ClientInner>>) {
-    // When the cvar is off, drop Failed → Idle so the next enable can retry once.
     {
         let mut c = inner.borrow_mut();
         if !c.debug.draw_lineup() {
@@ -646,7 +699,7 @@ fn maybe_kick_lineup_load(inner: &Rc<RefCell<ClientInner>>) {
 
     let inner = inner.clone();
     wasm_bindgen_futures::spawn_local(async move {
-        let result = LineupGpu::load(&device, &queue, format).await;
+        let result = LineupGpu::load(&device, &queue, format, MSAA_SAMPLE_COUNT).await;
         let mut c = inner.borrow_mut();
         match result {
             Ok(gpu) => {
@@ -665,7 +718,6 @@ fn maybe_kick_lineup_load(inner: &Rc<RefCell<ClientInner>>) {
     });
 }
 
-/// Read the presented canvas and hand a PNG data URL to the host sink (`window.__debugSaveShot`).
 #[cfg(feature = "debug-tools")]
 fn capture_canvas_png(canvas: &HtmlCanvasElement) -> Result<(), JsValue> {
     let data_url = canvas
@@ -686,7 +738,6 @@ fn capture_canvas_png(canvas: &HtmlCanvasElement) -> Result<(), JsValue> {
     Ok(())
 }
 
-/// WebGPU renderer bound to a canvas, exposed to JS.
 #[wasm_bindgen]
 pub struct GameClient {
     inner: Rc<RefCell<ClientInner>>,
@@ -694,7 +745,6 @@ pub struct GameClient {
 
 #[wasm_bindgen]
 impl GameClient {
-    /// Create a client on `canvas` and initialize WebGPU.
     #[wasm_bindgen(js_name = create)]
     pub async fn create(canvas: HtmlCanvasElement) -> Result<GameClient, JsValue> {
         console_error_panic_hook::set_once();
@@ -706,9 +756,11 @@ impl GameClient {
         #[cfg(feature = "debug-tools")]
         let debug = DebugTools::new(&renderer.device, renderer.config.format);
 
+        let ppp = canvas_buffer_size(&canvas, renderer.max_texture_dim).2;
         let inner = Rc::new(RefCell::new(ClientInner {
             renderer,
             canvas,
+            pixels_per_point: ppp,
             view,
             session: InputSession::new(),
             #[cfg(feature = "debug-tools")]
@@ -727,20 +779,17 @@ impl GameClient {
         Ok(GameClient { inner })
     }
 
-    /// Dev host bridge for the same command/cvar registry (`window.__DEBUG__`).
     #[cfg(feature = "debug-tools")]
     #[wasm_bindgen(js_name = debugHost)]
     pub fn debug_host(&self) -> DebugHost {
         DebugHost::new(self.inner.clone())
     }
 
-    /// Draw one frame (clear, depth, debug grid, optional console).
     #[wasm_bindgen(js_name = renderFrame)]
     pub fn render_frame(&mut self) -> Result<(), JsValue> {
         self.inner.borrow_mut().render_frame()
     }
 
-    /// Run the frame loop via `requestAnimationFrame`.
     #[wasm_bindgen(js_name = startRenderLoop)]
     pub fn start_render_loop(&self) -> Result<(), JsValue> {
         let canvas = self.inner.borrow().canvas.clone();
@@ -780,7 +829,6 @@ impl GameClient {
                 .map_err(|e| JsValue::from_str(&format!("Failed to schedule frame: {e:?}")))?;
         }
 
-        // Retain the rAF callback for the page lifetime.
         std::mem::forget(frame_cb);
         Ok(())
     }

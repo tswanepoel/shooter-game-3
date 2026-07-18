@@ -1,7 +1,4 @@
-//! In-game input session (007).
-//!
-//! Browser edges only: user gesture enters (pointer lock), browser eject leaves.
-//! Game modes never request or release lock.
+//! In-game input session: pointer lock on canvas click; browser eject ends it.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -15,11 +12,9 @@ use web_sys::{Document, HtmlCanvasElement, KeyboardEvent, MouseEvent};
 
 use crate::ClientInner;
 
-/// Ownership of pointer/keyboard for the play surface.
 #[derive(Debug, Default)]
 pub struct InputSession {
     active: bool,
-    /// Relative mouse delta (pixels) since last take — shared by all consumers.
     look_px: Vec2,
 }
 
@@ -32,7 +27,6 @@ impl InputSession {
         self.active
     }
 
-    /// Sync from browser pointer-lock state. Does not call lock APIs.
     pub fn set_active(&mut self, active: bool) {
         if self.active && !active {
             self.look_px = Vec2::ZERO;
@@ -54,20 +48,16 @@ impl InputSession {
     }
 }
 
-/// Install session edges + game/debug input. Always on (not feature-gated).
 pub fn install_input_handlers(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCanvasElement) {
     let window = web_sys::window().expect("window");
     let document = window.document().expect("document");
 
-    // --- Session edges: enter / resume via canvas gesture ---
     {
         let canvas_el = canvas.clone();
         let on_click = Closure::<dyn FnMut(MouseEvent)>::new(move |event: MouseEvent| {
-            // Primary button only; gesture required by the browser for lock.
             if event.button() != 0 {
                 return;
             }
-            // Failures (e.g. not a user gesture) surface as no pointerlockchange.
             canvas_el.request_pointer_lock();
         });
         canvas
@@ -86,7 +76,6 @@ pub fn install_input_handlers(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCanv
             let was = client.session.is_active();
             client.session.set_active(active);
             if was && !active {
-                // Ejected: clear held keys so we don't sticky-move after resume.
                 #[cfg(feature = "debug-tools")]
                 client.fly_input.clear_keys();
             }
@@ -110,7 +99,6 @@ pub fn install_input_handlers(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCanv
         on_lock_change.forget();
     }
 
-    // --- Shared look (session-relative mouse) ---
     {
         let inner = inner.clone();
         let on_move = Closure::<dyn FnMut(MouseEvent)>::new(move |event: MouseEvent| {
@@ -130,7 +118,6 @@ pub fn install_input_handlers(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCanv
         on_move.forget();
     }
 
-    // --- Keyboard ---
     {
         let inner = inner.clone();
         let on_key_down = Closure::<dyn FnMut(KeyboardEvent)>::new(move |event: KeyboardEvent| {
@@ -153,7 +140,6 @@ pub fn install_input_handlers(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCanv
         on_key_up.forget();
     }
 
-    // --- Debug shell pointer (only meaningful when console open; no lock dance) ---
     #[cfg(feature = "debug-tools")]
     {
         install_debug_shell_pointer(inner, canvas);
@@ -161,7 +147,6 @@ pub fn install_input_handlers(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCanv
 }
 
 fn pointer_locked_to(document: &Document, canvas: &HtmlCanvasElement) -> bool {
-    // We only lock our canvas; any lock element means the session is active.
     let _ = canvas;
     document.pointer_lock_element().is_some()
 }
@@ -188,7 +173,6 @@ fn on_session_key_down(inner: &Rc<RefCell<ClientInner>>, event: &KeyboardEvent) 
             return;
         }
 
-        // F8 — not F6: Chrome/Edge bind F6 to the address bar (ejects pointer lock).
         if event.code() == "F8" {
             event.prevent_default();
             if !event.repeat() {
@@ -237,7 +221,6 @@ fn on_session_key_down(inner: &Rc<RefCell<ClientInner>>, event: &KeyboardEvent) 
     #[cfg(not(feature = "debug-tools"))]
     {
         let _ = (inner, event);
-        // Gameplay keys will consume session-active input here later.
     }
 }
 
@@ -322,11 +305,11 @@ fn install_debug_shell_pointer(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCan
             if !client.debug.is_open() {
                 return;
             }
-            let ppp = client.pixels_per_point();
+            // CSS px = egui points.
             let rect = canvas_el.get_bounding_client_rect();
             let pos = egui::pos2(
-                (event.client_x() as f64 - rect.left()) as f32 / ppp,
-                (event.client_y() as f64 - rect.top()) as f32 / ppp,
+                (event.client_x() as f64 - rect.left()) as f32,
+                (event.client_y() as f64 - rect.top()) as f32,
             );
             client.debug.push_event(egui::Event::PointerMoved(pos));
         });
@@ -345,11 +328,10 @@ fn install_debug_shell_pointer(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCan
                 return;
             }
             event.prevent_default();
-            let ppp = client.pixels_per_point();
             let rect = canvas_el.get_bounding_client_rect();
             let pos = egui::pos2(
-                (event.client_x() as f64 - rect.left()) as f32 / ppp,
-                (event.client_y() as f64 - rect.top()) as f32 / ppp,
+                (event.client_x() as f64 - rect.left()) as f32,
+                (event.client_y() as f64 - rect.top()) as f32,
             );
             let button = map_pointer_button(event.button());
             let modifiers = client.debug.modifiers();
@@ -374,11 +356,10 @@ fn install_debug_shell_pointer(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCan
             if !client.debug.is_open() {
                 return;
             }
-            let ppp = client.pixels_per_point();
             let rect = canvas_el.get_bounding_client_rect();
             let pos = egui::pos2(
-                (event.client_x() as f64 - rect.left()) as f32 / ppp,
-                (event.client_y() as f64 - rect.top()) as f32 / ppp,
+                (event.client_x() as f64 - rect.left()) as f32,
+                (event.client_y() as f64 - rect.top()) as f32,
             );
             let button = map_pointer_button(event.button());
             let modifiers = client.debug.modifiers();
