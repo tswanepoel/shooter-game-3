@@ -6,6 +6,12 @@ edition = "2021"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+default = ["debug-tools"]
+# In-engine debug shell, command/cvar registry, and host bridge.
+# Production strip: wasm-pack build -- --no-default-features
+debug-tools = ["dep:egui", "dep:egui-wgpu"]
+
 [dependencies]
 wgpu = "24"
 wasm-bindgen = "0.2"
@@ -13,12 +19,21 @@ wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3.67", features = [
   "console",
   "Document",
+  "DomRect",
   "Element",
   "HtmlCanvasElement",
   "HtmlElement",
+  "KeyboardEvent",
+  "MouseEvent",
+  "Performance",
+  "WheelEvent",
   "Window",
 ] }
 console_error_panic_hook = "0.1"
 glam = "0.24"
 bytemuck = { version = "1", features = ["derive"] }
 game-sim = { path = "../game-sim" }
+egui = { version = "0.31", optional = true }
+egui-wgpu = { version = "0.31", optional = true }
+getrandom = { version = "0.2", features = ["js"] }
+js-sys = "0.3"

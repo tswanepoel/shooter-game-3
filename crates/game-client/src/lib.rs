@@ -2,6 +2,9 @@
 
 #![cfg(target_arch = "wasm32")]
 
+#[cfg(feature = "debug-tools")]
+mod debug;
+
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -13,6 +16,9 @@ use glam::{Mat4, Vec3};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::HtmlCanvasElement;
+
+#[cfg(feature = "debug-tools")]
+use debug::{install_input_handlers, DebugHost, DebugTools};
 
 /// Scene clear colour (presentation only).
 const CLEAR_COLOR: wgpu::Color = wgpu::Color {
@@ -281,7 +287,7 @@ impl Renderer {
             .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
     }
 
-    fn render(&mut self) -> Result<(), JsValue> {
+    fn render_scene(&mut self, draw_grid: bool) -> Result<wgpu::SurfaceTexture, JsValue> {
         let frame = self
             .surface
             .get_current_texture()
@@ -319,15 +325,19 @@ impl Renderer {
                 timestamp_writes: None,
             });
 
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &self.bind_group, &[]);
-            pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            pass.draw(0..self.vertex_count, 0..1);
+            if draw_grid {
+                pass.set_pipeline(&self.pipeline);
+                pass.set_bind_group(0, &self.bind_group, &[]);
+                pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+                pass.draw(0..self.vertex_count, 0..1);
+            }
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
-        frame.present();
-        Ok(())
+        // Return frame so caller can overlay egui then present.
+        // We already submitted scene — egui needs another encoder.
+        // Store view by re-creating from frame after return.
+        Ok(frame)
     }
 }
 
@@ -378,7 +388,6 @@ fn build_debug_grid() -> Vec<Vertex> {
             MINOR_LINE_COLOR
         };
 
-        // Line parallel to X at z = t.
         vertices.push(Vertex {
             position: [-half, 0.0, t],
             color,
@@ -388,7 +397,6 @@ fn build_debug_grid() -> Vec<Vertex> {
             color,
         });
 
-        // Line parallel to Z at x = t.
         vertices.push(Vertex {
             position: [t, 0.0, -half],
             color,
@@ -401,11 +409,103 @@ fn build_debug_grid() -> Vec<Vertex> {
     vertices
 }
 
+/// Shared client state (render loop + optional debug host).
+pub(crate) struct ClientInner {
+    renderer: Renderer,
+    canvas: HtmlCanvasElement,
+    #[cfg(feature = "debug-tools")]
+    pub(crate) debug: DebugTools,
+}
+
+impl ClientInner {
+    /// egui points → framebuffer pixels.
+    ///
+    /// Canvas buffer is set to CSS client size (not `× devicePixelRatio`), so
+    /// this is always 1.0. Do not use raw `devicePixelRatio` — that double-scales
+    /// the UI. When we add true HiDPI buffers, set ppp = buffer/CSS here.
+    #[cfg(feature = "debug-tools")]
+    pub(crate) fn pixels_per_point(&self) -> f32 {
+        1.0
+    }
+
+    fn render_frame(&mut self) -> Result<(), JsValue> {
+        let width = self.canvas.client_width().max(1) as u32;
+        let height = self.canvas.client_height().max(1) as u32;
+        if self.canvas.width() != width || self.canvas.height() != height {
+            self.canvas.set_width(width);
+            self.canvas.set_height(height);
+        }
+        self.renderer.resize_if_needed(width, height);
+
+        #[cfg(feature = "debug-tools")]
+        let draw_grid = self.debug.draw_grid();
+        #[cfg(not(feature = "debug-tools"))]
+        let draw_grid = true;
+
+        let frame = self.renderer.render_scene(draw_grid)?;
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        #[cfg(feature = "debug-tools")]
+        {
+            let ppp = self.pixels_per_point();
+            let time = web_sys::window()
+                .and_then(|w| w.performance())
+                .map(|p| p.now() / 1000.0)
+                .unwrap_or(0.0);
+            let screen_w = width as f32 / ppp;
+            let screen_h = height as f32 / ppp;
+            let raw = self.debug.take_raw_input(screen_w, screen_h, time);
+
+            // Split borrows: run shell UI, then render overlay with GPU handles.
+            let full = {
+                let DebugTools {
+                    registry, shell, ..
+                } = &mut self.debug;
+                shell.run_frame(registry, raw, ppp)
+            };
+
+            if let Some(full) = full {
+                let mut encoder =
+                    self.renderer
+                        .device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("egui-encoder"),
+                        });
+                self.debug.shell.render_overlay(
+                    debug::OverlayGpu {
+                        device: &self.renderer.device,
+                        queue: &self.renderer.queue,
+                        encoder: &mut encoder,
+                        view: &view,
+                        width,
+                        height,
+                        pixels_per_point: ppp,
+                    },
+                    full,
+                );
+                self.renderer
+                    .queue
+                    .submit(std::iter::once(encoder.finish()));
+            }
+        }
+
+        // Silence unused when debug-tools off.
+        #[cfg(not(feature = "debug-tools"))]
+        {
+            let _ = view;
+        }
+
+        frame.present();
+        Ok(())
+    }
+}
+
 /// WebGPU renderer bound to a canvas, exposed to JS.
 #[wasm_bindgen]
 pub struct GameClient {
-    renderer: Renderer,
-    canvas: HtmlCanvasElement,
+    inner: Rc<RefCell<ClientInner>>,
 }
 
 #[wasm_bindgen]
@@ -416,27 +516,44 @@ impl GameClient {
         console_error_panic_hook::set_once();
 
         let renderer = Renderer::new(canvas.clone()).await?;
+
+        #[cfg(feature = "debug-tools")]
+        let debug = DebugTools::new(&renderer.device, renderer.config.format);
+
+        let inner = Rc::new(RefCell::new(ClientInner {
+            renderer,
+            canvas,
+            #[cfg(feature = "debug-tools")]
+            debug,
+        }));
+
         web_sys::console::log_1(&"WebGPU initialized; empty scene ready".into());
-        Ok(GameClient { renderer, canvas })
+        Ok(GameClient { inner })
     }
 
-    /// Draw one frame (clear, depth, debug grid).
+    /// Dev host bridge for the same command/cvar registry (`window.__DEBUG__`).
+    #[cfg(feature = "debug-tools")]
+    #[wasm_bindgen(js_name = debugHost)]
+    pub fn debug_host(&self) -> DebugHost {
+        DebugHost::new(self.inner.clone())
+    }
+
+    /// Draw one frame (clear, depth, debug grid, optional console).
     #[wasm_bindgen(js_name = renderFrame)]
     pub fn render_frame(&mut self) -> Result<(), JsValue> {
-        let width = self.canvas.client_width().max(1) as u32;
-        let height = self.canvas.client_height().max(1) as u32;
-        if self.canvas.width() != width || self.canvas.height() != height {
-            self.canvas.set_width(width);
-            self.canvas.set_height(height);
-        }
-        self.renderer.resize_if_needed(width, height);
-        self.renderer.render()
+        self.inner.borrow_mut().render_frame()
     }
 
     /// Run the frame loop via `requestAnimationFrame`.
     #[wasm_bindgen(js_name = startRenderLoop)]
-    pub fn start_render_loop(self) -> Result<(), JsValue> {
-        let client = Rc::new(RefCell::new(self));
+    pub fn start_render_loop(&self) -> Result<(), JsValue> {
+        #[cfg(feature = "debug-tools")]
+        {
+            let canvas = self.inner.borrow().canvas.clone();
+            install_input_handlers(self.inner.clone(), &canvas);
+        }
+
+        let client = self.inner.clone();
         let frame_cb: FrameCallback = Rc::new(RefCell::new(None));
         let frame_cb_clone = frame_cb.clone();
 

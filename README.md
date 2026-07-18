@@ -101,6 +101,24 @@ The image packages the release `*.wasm` outputs under `/artifacts`.
 1. Compiles the Rust WASM module
 2. Starts the Vite development server with hot-reload
 
+### Debug tools
+
+One Cargo feature (`debug-tools`) gates the whole debug subsystem. npm only chooses which build uses it:
+
+| Intent | Command | WASM |
+|--------|---------|------|
+| Iterate | `npm run dev` | `build-wasm` — **debug on** (default features) |
+| Ship | `npm run build` | `build-wasm:release` — **debug off** (`--no-default-features`) |
+| Smoke ship | `npm run build && npm run preview` | same stripped WASM as ship |
+
+With debug on:
+
+- Press **`` ` ``** (backtick) for the in-engine console; Esc closes it
+- Commands: `help`, `grid [on|off|toggle]`, cvars such as `draw.grid`
+- Host bridge: `window.__DEBUG__.exec("grid off")`
+
+See [docs/features/003-debug-tools.md](docs/features/003-debug-tools.md).
+
 ## Contributing
 
 Contributions are welcome. Please see [CONTRIBUTING.md](CONTRIBUTING.md) for:

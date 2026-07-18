@@ -10,6 +10,12 @@ async function run() {
   await init();
 
   const client = await GameClient.create(canvas);
+
+  // Dev host bridge: same command/cvar registry as the in-engine console.
+  if (typeof client.debugHost === 'function') {
+    window.__DEBUG__ = client.debugHost();
+  }
+
   client.startRenderLoop();
   console.log('Game client render loop started');
 }
