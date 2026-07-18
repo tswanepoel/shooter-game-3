@@ -28,8 +28,9 @@ const CLEAR_COLOR: wgpu::Color = wgpu::Color {
     a: 1.0,
 };
 
-const MINOR_LINE_COLOR: [f32; 3] = [0.22, 0.25, 0.30];
-const MAJOR_LINE_COLOR: [f32; 3] = [0.50, 0.55, 0.60];
+/// Soft debug grid colours (RGB + alpha). Alpha blends over the clear colour.
+const MINOR_LINE_COLOR: [f32; 4] = [0.40, 0.45, 0.52, 0.28];
+const MAJOR_LINE_COLOR: [f32; 4] = [0.65, 0.70, 0.78, 0.45];
 
 const GRID_SHADER: &str = r#"
 struct FrameUniforms {
@@ -41,12 +42,12 @@ var<uniform> frame: FrameUniforms;
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
-    @location(1) color: vec3<f32>,
+    @location(1) color: vec4<f32>,
 };
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
-    @location(0) color: vec3<f32>,
+    @location(0) color: vec4<f32>,
 };
 
 @vertex
@@ -59,7 +60,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return vec4<f32>(in.color, 1.0);
+    return in.color;
 }
 "#;
 
@@ -69,7 +70,7 @@ type FrameCallback = Rc<RefCell<Option<Closure<dyn FnMut()>>>>;
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Vertex {
     position: [f32; 3],
-    color: [f32; 3],
+    color: [f32; 4],
 }
 
 #[repr(C)]
@@ -204,7 +205,7 @@ impl Renderer {
                 buffers: &[wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<Vertex>() as u64,
                     step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3],
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4],
                 }],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
@@ -213,7 +214,7 @@ impl Renderer {
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
-                    blend: Some(wgpu::BlendState::REPLACE),
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
@@ -224,7 +225,8 @@ impl Renderer {
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: true,
+                // Transparent lines: read depth, don't write (avoids self-order artifacts later).
+                depth_write_enabled: false,
                 depth_compare: wgpu::CompareFunction::Less,
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
