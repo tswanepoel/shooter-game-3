@@ -1,15 +1,20 @@
-//! WebGPU client: surface init, blank clear, and WASM-owned render loop.
+//! WebGPU client: fixed eye-height view of an empty scene with a debug grid.
 
 #![cfg(target_arch = "wasm32")]
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use game_sim::{
+    CAMERA_FAR_M, CAMERA_NEAR_M, CAMERA_VERTICAL_FOV_RAD, DEBUG_GRID_HALF_EXTENT_M,
+    GRID_MAJOR_EVERY, GRID_MINOR_SPACING_M, STANDING_EYE_HEIGHT_M,
+};
+use glam::{Mat4, Vec3};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::HtmlCanvasElement;
 
-/// Blank clear color (near-black, slightly tinted for a live GPU clear).
+/// Scene clear colour (presentation only).
 const CLEAR_COLOR: wgpu::Color = wgpu::Color {
     r: 0.05,
     g: 0.06,
@@ -17,13 +22,67 @@ const CLEAR_COLOR: wgpu::Color = wgpu::Color {
     a: 1.0,
 };
 
+const MINOR_LINE_COLOR: [f32; 3] = [0.22, 0.25, 0.30];
+const MAJOR_LINE_COLOR: [f32; 3] = [0.50, 0.55, 0.60];
+
+const GRID_SHADER: &str = r#"
+struct FrameUniforms {
+    view_proj: mat4x4<f32>,
+};
+
+@group(0) @binding(0)
+var<uniform> frame: FrameUniforms;
+
+struct VertexInput {
+    @location(0) position: vec3<f32>,
+    @location(1) color: vec3<f32>,
+};
+
+struct VertexOutput {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) color: vec3<f32>,
+};
+
+@vertex
+fn vs_main(in: VertexInput) -> VertexOutput {
+    var out: VertexOutput;
+    out.clip_position = frame.view_proj * vec4<f32>(in.position, 1.0);
+    out.color = in.color;
+    return out;
+}
+
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    return vec4<f32>(in.color, 1.0);
+}
+"#;
+
 type FrameCallback = Rc<RefCell<Option<Closure<dyn FnMut()>>>>;
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct Vertex {
+    position: [f32; 3],
+    color: [f32; 3],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct FrameUniforms {
+    view_proj: [[f32; 4]; 4],
+}
 
 struct Renderer {
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
+    depth_view: wgpu::TextureView,
+    pipeline: wgpu::RenderPipeline,
+    bind_group: wgpu::BindGroup,
+    uniform_buffer: wgpu::Buffer,
+    vertex_buffer: wgpu::Buffer,
+    vertex_count: u32,
 }
 
 impl Renderer {
@@ -87,12 +146,112 @@ impl Renderer {
         };
         surface.configure(&device, &config);
 
-        Ok(Self {
+        let depth_view = create_depth_view(&device, width, height);
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("grid-shader"),
+            source: wgpu::ShaderSource::Wgsl(GRID_SHADER.into()),
+        });
+
+        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("frame-uniforms"),
+            size: std::mem::size_of::<FrameUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("frame-bind-group-layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("frame-bind-group"),
+            layout: &bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_buffer.as_entire_binding(),
+            }],
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("grid-pipeline-layout"),
+            bind_group_layouts: &[&bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("grid-pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<Vertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3],
+                }],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::LineList,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        let grid = build_debug_grid();
+        let vertex_count = grid.len() as u32;
+        let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("grid-vertices"),
+            size: (grid.len() * std::mem::size_of::<Vertex>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&vertex_buffer, 0, bytemuck::cast_slice(&grid));
+
+        let renderer = Self {
             surface,
             device,
             queue,
             config,
-        })
+            depth_view,
+            pipeline,
+            bind_group,
+            uniform_buffer,
+            vertex_buffer,
+            vertex_count,
+        };
+        renderer.write_view_proj();
+        Ok(renderer)
     }
 
     fn resize_if_needed(&mut self, width: u32, height: u32) {
@@ -104,6 +263,22 @@ impl Renderer {
         self.config.width = width;
         self.config.height = height;
         self.surface.configure(&self.device, &self.config);
+        self.depth_view = create_depth_view(&self.device, width, height);
+        self.write_view_proj();
+    }
+
+    fn write_view_proj(&self) {
+        let aspect = self.config.width as f32 / self.config.height as f32;
+        let eye = Vec3::new(0.0, STANDING_EYE_HEIGHT_M, 0.0);
+        // Look straight ahead along −Z (right-handed, Y-up).
+        let view = Mat4::look_to_rh(eye, Vec3::NEG_Z, Vec3::Y);
+        let proj =
+            perspective_rh_wgpu(CAMERA_VERTICAL_FOV_RAD, aspect, CAMERA_NEAR_M, CAMERA_FAR_M);
+        let uniforms = FrameUniforms {
+            view_proj: (proj * view).to_cols_array_2d(),
+        };
+        self.queue
+            .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
     }
 
     fn render(&mut self) -> Result<(), JsValue> {
@@ -122,8 +297,8 @@ impl Renderer {
             });
 
         {
-            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("clear-pass"),
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("scene-pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     resolve_target: None,
@@ -132,16 +307,98 @@ impl Renderer {
                         store: wgpu::StoreOp::Store,
                     },
                 })],
-                depth_stencil_attachment: None,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
                 occlusion_query_set: None,
                 timestamp_writes: None,
             });
+
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &self.bind_group, &[]);
+            pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            pass.draw(0..self.vertex_count, 0..1);
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
         frame.present();
         Ok(())
     }
+}
+
+fn create_depth_view(device: &wgpu::Device, width: u32, height: u32) -> wgpu::TextureView {
+    let depth = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("depth"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Depth32Float,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    depth.create_view(&wgpu::TextureViewDescriptor::default())
+}
+
+/// Right-handed perspective, clip depth 0..1 (WebGPU / wgpu / Vulkan).
+fn perspective_rh_wgpu(fovy_rad: f32, aspect: f32, z_near: f32, z_far: f32) -> Mat4 {
+    let h = 1.0 / (fovy_rad * 0.5).tan();
+    let w = h / aspect;
+    let r = z_far / (z_near - z_far);
+    Mat4::from_cols(
+        glam::Vec4::new(w, 0.0, 0.0, 0.0),
+        glam::Vec4::new(0.0, h, 0.0, 0.0),
+        glam::Vec4::new(0.0, 0.0, r, -1.0),
+        glam::Vec4::new(0.0, 0.0, r * z_near, 0.0),
+    )
+}
+
+/// World-space line list on y = 0 (client debug overlay only).
+fn build_debug_grid() -> Vec<Vertex> {
+    let half = DEBUG_GRID_HALF_EXTENT_M;
+    let step = GRID_MINOR_SPACING_M;
+    let major_every = GRID_MAJOR_EVERY as i32;
+    let n = (half / step).round() as i32;
+
+    let mut vertices = Vec::with_capacity(((n * 2 + 1) * 4) as usize);
+    for i in -n..=n {
+        let t = i as f32 * step;
+        let color = if i.rem_euclid(major_every) == 0 {
+            MAJOR_LINE_COLOR
+        } else {
+            MINOR_LINE_COLOR
+        };
+
+        // Line parallel to X at z = t.
+        vertices.push(Vertex {
+            position: [-half, 0.0, t],
+            color,
+        });
+        vertices.push(Vertex {
+            position: [half, 0.0, t],
+            color,
+        });
+
+        // Line parallel to Z at x = t.
+        vertices.push(Vertex {
+            position: [t, 0.0, -half],
+            color,
+        });
+        vertices.push(Vertex {
+            position: [t, 0.0, half],
+            color,
+        });
+    }
+    vertices
 }
 
 /// WebGPU renderer bound to a canvas, exposed to JS.
@@ -159,11 +416,11 @@ impl GameClient {
         console_error_panic_hook::set_once();
 
         let renderer = Renderer::new(canvas.clone()).await?;
-        web_sys::console::log_1(&"WebGPU initialized; blank canvas ready".into());
+        web_sys::console::log_1(&"WebGPU initialized; empty scene ready".into());
         Ok(GameClient { renderer, canvas })
     }
 
-    /// Clear and present one frame.
+    /// Draw one frame (clear, depth, debug grid).
     #[wasm_bindgen(js_name = renderFrame)]
     pub fn render_frame(&mut self) -> Result<(), JsValue> {
         let width = self.canvas.client_width().max(1) as u32;

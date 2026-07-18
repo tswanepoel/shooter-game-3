@@ -229,8 +229,10 @@ dependencies = [
 name = "game-client"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "console_error_panic_hook",
  "game-sim",
+ "glam",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
