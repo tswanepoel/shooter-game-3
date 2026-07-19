@@ -12,7 +12,7 @@ const FLY_SPEED_M_S: f32 = 6.0;
 #[cfg(feature = "debug-tools")]
 const FLY_SPRINT_MULT: f32 = 3.0;
 /// Mouse look sensitivity (radians per pixel). Shared with mounted ocular.
-pub const LOOK_SENS_RAD_PER_PX: f32 = 0.0025;
+pub const LOOK_SENS_RAD_PER_PX: f32 = 0.00025;
 /// Discard only pathological single-frame pointer spikes (px), e.g. pointer-lock
 /// re-entry jumps. Must stay well above real flicks: at 60 Hz, 48 px/frame is only
 /// ~7° and freezes the camera on any fast turn. True browser glitches are hundreds+.

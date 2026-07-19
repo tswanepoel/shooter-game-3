@@ -4,6 +4,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use glam::Vec2;
+use js_sys::{Function, Object, Promise, Reflect};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 #[cfg(feature = "debug-tools")]
@@ -11,6 +12,40 @@ use web_sys::WheelEvent;
 use web_sys::{Document, HtmlCanvasElement, KeyboardEvent, MouseEvent};
 
 use crate::ClientInner;
+
+/// Prefer raw mouse deltas (no OS accel). Fall back if the browser rejects it.
+fn request_pointer_lock_raw(canvas: &HtmlCanvasElement) {
+    let opts = Object::new();
+    let _ = Reflect::set(
+        &opts,
+        &JsValue::from_str("unadjustedMovement"),
+        &JsValue::TRUE,
+    );
+
+    let el: &JsValue = canvas.as_ref();
+    let Some(func) = Reflect::get(el, &JsValue::from_str("requestPointerLock"))
+        .ok()
+        .and_then(|v| v.dyn_into::<Function>().ok())
+    else {
+        canvas.request_pointer_lock();
+        return;
+    };
+
+    match func.call1(el, opts.as_ref()) {
+        Ok(result) => {
+            if let Ok(promise) = result.dyn_into::<Promise>() {
+                let canvas_fb = canvas.clone();
+                let on_err = Closure::once(move |_err: JsValue| {
+                    // NotSupportedError or similar — plain lock still works.
+                    canvas_fb.request_pointer_lock();
+                });
+                let _ = promise.catch(&on_err);
+                on_err.forget();
+            }
+        }
+        Err(_) => canvas.request_pointer_lock(),
+    }
+}
 
 /// Held WASD for mounted walk (016). Look-relative axes; no arrows.
 #[derive(Debug, Default, Clone)]
@@ -94,7 +129,7 @@ pub fn install_input_handlers(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCanv
             if event.button() != 0 {
                 return;
             }
-            canvas_el.request_pointer_lock();
+            request_pointer_lock_raw(&canvas_el);
         });
         canvas
             .add_event_listener_with_callback("click", on_click.as_ref().unchecked_ref())
