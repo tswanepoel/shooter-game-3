@@ -295,7 +295,7 @@ mod tests {
             "jump must sticky-merge across Inputs before tick"
         );
 
-        let dt = 1.0 / 30.0;
+        let dt = 1.0 / TICK_HZ as f32;
         world.advance_tick(dt);
 
         let loco = world.players.get(&id).unwrap().state.locomotion;

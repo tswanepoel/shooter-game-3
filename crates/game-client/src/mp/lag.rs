@@ -4,10 +4,10 @@ use std::collections::VecDeque;
 
 use game_net::Seq;
 
-/// Default remote present delay before any RTT sample (same feel as 027/028).
-pub const REMOTE_INTERP_DELAY_DEFAULT_SECS: f32 = 0.100;
-/// Floor so a lucky ping does not underrun the pose buffer.
-pub const REMOTE_INTERP_DELAY_MIN_SECS: f32 = 0.080;
+/// Default remote present delay before any RTT sample (030).
+pub const REMOTE_INTERP_DELAY_DEFAULT_SECS: f32 = 0.048;
+/// Floor so a lucky ping does not underrun the pose buffer (~4 ticks @ 128 Hz).
+pub const REMOTE_INTERP_DELAY_MIN_SECS: f32 = 0.032;
 /// Ceiling so spikes do not bury peers too far in the past.
 pub const REMOTE_INTERP_DELAY_MAX_SECS: f32 = 0.200;
 /// Scale smoothed RTT → view delay (one-way-ish).
@@ -113,7 +113,7 @@ mod tests {
     fn ack_samples_rtt_and_clamps_delay() {
         let mut lag = LagEstimator::new();
         lag.note_input_sent(1, 1.0);
-        // 40 ms RTT → 0.5 * 0.04 = 0.02 → clamp to MIN 80 ms
+        // 40 ms RTT → 0.5 * 0.04 = 0.02 → clamp to MIN 32 ms
         lag.on_ack(1, 1.040);
         let rtt = lag.rtt_ema().unwrap();
         assert!((rtt - 0.040).abs() < 1e-5, "rtt={rtt}");

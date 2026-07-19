@@ -10,8 +10,8 @@ use super::lag::REMOTE_INTERP_DELAY_DEFAULT_SECS;
 /// Draw remotes this far behind the present clock before RTT samples (027 / 029 default).
 pub const REMOTE_INTERP_DELAY_SECS: f32 = REMOTE_INTERP_DELAY_DEFAULT_SECS;
 
-/// Samples kept per remote (~1 s at [`TICK_HZ`]).
-const BUFFER_CAP: usize = 32;
+/// Samples kept per remote (~0.5 s at 128 Hz; covers DELAY_MAX + headroom).
+const BUFFER_CAP: usize = 64;
 
 /// Character + loadout letters that decide which meshes a remote body needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -108,7 +108,7 @@ pub struct RemoteTable {
     server_clock: f32,
     /// True after the first Snapshot so we do not free-run from 0.
     clock_live: bool,
-    /// How far behind `server_clock` remotes are drawn (029; default 100 ms).
+    /// How far behind `server_clock` remotes are drawn (029 / 030).
     interp_delay_secs: f32,
 }
 
@@ -316,11 +316,12 @@ mod tests {
         let mut table = RemoteTable::new();
         table.apply_snapshot_others(100, vec![pose(1, 0.0, 0.0)]);
         table.apply_snapshot_others(110, vec![pose(1, 0.0, 10.0)]);
-        // clock at 110/30; present = clock - 0.1 → ~70% along 100→110 segment.
+        // 10 ticks @ 128 Hz ≈ 78 ms; delay 40 ms → roughly mid-segment.
+        table.set_interp_delay_secs(0.040);
         let poses = table.present_poses();
         assert_eq!(poses.len(), 1);
         let z = poses[0].position.z;
-        assert!(z > 5.0 && z < 10.0, "z={z}");
+        assert!(z > 3.0 && z < 7.0, "z={z}");
     }
 
     #[test]
