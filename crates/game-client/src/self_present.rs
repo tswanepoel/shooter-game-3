@@ -1,13 +1,19 @@
-//! Self body + blaster presentation (013/015/016).
+//! Self body + blaster presentation (013/015/016/017).
+//!
+//! Present pose draws the body (walk included). Look pose mounts the view (017).
 
 use game_sim::{SelfState, FACE_OFFSET_HEAD_KIT};
 use glam::{Mat4, Vec3};
 use wasm_bindgen::JsValue;
 
-use crate::mesh_unlit::{self, AnimClip, CharPart, MeshVertex, UnlitMeshGpu, UnlitMeshLayout};
+use crate::mesh_unlit::{
+    self, AnimClip, CharPart, KitPose, MeshVertex, UnlitMeshGpu, UnlitMeshLayout,
+};
 
+/// Mounted first-person mount from the look pose (017).
 pub struct MountedView {
-    pub eye: Vec3,
+    /// Face point on the look pose — view and aim start here.
+    pub look_origin: Vec3,
     pub reticle_world: Option<Vec3>,
 }
 
@@ -62,7 +68,7 @@ impl SelfGpu {
             mesh_unlit::extract_primitives(blaster_glb).map_err(|e| JsValue::from_str(&e))?;
 
         let (worlds, arm_kit) =
-            mesh_unlit::pose_character_kit(&parts, self_state, Some(&walk_clip));
+            mesh_unlit::pose_character_kit(&parts, self_state, Some(&walk_clip), KitPose::Present);
         let k2w = mesh_unlit::kit_to_world(self_state.placement_matrix(), min_y);
 
         let mut char_cpu: Vec<(Vec<MeshVertex>, Vec<u32>, [f32; 4])> = Vec::new();
@@ -114,7 +120,7 @@ impl SelfGpu {
             min_y,
             letter_index: bi,
             view: MountedView {
-                eye: Vec3::ZERO,
+                look_origin: Vec3::ZERO,
                 reticle_world: None,
             },
         };
@@ -123,15 +129,21 @@ impl SelfGpu {
     }
 
     pub fn apply_state(&mut self, queue: &wgpu::Queue, self_state: &SelfState) {
-        let (worlds, arm_kit) =
-            mesh_unlit::pose_character_kit(&self.parts, self_state, Some(&self.walk_clip));
         let k2w = mesh_unlit::kit_to_world(self_state.placement_matrix(), self.min_y);
+
+        // Present pose: drawn body (walk + look).
+        let (present_worlds, arm_kit) = mesh_unlit::pose_character_kit(
+            &self.parts,
+            self_state,
+            Some(&self.walk_clip),
+            KitPose::Present,
+        );
 
         for (i, part) in self.parts.iter().enumerate() {
             let Some(prim) = self.part_prim[i] else {
                 continue;
             };
-            let world = k2w * worlds[i];
+            let world = k2w * present_worlds[i];
             let mut verts = part.local_verts.clone();
             for v in &mut verts {
                 v.position = world
@@ -155,16 +167,20 @@ impl SelfGpu {
                 .write_prim_verts(queue, self.blaster_batch, pi, &verts);
         }
 
-        let head_kit = self
-            .parts
-            .iter()
-            .position(|p| p.name == "head")
-            .map(|i| worlds[i])
-            .unwrap_or(Mat4::IDENTITY);
-        let eye = k2w.transform_point3(head_kit.transform_point3(FACE_OFFSET_HEAD_KIT));
-        let reticle_world = self_state.reticle_world(eye);
+        // Look pose: mount and aim (locomotion held at stand).
+        let (look_worlds, _) = mesh_unlit::pose_character_kit(
+            &self.parts,
+            self_state,
+            Some(&self.walk_clip),
+            KitPose::Look,
+        );
+        let look_origin = look_origin_world(&self.parts, &look_worlds, k2w);
+        let reticle_world = self_state.reticle_world(look_origin);
 
-        self.view = MountedView { eye, reticle_world };
+        self.view = MountedView {
+            look_origin,
+            reticle_world,
+        };
     }
 
     pub fn write_view_proj(&self, queue: &wgpu::Queue, view_proj: Mat4) {
@@ -174,6 +190,16 @@ impl SelfGpu {
     pub fn draw<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
         self.mesh.draw(pass);
     }
+}
+
+/// Face point on a kit pose in world space (look origin when pose is Look).
+fn look_origin_world(parts: &[CharPart], worlds: &[Mat4], k2w: Mat4) -> Vec3 {
+    let head_kit = parts
+        .iter()
+        .position(|p| p.name == "head")
+        .map(|i| worlds[i])
+        .unwrap_or(Mat4::IDENTITY);
+    k2w.transform_point3(head_kit.transform_point3(FACE_OFFSET_HEAD_KIT))
 }
 
 #[derive(Default)]

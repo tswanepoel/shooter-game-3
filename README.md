@@ -114,7 +114,7 @@ Vite serves cook outputs from `assets/cooked/` (not authoring kits). Production 
 
 ### Player self
 
-The default view mounts on the player **self**: a standing Kenney body with a held blaster (`character-a` + `blaster-p` until loadout exists). Mouse look aims the **view centre** (sim look, no lag); **WASD** walks on the ground at clip-native speed (~3.46 m/s; look-relative); the body plays the Kenney walk from sim drive and poses aim from look; a screen-centre reticle marks aim. Camera sits on the eyes and matches sim look and position. Production and dev both load this path; kit facts stay in the source kit READMEs.
+The default view mounts on the player **self**: a standing Kenney body with a held blaster (`character-a` + `blaster-p` until loadout exists). Mouse look aims the **view centre** (sim look, no lag); **WASD** walks on the ground at clip-native speed (~3.46 m/s; look-relative). One sim drive rebuilds two poses: **look pose** (head-mounted on look — camera, reticle, aim) and **present pose** (drawn body and blaster, including walk). The **look origin** is the look-pose face point; walk does not move the crosshair. Specs: `docs/features/017-look-mounted-view.md`, `016-wasd-walks.md`. Production and dev both load this path; kit facts stay in the source kit READMEs.
 
 ### Debug tools
 
@@ -127,7 +127,7 @@ With `npm run dev`, press **`` ` ``** (backtick) for the in-game developer conso
 | **Mouse** | Look / aim |
 | **`` ` ``** | Toggle developer console |
 | **F9** / `screenshot` | Capture frame to `debug/shots/` |
-| **F8** / `flycam` / `remount` | Debug flycam (WASD + mouse look, Q/E up/down, Shift sprint); remount restores the self eye view |
+| **F8** / `flycam` / `remount` | Debug flycam (WASD + mouse look, Q/E up/down, Shift sprint); remount restores the look-mounted self view |
 | `lineup` / `draw.lineup` | Toggle blaster lineup (held Kenney row: scale, paint, grip, muzzle markers) |
 
 ## Contributing

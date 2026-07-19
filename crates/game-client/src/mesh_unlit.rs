@@ -817,6 +817,15 @@ fn apply_anim_to_bind(bind: Mat4, sample: NodeAnimSample) -> Mat4 {
     Mat4::from_scale_rotation_translation(scale, rot, trans)
 }
 
+/// Blend walk body translation toward rest (`scale` 0 = still, 1 = full clip).
+fn damp_walk_body_bob(bind: Mat4, mut sample: NodeAnimSample, scale: f32) -> NodeAnimSample {
+    if let Some(anim_t) = sample.translation {
+        let (_s, _r, bind_t) = bind.to_scale_rotation_translation();
+        sample.translation = Some(bind_t.lerp(anim_t, scale.clamp(0.0, 1.0)));
+    }
+    sample
+}
+
 fn sample_vec3(times: &[f32], values: &[f32], t: f32) -> Option<Vec3> {
     let (i0, i1, a) = key_span(times, t)?;
     let a0 = Vec3::new(values[i0 * 3], values[i0 * 3 + 1], values[i0 * 3 + 2]);
@@ -1077,31 +1086,55 @@ fn node_world_bind(parts: &[CharPart], idx: usize) -> Mat4 {
     w
 }
 
-/// Pose character parts from sim drive (walk clip + aim). Returns kit-space worlds and arm-right.
+/// Which channels feed a character kit pose (017).
+///
+/// One sim drive builds both: **Look** for mount/aim, **Present** for the drawn body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KitPose {
+    /// Root + look; locomotion held at stand. Look origin and aim.
+    Look,
+    /// Full drive including walk phase. Drawn body.
+    Present,
+}
+
+/// Pose character parts from sim drive. Returns kit-space worlds and arm-right.
+///
+/// Walk clip applies for [`KitPose::Present`] while locomotion uses the walk clip
+/// (walk or experimental stop-settle).
 pub fn pose_character_kit(
     parts: &[CharPart],
     self_state: &game_sim::SelfState,
     walk_clip: Option<&AnimClip>,
+    pose: KitPose,
 ) -> (Vec<Mat4>, Mat4) {
-    use game_sim::LocomotionMode;
-
-    let walk_over = match (self_state.locomotion, walk_clip) {
-        (LocomotionMode::Walk, Some(clip)) => Some(clip.sample_overrides(self_state.walk_phase)),
+    let walk_over = match (pose, walk_clip) {
+        (KitPose::Present, Some(clip)) if self_state.locomotion.uses_walk_clip() => {
+            Some(clip.sample_overrides(self_state.walk_phase))
+        }
         _ => None,
     };
+
+    // Present root translation from walk is scaled down for FP (gun under fixed
+    // look origin). Legs stay full strength so the stride still reads.
+    const WALK_BODY_BOB_SCALE: f32 = 0.1;
 
     let mut locals = Vec::with_capacity(parts.len());
     for p in parts {
         let mut local = p.bind_local;
         if let Some(ref over) = walk_over {
             if let Some(sample) = over.get(&p.name) {
-                // Legs and root bob from walk; upper aim layers on after.
+                // Legs and soft body bob from walk; upper aim layers on after.
                 let apply_walk = matches!(
                     p.name.as_str(),
                     "root" | "leg-left" | "leg-right" | "arm-left"
                 );
                 if apply_walk {
-                    local = apply_anim_to_bind(p.bind_local, *sample);
+                    let sample = if p.name == "root" {
+                        damp_walk_body_bob(p.bind_local, *sample, WALK_BODY_BOB_SCALE)
+                    } else {
+                        *sample
+                    };
+                    local = apply_anim_to_bind(p.bind_local, sample);
                 }
             }
         }

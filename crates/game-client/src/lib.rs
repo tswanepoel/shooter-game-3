@@ -597,7 +597,7 @@ impl ClientInner {
 
         if let SelfPresentState::Ready(gpu) = &mut self.self_present {
             gpu.apply_state(&self.renderer.queue, &self.self_state);
-            self.view.set_mounted_eye(gpu.view.eye);
+            self.view.set_mounted_eye(gpu.view.look_origin);
         }
 
         #[cfg(feature = "debug-tools")]

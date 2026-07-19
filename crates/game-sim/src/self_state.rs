@@ -1,4 +1,6 @@
-//! Player self: position, look, walk drive, and body presentation pose.
+//! Player self: position, look, walk drive, and look-synced body joints.
+//!
+//! Presentation builds look pose (mount/aim) and present pose (drawn body) from this drive (017).
 
 use glam::{Mat4, Quat, Vec3};
 
@@ -37,11 +39,23 @@ pub const WALK_STRIDE_M: f32 = WALK_SPEED_M_S * WALK_CLIP_DURATION_S;
 pub const FACE_OFFSET_HEAD_KIT: Vec3 = Vec3::new(0.0, 2.5, 3.5);
 
 /// Ground locomotion mode (016).
+///
+/// `Stopping` is **experimental** stop-settle: position frozen, walk phase
+/// finishes the cycle in place, then [`Stand`]. Easy undo — see `apply_move`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LocomotionMode {
     #[default]
     Stand,
     Walk,
+    /// Keys up; feet planted; walk clip plays out to cycle end (experimental).
+    Stopping,
+}
+
+impl LocomotionMode {
+    /// Present pose still samples the walk clip (walk or stop-settle).
+    pub fn uses_walk_clip(self) -> bool {
+        matches!(self, Self::Walk | Self::Stopping)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -147,6 +161,11 @@ impl SelfState {
     ///
     /// `forward` / `strafe` are digital axes (−1…1). Diagonals normalize. Speed is
     /// constant [`WALK_SPEED_M_S`]. Phase advances with distance over [`WALK_STRIDE_M`].
+    ///
+    /// **Experimental stop-settle:** wish → 0 freezes position and advances phase in
+    /// place until the cycle ends, then stand. To undo: on zero wish set
+    /// `Stand` + `walk_phase = 0` only; drop [`LocomotionMode::Stopping`]; present
+    /// pose samples walk for `Walk` only.
     pub fn apply_move(&mut self, dt: f32, forward: f32, strafe: f32) {
         self.wish_forward = forward.clamp(-1.0, 1.0);
         self.wish_strafe = strafe.clamp(-1.0, 1.0);
@@ -155,20 +174,54 @@ impl SelfState {
             self.look_forward_xz() * self.wish_forward + self.look_right_xz() * self.wish_strafe;
         wish.y = 0.0;
 
+        let dt = dt.max(0.0);
+        let dphase = if WALK_STRIDE_M > 1e-8 {
+            WALK_SPEED_M_S * dt / WALK_STRIDE_M
+        } else {
+            0.0
+        };
+
         if wish.length_squared() > 1e-12 {
             let dir = wish.normalize();
-            let step = WALK_SPEED_M_S * dt.max(0.0);
+            let step = WALK_SPEED_M_S * dt;
             self.position += dir * step;
             self.position.y = 0.0;
             self.locomotion = LocomotionMode::Walk;
-            if WALK_STRIDE_M > 1e-8 {
-                self.walk_phase = (self.walk_phase + step / WALK_STRIDE_M).rem_euclid(1.0);
-            }
+            self.walk_phase = (self.walk_phase + dphase).rem_euclid(1.0);
         } else {
-            self.locomotion = LocomotionMode::Stand;
+            self.settle_walk_stop(dphase);
         }
 
         self.sync_pose();
+    }
+
+    /// Experimental: finish walk in place to the nearest neutral, then stand.
+    ///
+    /// Kenney walk neutrals land at phase 0 and 0.5 (same rest). From the first
+    /// half, 0.5 is the fastest back-out; from the second half, the cycle end.
+    fn settle_walk_stop(&mut self, dphase: f32) {
+        let settling = matches!(
+            self.locomotion,
+            LocomotionMode::Walk | LocomotionMode::Stopping
+        ) && self.walk_phase > 1e-6
+            && (self.walk_phase - 0.5).abs() > 1e-6;
+
+        if !settling {
+            self.locomotion = LocomotionMode::Stand;
+            self.walk_phase = 0.0;
+            return;
+        }
+
+        // Target: mid-cycle neutral if still in first half, else cycle end.
+        let target = if self.walk_phase < 0.5 { 0.5 } else { 1.0 };
+        let next = self.walk_phase + dphase;
+        if next >= target - 1e-6 {
+            self.locomotion = LocomotionMode::Stand;
+            self.walk_phase = 0.0;
+        } else {
+            self.locomotion = LocomotionMode::Stopping;
+            self.walk_phase = next;
+        }
     }
 
     /// Snap body presentation pose to current look (no lag in sim).
@@ -183,8 +236,8 @@ impl SelfState {
             .clamp(-HEAD_PITCH_BUDGET_RAD, HEAD_PITCH_BUDGET_RAD);
     }
 
-    /// World point for the screen-centre reticle billboard (along look from `eye`).
-    pub fn reticle_world(&self, eye: Vec3) -> Option<Vec3> {
+    /// World point for the screen-centre reticle billboard (along look from look origin).
+    pub fn reticle_world(&self, look_origin: Vec3) -> Option<Vec3> {
         if !(self.alive && self.armed) {
             return None;
         }
@@ -192,7 +245,7 @@ impl SelfState {
         if dir.length_squared() < 1e-12 {
             return None;
         }
-        Some(eye + dir * RETICLE_DEPTH_M)
+        Some(look_origin + dir * RETICLE_DEPTH_M)
     }
 }
 
@@ -295,12 +348,74 @@ mod tests {
     }
 
     #[test]
-    fn zero_wish_stands() {
+    fn zero_wish_settles_to_nearest_neutral_then_stands() {
+        let mut s = SelfState::default_loadout();
+        // First half: stop should aim at mid-cycle neutral (0.5), not full end.
+        s.apply_move(0.1, 1.0, 0.0);
+        assert!(
+            s.walk_phase > 1e-6 && s.walk_phase < 0.5,
+            "phase={}",
+            s.walk_phase
+        );
+        let pos = s.position;
+
+        s.apply_move(1e-3, 0.0, 0.0);
+        assert_eq!(s.locomotion, LocomotionMode::Stopping);
+        assert!((s.position - pos).length() < 1e-6, "feet plant on stop");
+
+        let remain = 0.5 - s.walk_phase;
+        let dt_finish = remain * WALK_STRIDE_M / WALK_SPEED_M_S + 1e-3;
+        s.apply_move(dt_finish, 0.0, 0.0);
+        assert_eq!(s.locomotion, LocomotionMode::Stand);
+        assert!((s.walk_phase).abs() < 1e-6);
+        assert!((s.position - pos).length() < 1e-6);
+    }
+
+    #[test]
+    fn stop_in_second_half_settles_to_cycle_end() {
+        let mut s = SelfState::default_loadout();
+        // One full stride-second lands past mid (speed/stride * t).
+        s.apply_move(0.4, 1.0, 0.0);
+        assert!(s.walk_phase >= 0.5, "phase={}", s.walk_phase);
+        let pos = s.position;
+        let remain = 1.0 - s.walk_phase;
+        s.apply_move(1e-3, 0.0, 0.0);
+        assert_eq!(s.locomotion, LocomotionMode::Stopping);
+        let dt_finish = (remain - 1e-3 * WALK_SPEED_M_S / WALK_STRIDE_M).max(0.0) * WALK_STRIDE_M
+            / WALK_SPEED_M_S
+            + 1e-3;
+        s.apply_move(dt_finish, 0.0, 0.0);
+        assert_eq!(s.locomotion, LocomotionMode::Stand);
+        assert!((s.position - pos).length() < 1e-6);
+    }
+
+    #[test]
+    fn walk_after_settled_stand_starts_at_phase_zero() {
         let mut s = SelfState::default_loadout();
         s.apply_move(0.1, 1.0, 0.0);
-        let phase = s.walk_phase;
-        s.apply_move(0.1, 0.0, 0.0);
+        let remain = 0.5 - s.walk_phase;
+        let dt_finish = remain * WALK_STRIDE_M / WALK_SPEED_M_S + 1e-3;
+        s.apply_move(dt_finish, 0.0, 0.0);
         assert_eq!(s.locomotion, LocomotionMode::Stand);
-        assert!((s.walk_phase - phase).abs() < 1e-6);
+
+        s.apply_move(1e-3, 1.0, 0.0);
+        let expect = (WALK_SPEED_M_S * 1e-3 / WALK_STRIDE_M).rem_euclid(1.0);
+        assert!(
+            (s.walk_phase - expect).abs() < 1e-5,
+            "phase={}",
+            s.walk_phase
+        );
+    }
+
+    #[test]
+    fn wish_during_stopping_resumes_walk() {
+        let mut s = SelfState::default_loadout();
+        s.apply_move(0.15, 1.0, 0.0);
+        s.apply_move(1e-3, 0.0, 0.0);
+        assert_eq!(s.locomotion, LocomotionMode::Stopping);
+        let phase = s.walk_phase;
+        s.apply_move(1e-3, 1.0, 0.0);
+        assert_eq!(s.locomotion, LocomotionMode::Walk);
+        assert!(s.walk_phase > phase);
     }
 }
