@@ -27,6 +27,7 @@ use web_sys::HtmlCanvasElement;
 
 #[cfg(feature = "debug-tools")]
 use debug::{DebugHost, DebugTools};
+use input::MoveInput;
 use input::{install_input_handlers, InputSession};
 #[cfg(feature = "debug-tools")]
 use lineup::{LineupGpu, LineupState};
@@ -521,6 +522,7 @@ pub(crate) struct ClientInner {
     pub(crate) self_state: SelfState,
     pub(crate) view: ViewController,
     pub(crate) session: InputSession,
+    pub(crate) move_input: MoveInput,
     self_present: SelfPresentState,
     last_frame_secs: f64,
     #[cfg(feature = "debug-tools")]
@@ -573,7 +575,7 @@ impl ClientInner {
         #[cfg(not(feature = "debug-tools"))]
         let was_fly = false;
 
-        // Mounted look while the view is still on the self (including the enter frame).
+        // Mounted look + walk while the view is still on the self (including the enter frame).
         if session_ok && !console_open && !was_fly {
             let spike = look.x.abs() > LOOK_SPIKE_PX || look.y.abs() > LOOK_SPIKE_PX;
             if !spike {
@@ -583,6 +585,14 @@ impl ClientInner {
                     -look.y * LOOK_SENS_RAD_PER_PX,
                 );
             }
+            let (fwd, strafe) = self.move_input.axes();
+            self.self_state.apply_move(dt, fwd, strafe);
+        } else {
+            // Session off, console, or flycam: clear sticky walk wish; freeze feet.
+            if !session_ok || console_open || was_fly {
+                self.move_input.clear_keys();
+            }
+            self.self_state.apply_move(dt, 0.0, 0.0);
         }
 
         if let SelfPresentState::Ready(gpu) = &mut self.self_present {
@@ -601,6 +611,7 @@ impl ClientInner {
                 // Enter or leave: drop sticky WASD (held keys may only start
                 // counting once flycam_wanted flips true mid-hold).
                 self.fly_input.clear_keys();
+                self.move_input.clear_keys();
             }
 
             let flycam = self.view.is_flycam();
@@ -892,6 +903,7 @@ impl GameClient {
             self_state,
             view,
             session: InputSession::new(),
+            move_input: MoveInput::default(),
             self_present: SelfPresentState::Idle,
             last_frame_secs: 0.0,
             #[cfg(feature = "debug-tools")]

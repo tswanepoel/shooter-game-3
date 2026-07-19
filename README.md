@@ -114,7 +114,7 @@ Vite serves cook outputs from `assets/cooked/` (not authoring kits). Production 
 
 ### Player self
 
-The default view mounts on the player **self**: a standing Kenney body with a held blaster (`character-a` + `blaster-p` until loadout exists). Mouse look aims the **view centre** (sim look, no lag); the body poses with that look as presentation; a screen-centre reticle marks aim. Camera sits on the eyes and matches sim look. Production and dev both load this path; kit facts stay in the source kit READMEs.
+The default view mounts on the player **self**: a standing Kenney body with a held blaster (`character-a` + `blaster-p` until loadout exists). Mouse look aims the **view centre** (sim look, no lag); **WASD** walks on the ground at clip-native speed (~3.46 m/s; look-relative); the body plays the Kenney walk from sim drive and poses aim from look; a screen-centre reticle marks aim. Camera sits on the eyes and matches sim look and position. Production and dev both load this path; kit facts stay in the source kit READMEs.
 
 ### Debug tools
 
@@ -123,6 +123,8 @@ With `npm run dev`, press **`` ` ``** (backtick) for the in-game developer conso
 | Input / command | Action |
 |---|---|
 | **Click canvas** | Enter / resume input session |
+| **WASD** | Walk (mounted; look-relative) |
+| **Mouse** | Look / aim |
 | **`` ` ``** | Toggle developer console |
 | **F9** / `screenshot` | Capture frame to `debug/shots/` |
 | **F8** / `flycam` / `remount` | Debug flycam (WASD + mouse look, Q/E up/down, Shift sprint); remount restores the self eye view |

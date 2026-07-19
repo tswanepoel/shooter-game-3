@@ -1,4 +1,4 @@
-//! Player self: position, look command, and body presentation pose.
+//! Player self: position, look, walk drive, and body presentation pose.
 
 use glam::{Mat4, Quat, Vec3};
 
@@ -23,9 +23,26 @@ pub const RETICLE_DEPTH_M: f32 = 4.0;
 /// On-screen reticle diameter (CSS/logical px).
 pub const RETICLE_SIZE_PX: f32 = 6.0;
 
+/// Walk speed on the ground plane (016).
+/// Kenney `walk` at 1×: stance sole slip = \(2 L \sin\theta\) per half-cycle
+/// (\(L = 2/3\,\mathrm{m}\), \(\theta = 60°\), \(T = 2/3\,\mathrm{s}\)) → \(2\sqrt{3}\) m/s.
+pub const WALK_SPEED_M_S: f32 = 3.464_101_6; // 2√3
+/// Kenney `walk` clip duration (seconds). Phase maps as `phase * duration`.
+pub const WALK_CLIP_DURATION_S: f32 = 2.0 / 3.0;
+/// Ground metres per full walk cycle (phase 0→1). At walk speed this plays the clip at 1×.
+pub const WALK_STRIDE_M: f32 = WALK_SPEED_M_S * WALK_CLIP_DURATION_S;
+
 /// Head-local face offset in character-kit units (applied under posed `head` node).
 /// With character-a head scale 0.1 and kit→m 1/1.5: rest eye ≈ (0, 1.43, 0.23) m.
 pub const FACE_OFFSET_HEAD_KIT: Vec3 = Vec3::new(0.0, 2.5, 3.5);
+
+/// Ground locomotion mode (016).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LocomotionMode {
+    #[default]
+    Stand,
+    Walk,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelfState {
@@ -38,6 +55,14 @@ pub struct SelfState {
     pub blaster: u8,
     pub alive: bool,
     pub armed: bool,
+
+    /// Look-relative forward wish (−1…1). Positive is W.
+    pub wish_forward: f32,
+    /// Look-relative strafe wish (−1…1). Positive is D (right).
+    pub wish_strafe: f32,
+    pub locomotion: LocomotionMode,
+    /// Fraction through the walk cycle, [0, 1).
+    pub walk_phase: f32,
 
     /// Body absolute yaw (presentation; matches look in sim).
     pub torso_yaw: f32,
@@ -65,6 +90,10 @@ impl SelfState {
             blaster: b'p',
             alive: true,
             armed: true,
+            wish_forward: 0.0,
+            wish_strafe: 0.0,
+            locomotion: LocomotionMode::Stand,
+            walk_phase: 0.0,
             torso_yaw: 0.0,
             torso_pitch: 0.0,
             shoulder_pitch: 0.0,
@@ -83,6 +112,18 @@ impl SelfState {
         )
     }
 
+    /// Horizontal look forward on XZ (unit, y = 0).
+    pub fn look_forward_xz(&self) -> Vec3 {
+        Vec3::new(self.ocular_yaw.sin(), 0.0, self.ocular_yaw.cos())
+    }
+
+    /// Horizontal look right on XZ (unit, y = 0).
+    /// Matches RH view / flycam: `forward_xz × world_up` (screen-right).
+    pub fn look_right_xz(&self) -> Vec3 {
+        let f = self.look_forward_xz();
+        Vec3::new(-f.z, 0.0, f.x)
+    }
+
     /// Body facing on XZ from torso yaw.
     pub fn body_facing(&self) -> Vec3 {
         Vec3::new(self.torso_yaw.sin(), 0.0, self.torso_yaw.cos())
@@ -99,6 +140,34 @@ impl SelfState {
         self.ocular_yaw += delta_yaw;
         self.ocular_pitch =
             (self.ocular_pitch + delta_pitch).clamp(-OCULAR_ELEV_CAP_RAD, OCULAR_ELEV_CAP_RAD);
+        self.sync_pose();
+    }
+
+    /// Apply look-relative walk wish and integrate ground position (016).
+    ///
+    /// `forward` / `strafe` are digital axes (−1…1). Diagonals normalize. Speed is
+    /// constant [`WALK_SPEED_M_S`]. Phase advances with distance over [`WALK_STRIDE_M`].
+    pub fn apply_move(&mut self, dt: f32, forward: f32, strafe: f32) {
+        self.wish_forward = forward.clamp(-1.0, 1.0);
+        self.wish_strafe = strafe.clamp(-1.0, 1.0);
+
+        let mut wish =
+            self.look_forward_xz() * self.wish_forward + self.look_right_xz() * self.wish_strafe;
+        wish.y = 0.0;
+
+        if wish.length_squared() > 1e-12 {
+            let dir = wish.normalize();
+            let step = WALK_SPEED_M_S * dt.max(0.0);
+            self.position += dir * step;
+            self.position.y = 0.0;
+            self.locomotion = LocomotionMode::Walk;
+            if WALK_STRIDE_M > 1e-8 {
+                self.walk_phase = (self.walk_phase + step / WALK_STRIDE_M).rem_euclid(1.0);
+            }
+        } else {
+            self.locomotion = LocomotionMode::Stand;
+        }
+
         self.sync_pose();
     }
 
@@ -149,6 +218,7 @@ mod tests {
         let f = s.ocular_forward();
         assert!(f.dot(Vec3::Z) > 0.99);
         assert!((f.length() - 1.0).abs() < 1e-5);
+        assert_eq!(s.locomotion, LocomotionMode::Stand);
     }
 
     #[test]
@@ -190,5 +260,47 @@ mod tests {
         let along = (r - eye).normalize();
         assert!(along.dot(s.ocular_forward()) > 0.99);
         assert!(((r - eye).length() - RETICLE_DEPTH_M).abs() < 1e-5);
+    }
+
+    #[test]
+    fn walk_forward_along_look_at_constant_speed() {
+        let mut s = SelfState::default_loadout();
+        s.apply_move(1.0, 1.0, 0.0);
+        assert_eq!(s.locomotion, LocomotionMode::Walk);
+        assert!((s.position.z - WALK_SPEED_M_S).abs() < 1e-5);
+        assert!(s.position.x.abs() < 1e-5);
+        assert!(s.position.y.abs() < 1e-5);
+        let expect_phase = (WALK_SPEED_M_S / WALK_STRIDE_M).rem_euclid(1.0);
+        assert!((s.walk_phase - expect_phase).abs() < 1e-5);
+    }
+
+    #[test]
+    fn diagonal_wish_normalizes_speed() {
+        let mut s = SelfState::default_loadout();
+        s.apply_move(1.0, 1.0, 1.0);
+        let dist = s.position.length();
+        assert!((dist - WALK_SPEED_M_S).abs() < 1e-4, "dist={dist}");
+    }
+
+    #[test]
+    fn strafe_is_look_relative_and_keys_do_not_yaw() {
+        let mut s = SelfState::default_loadout();
+        s.ocular_yaw = 0.0;
+        s.apply_move(1.0, 0.0, 1.0);
+        // Facing +Z, screen-right is −X (RH look_to / forward × up).
+        assert!((s.position.x + WALK_SPEED_M_S).abs() < 1e-4);
+        assert!(s.position.z.abs() < 1e-4);
+        assert!((s.torso_yaw - s.ocular_yaw).abs() < 1e-6);
+        assert_eq!(s.ocular_yaw, 0.0);
+    }
+
+    #[test]
+    fn zero_wish_stands() {
+        let mut s = SelfState::default_loadout();
+        s.apply_move(0.1, 1.0, 0.0);
+        let phase = s.walk_phase;
+        s.apply_move(0.1, 0.0, 0.0);
+        assert_eq!(s.locomotion, LocomotionMode::Stand);
+        assert!((s.walk_phase - phase).abs() < 1e-6);
     }
 }

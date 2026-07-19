@@ -12,6 +12,42 @@ use web_sys::{Document, HtmlCanvasElement, KeyboardEvent, MouseEvent};
 
 use crate::ClientInner;
 
+/// Held WASD for mounted walk (016). Look-relative axes; no arrows.
+#[derive(Debug, Default, Clone)]
+pub struct MoveInput {
+    pub forward: bool,
+    pub back: bool,
+    pub left: bool,
+    pub right: bool,
+}
+
+impl MoveInput {
+    pub fn set_key(&mut self, code: &str, pressed: bool) {
+        match code {
+            "KeyW" => self.forward = pressed,
+            "KeyS" => self.back = pressed,
+            "KeyA" => self.left = pressed,
+            "KeyD" => self.right = pressed,
+            _ => {}
+        }
+    }
+
+    pub fn is_move_key(code: &str) -> bool {
+        matches!(code, "KeyW" | "KeyA" | "KeyS" | "KeyD")
+    }
+
+    pub fn clear_keys(&mut self) {
+        *self = Self::default();
+    }
+
+    /// Digital forward / strafe in −1…1 (W/S and A/D).
+    pub fn axes(&self) -> (f32, f32) {
+        let forward = (self.forward as i8 - self.back as i8) as f32;
+        let strafe = (self.right as i8 - self.left as i8) as f32;
+        (forward, strafe)
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct InputSession {
     active: bool,
@@ -76,6 +112,7 @@ pub fn install_input_handlers(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCanv
             let was = client.session.is_active();
             client.session.set_active(active);
             if was && !active {
+                client.move_input.clear_keys();
                 #[cfg(feature = "debug-tools")]
                 client.fly_input.clear_keys();
             }
@@ -152,9 +189,10 @@ fn pointer_locked_to(document: &Document, canvas: &HtmlCanvasElement) -> bool {
 }
 
 fn on_session_key_down(inner: &Rc<RefCell<ClientInner>>, event: &KeyboardEvent) {
+    let mut client = inner.borrow_mut();
+
     #[cfg(feature = "debug-tools")]
     {
-        let mut client = inner.borrow_mut();
         update_debug_modifiers(&mut client, event);
 
         if event.code() == "Backquote" || event.key() == "`" {
@@ -204,30 +242,36 @@ fn on_session_key_down(inner: &Rc<RefCell<ClientInner>>, event: &KeyboardEvent) 
             }
             return;
         }
-
-        if !client.session.is_active() {
-            return;
-        }
-
-        if client.view.is_flycam() || client.debug.flycam_wanted() {
-            let code = event.code();
-            if crate::view::FlyInput::is_fly_key(&code) {
-                event.prevent_default();
-                client.fly_input.set_key(&code, true);
-            }
-        }
     }
 
+    if !client.session.is_active() {
+        return;
+    }
+
+    let code = event.code();
+
+    #[cfg(feature = "debug-tools")]
+    let fly = client.view.is_flycam() || client.debug.flycam_wanted();
     #[cfg(not(feature = "debug-tools"))]
-    {
-        let _ = (inner, event);
+    let fly = false;
+
+    if fly {
+        #[cfg(feature = "debug-tools")]
+        if crate::view::FlyInput::is_fly_key(&code) {
+            event.prevent_default();
+            client.fly_input.set_key(&code, true);
+        }
+    } else if MoveInput::is_move_key(&code) {
+        event.prevent_default();
+        client.move_input.set_key(&code, true);
     }
 }
 
 fn on_session_key_up(inner: &Rc<RefCell<ClientInner>>, event: &KeyboardEvent) {
+    let mut client = inner.borrow_mut();
+
     #[cfg(feature = "debug-tools")]
     {
-        let mut client = inner.borrow_mut();
         update_debug_modifiers(&mut client, event);
 
         if client.debug.is_open() {
@@ -243,15 +287,24 @@ fn on_session_key_up(inner: &Rc<RefCell<ClientInner>>, event: &KeyboardEvent) {
             }
             return;
         }
-
-        if client.session.is_active() && (client.view.is_flycam() || client.debug.flycam_wanted()) {
-            client.fly_input.set_key(&event.code(), false);
-        }
     }
 
+    if !client.session.is_active() {
+        return;
+    }
+
+    let code = event.code();
+
+    #[cfg(feature = "debug-tools")]
+    let fly = client.view.is_flycam() || client.debug.flycam_wanted();
     #[cfg(not(feature = "debug-tools"))]
-    {
-        let _ = (inner, event);
+    let fly = false;
+
+    if fly {
+        #[cfg(feature = "debug-tools")]
+        client.fly_input.set_key(&code, false);
+    } else if MoveInput::is_move_key(&code) {
+        client.move_input.set_key(&code, false);
     }
 }
 

@@ -1,10 +1,10 @@
-//! Self body + blaster presentation (013/015).
+//! Self body + blaster presentation (013/015/016).
 
 use game_sim::{SelfState, FACE_OFFSET_HEAD_KIT};
 use glam::{Mat4, Vec3};
 use wasm_bindgen::JsValue;
 
-use crate::mesh_unlit::{self, CharPart, MeshVertex, UnlitMeshGpu, UnlitMeshLayout};
+use crate::mesh_unlit::{self, AnimClip, CharPart, MeshVertex, UnlitMeshGpu, UnlitMeshLayout};
 
 pub struct MountedView {
     pub eye: Vec3,
@@ -14,6 +14,8 @@ pub struct MountedView {
 pub struct SelfGpu {
     mesh: UnlitMeshGpu,
     parts: Vec<CharPart>,
+    /// Kenney `walk` clip (phase from sim).
+    walk_clip: AnimClip,
     /// part index → primitive index in character batch (0), if meshful.
     part_prim: Vec<Option<usize>>,
     blaster_local: Vec<Vec<MeshVertex>>,
@@ -54,10 +56,13 @@ impl SelfGpu {
 
         let (parts, min_y) =
             mesh_unlit::extract_character_parts(char_glb).map_err(|e| JsValue::from_str(&e))?;
+        let walk_clip =
+            mesh_unlit::extract_clip(char_glb, "walk").map_err(|e| JsValue::from_str(&e))?;
         let blaster_prims =
             mesh_unlit::extract_primitives(blaster_glb).map_err(|e| JsValue::from_str(&e))?;
 
-        let (worlds, arm_kit) = mesh_unlit::pose_character_kit(&parts, self_state);
+        let (worlds, arm_kit) =
+            mesh_unlit::pose_character_kit(&parts, self_state, Some(&walk_clip));
         let k2w = mesh_unlit::kit_to_world(self_state.placement_matrix(), min_y);
 
         let mut char_cpu: Vec<(Vec<MeshVertex>, Vec<u32>, [f32; 4])> = Vec::new();
@@ -102,6 +107,7 @@ impl SelfGpu {
         let mut s = Self {
             mesh: layout.finish(vec![char_batch, blaster_batch]),
             parts,
+            walk_clip,
             part_prim,
             blaster_local,
             blaster_batch: 1,
@@ -117,7 +123,8 @@ impl SelfGpu {
     }
 
     pub fn apply_state(&mut self, queue: &wgpu::Queue, self_state: &SelfState) {
-        let (worlds, arm_kit) = mesh_unlit::pose_character_kit(&self.parts, self_state);
+        let (worlds, arm_kit) =
+            mesh_unlit::pose_character_kit(&self.parts, self_state, Some(&self.walk_clip));
         let k2w = mesh_unlit::kit_to_world(self_state.placement_matrix(), self.min_y);
 
         for (i, part) in self.parts.iter().enumerate() {
