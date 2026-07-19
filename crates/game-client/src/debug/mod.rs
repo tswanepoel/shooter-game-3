@@ -97,6 +97,11 @@ impl DebugTools {
         self.registry.get_bool("draw.lineup").unwrap_or(false)
     }
 
+    /// Top FPS / lag banner (031). On by default in debug builds.
+    pub fn net_hud(&self) -> bool {
+        self.registry.get_bool("hud.net").unwrap_or(true)
+    }
+
     /// Whether the registry wants flycam (view syncs this each frame).
     pub fn flycam_wanted(&self) -> bool {
         self.registry.get_bool("cam.fly").unwrap_or(false)

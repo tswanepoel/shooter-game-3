@@ -140,6 +140,7 @@ With `npm run dev`, press **`` ` ``** (backtick) for the in-game developer conso
 | **F9** / `screenshot` | Capture frame to `debug/shots/` |
 | **F8** / `flycam` / `remount` | Debug flycam (WASD + mouse look, Q/E up/down, Shift sprint); remount restores the look-mounted self view |
 | `lineup` / `draw.lineup` | Toggle blaster lineup (held Kenney row: scale, paint, grip, muzzle markers) |
+| `nethud` / `hud.net` | Top FPS / RTT / delay banner (on by default; [031](docs/features/031-mp-net-hud.md)) |
 
 ## Contributing
 

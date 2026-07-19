@@ -179,6 +179,25 @@ impl MpClient {
         }
     }
 
+    /// One-line net fields for the debug HUD (031). No FPS (caller supplies).
+    pub fn net_hud_fields(&self) -> String {
+        match self.session.phase() {
+            MpPhase::Solo => "solo".into(),
+            MpPhase::Connecting => "connecting".into(),
+            MpPhase::Joined => {
+                let delay_ms = (self.lag.delay_secs() * 1000.0).round() as i32;
+                let rtt = match self.lag.rtt_ema() {
+                    Some(s) => format!("{:.0}ms", s * 1000.0),
+                    None => "—".into(),
+                };
+                format!(
+                    "rtt {}  delay {}ms  tick {}",
+                    rtt, delay_ms, self.session.server_tick
+                )
+            }
+        }
+    }
+
     /// Queue one Input, record predict history, and advance local body (joined only).
     pub fn push_input_predict(&mut self, state: &mut SelfState, intent: &InputIntent, dt: f32) {
         if !self.joined() {

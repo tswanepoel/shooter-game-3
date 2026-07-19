@@ -46,6 +46,13 @@ impl DebugRegistry {
                 help: "client: blaster lineup (armed Kenney row; grip/import check)",
             },
         );
+        self.cvars.insert(
+            "hud.net",
+            CVar {
+                value: CVarValue::Bool(true),
+                help: "client: top FPS / RTT / delay banner (031)",
+            },
+        );
     }
 
     pub fn get_bool(&self, name: &str) -> Option<bool> {
@@ -70,6 +77,7 @@ impl DebugRegistry {
             "grid" => self.cmd_grid(&args),
             "flycam" | "fly" => self.cmd_flycam(&args),
             "lineup" => self.cmd_lineup(&args),
+            "nethud" => self.cmd_nethud(&args),
             "remount" => {
                 self.set_bool("cam.fly", false);
                 "cam.fly = 0 (remount)".into()
@@ -98,6 +106,7 @@ impl DebugRegistry {
             "  grid [on|off|toggle]  set draw.grid".into(),
             "  flycam|fly [on|off|toggle]  debug flycam (F8)".into(),
             "  lineup [on|off|toggle]  blaster lineup (armed characters)".into(),
+            "  nethud [on|off|toggle]  top FPS / lag banner".into(),
             "  remount           leave flycam, restore self view".into(),
             "  screenshot|shot   capture frame (F9)".into(),
             "  mp join|leave|status  multiplayer session (023)".into(),
@@ -128,6 +137,10 @@ impl DebugRegistry {
 
     fn cmd_lineup(&mut self, args: &[&str]) -> String {
         self.cmd_bool_toggle("draw.lineup", args, "lineup")
+    }
+
+    fn cmd_nethud(&mut self, args: &[&str]) -> String {
+        self.cmd_bool_toggle("hud.net", args, "nethud")
     }
 
     fn cmd_bool_toggle(&mut self, cvar: &str, args: &[&str], usage_name: &str) -> String {
@@ -238,5 +251,18 @@ mod tests {
         assert!(r.execute("draw.lineup 1").contains("1"));
         assert!(r.execute("help").contains("draw.lineup"));
         assert!(r.execute("help").contains("lineup"));
+    }
+
+    #[test]
+    fn nethud_cvar_commands() {
+        let mut r = DebugRegistry::new();
+        r.register_defaults();
+        assert_eq!(r.get_bool("hud.net"), Some(true));
+        assert!(r.execute("nethud off").contains("0"));
+        assert_eq!(r.get_bool("hud.net"), Some(false));
+        assert!(r.execute("nethud").contains("1")); // toggle
+        assert_eq!(r.get_bool("hud.net"), Some(true));
+        assert!(r.execute("help").contains("nethud"));
+        assert!(r.execute("help").contains("hud.net"));
     }
 }

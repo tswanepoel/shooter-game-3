@@ -9,7 +9,7 @@ Depends on **029**.
 | | Was | Now |
 | --- | --- | --- |
 | `TICK_HZ` | 30 | **128** |
-| `DELAY_MIN` | 80 ms | **32 ms** |
+| `DELAY_MIN` | 80 ms | **24 ms** |
 | Default (pre-sample) | 100 ms | **48 ms** |
 | `DELAY_MAX` | 200 ms | **200 ms** |
 | `k` / `jitter_pad` | 0.5 / 0 | unchanged |
@@ -19,5 +19,5 @@ Pose buffer must still cover `DELAY_MAX` at the new rate (raise cap if hold-last
 ## Acceptance criteria
 
 - Client and server run at 128 Hz; protocol mismatch rejects join.
-- Low RTT → delay near **32 ms**; high RTT still climbs toward **200 ms**.
+- Low RTT → delay near **24 ms**; high RTT still climbs toward **200 ms**.
 - Remotes stay smooth on the present clock; underrun still holds last pose.

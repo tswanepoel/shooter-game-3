@@ -535,6 +535,9 @@ pub(crate) struct ClientInner {
     /// Remote peer present bodies (024); driven by `mp.remotes`.
     remote_present: RemotePresent,
     last_frame_secs: f64,
+    /// Smoothed FPS for the debug net HUD (031).
+    #[cfg(feature = "debug-tools")]
+    fps_ema: f32,
     /// Multiplayer mode (022). Default solo; join is 023.
     pub(crate) mp: mp::MpClient,
     #[cfg(feature = "debug-tools")]
@@ -605,6 +608,16 @@ impl ClientInner {
             1.0 / 60.0
         };
         self.last_frame_secs = now;
+
+        #[cfg(feature = "debug-tools")]
+        {
+            let inst = if dt > 1e-6 { 1.0 / dt } else { 0.0 };
+            if self.fps_ema <= 0.0 {
+                self.fps_ema = inst;
+            } else {
+                self.fps_ema += 0.12 * (inst - self.fps_ema);
+            }
+        }
 
         self.mp.poll_transport();
         self.mp.apply_authority_to_self(&mut self.self_state);
@@ -810,7 +823,16 @@ impl ClientInner {
             let screen_h = height as f32 / ppp;
             let raw = self.debug.take_raw_input(screen_w, screen_h, time);
 
-            let full = self.debug.shell.run_frame(raw, ppp);
+            let hud_line = if self.debug.net_hud() {
+                Some(format!(
+                    "fps {:.0}  {}",
+                    self.fps_ema,
+                    self.mp.net_hud_fields()
+                ))
+            } else {
+                None
+            };
+            let full = self.debug.shell.run_frame(raw, ppp, hud_line.as_deref());
             if let Some(cmd) = self.debug.shell.take_pending_command() {
                 let _ = self.debug.execute(&cmd);
             }
@@ -1066,6 +1088,8 @@ impl GameClient {
             self_present: SelfPresentState::Idle,
             remote_present: RemotePresent::new(),
             last_frame_secs: 0.0,
+            #[cfg(feature = "debug-tools")]
+            fps_ema: 0.0,
             mp: mp::MpClient::new(),
             #[cfg(feature = "debug-tools")]
             debug,
