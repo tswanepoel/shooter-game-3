@@ -34,6 +34,11 @@ pub const WALK_CLIP_DURATION_S: f32 = 2.0 / 3.0;
 /// Ground metres per full walk cycle (phase 0→1). At walk speed this plays the clip at 1×.
 pub const WALK_STRIDE_M: f32 = WALK_SPEED_M_S * WALK_CLIP_DURATION_S;
 
+pub const JUMP_PEAK_M: f32 = 1.2;
+pub const JUMP_TIME_TO_APEX_S: f32 = 0.25;
+pub const JUMP_GRAVITY_M_S2: f32 = 2.0 * JUMP_PEAK_M / (JUMP_TIME_TO_APEX_S * JUMP_TIME_TO_APEX_S);
+pub const JUMP_LAUNCH_M_S: f32 = JUMP_GRAVITY_M_S2 * JUMP_TIME_TO_APEX_S;
+
 /// Head-local face offset in character-kit units (applied under posed `head` node).
 ///
 /// Chosen so rest look origin matches the calibrated feet-local eye
@@ -41,23 +46,23 @@ pub const WALK_STRIDE_M: f32 = WALK_SPEED_M_S * WALK_CLIP_DURATION_S;
 /// kit→m `1/1.5`, soles on y = 0).
 pub const FACE_OFFSET_HEAD_KIT: Vec3 = Vec3::new(0.0, 3.8, 4.05);
 
-/// Ground locomotion mode (016).
-///
-/// `Stopping` is stop-settle: position frozen, walk phase advances in place to
-/// the nearest neutral, then [`Stand`].
+/// Locomotion mode. `Stopping` = in-place walk settle to neutral, then [`Stand`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LocomotionMode {
     #[default]
     Stand,
     Walk,
-    /// Keys up; feet planted; walk clip settles to the nearest neutral.
     Stopping,
+    Air,
 }
 
 impl LocomotionMode {
-    /// Present pose still samples the walk clip (walk or stop-settle).
     pub fn uses_walk_clip(self) -> bool {
         matches!(self, Self::Walk | Self::Stopping)
+    }
+
+    pub fn is_air(self) -> bool {
+        matches!(self, Self::Air)
     }
 }
 
@@ -80,6 +85,10 @@ pub struct SelfState {
     pub locomotion: LocomotionMode,
     /// Fraction through the walk cycle, [0, 1).
     pub walk_phase: f32,
+    pub velocity_y: f32,
+    /// Horizontal air velocity locked at jump (world XZ).
+    pub air_vel_x: f32,
+    pub air_vel_z: f32,
 
     /// Body absolute yaw (presentation; matches look in sim).
     pub torso_yaw: f32,
@@ -111,12 +120,38 @@ impl SelfState {
             wish_strafe: 0.0,
             locomotion: LocomotionMode::Stand,
             walk_phase: 0.0,
+            velocity_y: 0.0,
+            air_vel_x: 0.0,
+            air_vel_z: 0.0,
             torso_yaw: 0.0,
             torso_pitch: 0.0,
             shoulder_pitch: 0.0,
             head_yaw: 0.0,
             head_pitch: 0.0,
         }
+    }
+
+    pub fn is_grounded(&self) -> bool {
+        !self.locomotion.is_air() && self.position.y <= 1e-5 && self.velocity_y <= 0.0
+    }
+
+    pub fn try_jump(&mut self) {
+        if !self.is_grounded() {
+            return;
+        }
+        let mut wish =
+            self.look_forward_xz() * self.wish_forward + self.look_right_xz() * self.wish_strafe;
+        wish.y = 0.0;
+        if wish.length_squared() > 1e-12 {
+            let dir = wish.normalize();
+            self.air_vel_x = dir.x * WALK_SPEED_M_S;
+            self.air_vel_z = dir.z * WALK_SPEED_M_S;
+        } else {
+            self.air_vel_x = 0.0;
+            self.air_vel_z = 0.0;
+        }
+        self.velocity_y = JUMP_LAUNCH_M_S;
+        self.locomotion = LocomotionMode::Air;
     }
 
     /// Unit look direction (yaw + pitch). Aim / camera forward.
@@ -160,13 +195,7 @@ impl SelfState {
         self.sync_pose();
     }
 
-    /// Apply look-relative walk wish and integrate ground position (016).
-    ///
-    /// `forward` / `strafe` are digital axes (−1…1). Diagonals normalize. Speed is
-    /// constant [`WALK_SPEED_M_S`]. Phase advances with distance over [`WALK_STRIDE_M`].
-    ///
-    /// Wish → 0 freezes position and advances phase in place to the nearest
-    /// neutral, then stand ([`LocomotionMode::Stopping`] while settling).
+    /// Look-relative walk wish (−1…1). Ground: phase from distance. Air: coast + gravity.
     pub fn apply_move(&mut self, dt: f32, forward: f32, strafe: f32) {
         self.wish_forward = forward.clamp(-1.0, 1.0);
         self.wish_strafe = strafe.clamp(-1.0, 1.0);
@@ -176,24 +205,54 @@ impl SelfState {
         wish.y = 0.0;
 
         let dt = dt.max(0.0);
-        let dphase = if WALK_STRIDE_M > 1e-8 {
-            WALK_SPEED_M_S * dt / WALK_STRIDE_M
-        } else {
-            0.0
-        };
+        let moving = wish.length_squared() > 1e-12;
 
-        if wish.length_squared() > 1e-12 {
+        if self.locomotion.is_air() {
+            self.integrate_air(dt, moving);
+        } else if moving {
             let dir = wish.normalize();
             let step = WALK_SPEED_M_S * dt;
             self.position += dir * step;
             self.position.y = 0.0;
             self.locomotion = LocomotionMode::Walk;
+            let dphase = if WALK_STRIDE_M > 1e-8 {
+                WALK_SPEED_M_S * dt / WALK_STRIDE_M
+            } else {
+                0.0
+            };
             self.walk_phase = (self.walk_phase + dphase).rem_euclid(1.0);
         } else {
+            let dphase = if WALK_STRIDE_M > 1e-8 {
+                WALK_SPEED_M_S * dt / WALK_STRIDE_M
+            } else {
+                0.0
+            };
             self.settle_walk_stop(dphase);
         }
 
         self.sync_pose();
+    }
+
+    fn integrate_air(&mut self, dt: f32, land_wish: bool) {
+        self.position.x += self.air_vel_x * dt;
+        self.position.z += self.air_vel_z * dt;
+
+        self.velocity_y -= JUMP_GRAVITY_M_S2 * dt;
+        self.position.y += self.velocity_y * dt;
+        self.locomotion = LocomotionMode::Air;
+
+        if self.position.y <= 0.0 && self.velocity_y <= 0.0 {
+            self.position.y = 0.0;
+            self.velocity_y = 0.0;
+            self.air_vel_x = 0.0;
+            self.air_vel_z = 0.0;
+            self.walk_phase = 0.0;
+            self.locomotion = if land_wish {
+                LocomotionMode::Walk
+            } else {
+                LocomotionMode::Stand
+            };
+        }
     }
 
     /// Finish walk in place to the nearest neutral, then stand.
@@ -418,5 +477,76 @@ mod tests {
         s.apply_move(1e-3, 1.0, 0.0);
         assert_eq!(s.locomotion, LocomotionMode::Walk);
         assert!(s.walk_phase > phase);
+    }
+
+    #[test]
+    fn jump_launches_to_air_and_peaks_near_target() {
+        let mut s = SelfState::default_loadout();
+        s.try_jump();
+        assert_eq!(s.locomotion, LocomotionMode::Air);
+        assert!((s.velocity_y - JUMP_LAUNCH_M_S).abs() < 1e-5);
+
+        let dt = 1.0 / 120.0;
+        let mut peak = 0.0_f32;
+        for _ in 0..200 {
+            s.apply_move(dt, 0.0, 0.0);
+            peak = peak.max(s.position.y);
+            if s.is_grounded() {
+                break;
+            }
+        }
+        assert!(
+            (peak - JUMP_PEAK_M).abs() < 0.05,
+            "peak={peak} want ~{JUMP_PEAK_M}"
+        );
+        assert_eq!(s.locomotion, LocomotionMode::Stand);
+        assert!(s.position.y.abs() < 1e-5);
+        assert!(s.velocity_y.abs() < 1e-5);
+    }
+
+    #[test]
+    fn jump_while_airborne_is_ignored() {
+        let mut s = SelfState::default_loadout();
+        s.try_jump();
+        s.apply_move(0.05, 0.0, 0.0);
+        let y = s.position.y;
+        let vy = s.velocity_y;
+        s.try_jump();
+        assert!((s.position.y - y).abs() < 1e-6);
+        assert!((s.velocity_y - vy).abs() < 1e-6);
+    }
+
+    #[test]
+    fn air_coasts_at_launch_direction_and_freezes_phase() {
+        let mut s = SelfState::default_loadout();
+        s.apply_move(0.1, 1.0, 0.0);
+        let phase = s.walk_phase;
+        s.try_jump();
+        // Strafe mid-air must not change path — still +Z from launch.
+        s.apply_move(0.2, 0.0, 1.0);
+        assert_eq!(s.locomotion, LocomotionMode::Air);
+        assert!((s.walk_phase - phase).abs() < 1e-6, "phase must freeze");
+        assert!(
+            (s.position.z - WALK_SPEED_M_S * 0.3).abs() < 1e-3,
+            "z={}",
+            s.position.z
+        );
+        assert!(s.position.x.abs() < 1e-3, "x={}", s.position.x);
+    }
+
+    #[test]
+    fn land_with_wish_enters_walk() {
+        let mut s = SelfState::default_loadout();
+        s.try_jump();
+        let dt = 1.0 / 60.0;
+        for _ in 0..120 {
+            s.apply_move(dt, 1.0, 0.0);
+            if !s.locomotion.is_air() {
+                break;
+            }
+        }
+        assert_eq!(s.locomotion, LocomotionMode::Walk);
+        assert!(s.position.y.abs() < 1e-5);
+        assert!((s.walk_phase).abs() < 1e-6);
     }
 }

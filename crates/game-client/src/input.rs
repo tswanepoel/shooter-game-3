@@ -47,13 +47,14 @@ fn request_pointer_lock_raw(canvas: &HtmlCanvasElement) {
     }
 }
 
-/// Held WASD for mounted walk (016). Look-relative axes; no arrows.
+/// Held WASD + jump edge for mounted locomotion.
 #[derive(Debug, Default, Clone)]
 pub struct MoveInput {
     pub forward: bool,
     pub back: bool,
     pub left: bool,
     pub right: bool,
+    jump_edge: bool,
 }
 
 impl MoveInput {
@@ -65,6 +66,16 @@ impl MoveInput {
             "KeyD" => self.right = pressed,
             _ => {}
         }
+    }
+
+    pub fn note_jump_press(&mut self) {
+        self.jump_edge = true;
+    }
+
+    pub fn take_jump(&mut self) -> bool {
+        let j = self.jump_edge;
+        self.jump_edge = false;
+        j
     }
 
     pub fn is_move_key(code: &str) -> bool {
@@ -299,6 +310,11 @@ fn on_session_key_down(inner: &Rc<RefCell<ClientInner>>, event: &KeyboardEvent) 
     } else if MoveInput::is_move_key(&code) {
         event.prevent_default();
         client.move_input.set_key(&code, true);
+    } else if code == "Space" {
+        event.prevent_default();
+        if !event.repeat() {
+            client.move_input.note_jump_press();
+        }
     }
 }
 
