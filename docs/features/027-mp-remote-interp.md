@@ -1,12 +1,12 @@
 # Feature 027 - MP remote interpolation
 
-Draw **other** players from a short pose history, slightly in the past, so motion is smooth between Snapshots. Self stays **026**.
+Draw **other** players from a short pose history, slightly in the past, so motion blends between Snapshots. Self stays **026**.
 
-Depends on **024** and **026**. Server tick **128 Hz**; Snapshot contents unchanged.
+Depends on **024** and **026**. Server tick **30 Hz** (`TICK_HZ`). Snapshot contents unchanged.
 
 ## Present delay
 
-Draw remotes at **now − 20 ms** (starting default; raise only if delivery needs it). Prefer server **`tick`** as sample time.
+Draw remotes at **present − 100 ms** (`REMOTE_INTERP_DELAY_SECS`). Sample time is server **`tick`** mapped at 30 Hz. Client `SERVER_TICK_HZ` must match the server.
 
 ## Buffer
 
@@ -17,8 +17,10 @@ Draw remotes at **now − 20 ms** (starting default; raise only if delivery need
 
 Remote present path unchanged (drive → mesh); drive is the interpolated pose.
 
+Present time in v1 is derived from the latest received tick (advances only on Snapshot). Continuous present clock is **028**.
+
 ## Acceptance criteria
 
-- Peers move continuously between Snapshots at **20 ms** delay.
-- Stationary remote does not pop when the local player turns or strafes (normal delivery).
+- Peers present from a buffered history at **100 ms** delay.
+- Stationary remote does not pop solely from local camera motion (normal delivery).
 - PlayerLeft still removes promptly; underrun holds last pose.

@@ -34,7 +34,7 @@ Solo and leave: unchanged solo path; leave clears history and returns coherent l
 
 ## Server
 
-Tick stays **128 Hz**. Input accept, key echo, seq, and pending merge unchanged. Snapshot carries `ack_seq` for the recipient. Server does not predict.
+Tick stays **30 Hz**. Input accept, key echo, seq, and pending merge unchanged. Snapshot carries `ack_seq` for the recipient. Server does not predict.
 
 ## Acceptance criteria
 

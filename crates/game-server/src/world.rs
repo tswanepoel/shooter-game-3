@@ -11,7 +11,7 @@ use game_sim::SelfState;
 use crate::map::player_pose;
 
 /// Fixed server tick rate (Hz). Client render stays independent.
-pub const TICK_HZ: u32 = 128;
+pub const TICK_HZ: u32 = 30;
 
 /// Spawn half-extent on XZ (metres).
 const SPAWN_HALF_EXTENT_M: f32 = 8.0;

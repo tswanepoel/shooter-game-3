@@ -5,13 +5,13 @@ use std::f32::consts::{PI, TAU};
 
 use game_net::{NetPlayerPose, NetVec3, PlayerId, Tick};
 
-/// Draw remotes this far behind the latest snapshot tick (027).
-pub const REMOTE_INTERP_DELAY_SECS: f32 = 0.020;
+/// Draw remotes this far behind the present clock (027). ~3 ticks at 30 Hz.
+pub const REMOTE_INTERP_DELAY_SECS: f32 = 0.100;
 
-/// Server tick rate used to map `tick` → seconds (matches server `TICK_HZ`).
-const SERVER_TICK_HZ: f32 = 128.0;
+/// Server tick rate used to map `tick` → seconds (must match server `TICK_HZ`).
+const SERVER_TICK_HZ: f32 = 30.0;
 
-/// Samples kept per remote (~250 ms at 128 Hz).
+/// Samples kept per remote (~1 s at 30 Hz).
 const BUFFER_CAP: usize = 32;
 
 /// Character + loadout letters that decide which meshes a remote body needs.
@@ -280,14 +280,12 @@ mod tests {
     #[test]
     fn present_poses_use_delay() {
         let mut table = RemoteTable::new();
-        // Two ticks 1 apart → 1/128 s; 20 ms delay is > one tick so present
-        // sits near the older sample when only two exist close together.
+        // 10 ticks at 30 Hz ≈ 333 ms; 20 ms delay sits near the newer sample.
         table.apply_snapshot_others(100, vec![pose(1, 0.0, 0.0)]);
         table.apply_snapshot_others(110, vec![pose(1, 0.0, 10.0)]);
         let poses = table.present_poses();
         assert_eq!(poses.len(), 1);
-        // last_tick=110 → present at 110/128 - 0.02 ≈ 0.839; tick 100 = 0.781, 110 = 0.859
-        // u ≈ (0.839-0.781)/(0.859-0.781) ≈ 0.74 → z ≈ 7.4
+        // present = 110/30 - 0.02; u ≈ 0.94 → z ≈ 9.4
         let z = poses[0].position.z;
         assert!(z > 5.0 && z < 10.0, "z={z}");
     }
