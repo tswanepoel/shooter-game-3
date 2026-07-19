@@ -40,14 +40,14 @@ pub const FACE_OFFSET_HEAD_KIT: Vec3 = Vec3::new(0.0, 2.5, 3.5);
 
 /// Ground locomotion mode (016).
 ///
-/// `Stopping` is **experimental** stop-settle: position frozen, walk phase
-/// finishes the cycle in place, then [`Stand`]. Easy undo — see `apply_move`.
+/// `Stopping` is stop-settle: position frozen, walk phase advances in place to
+/// the nearest neutral, then [`Stand`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LocomotionMode {
     #[default]
     Stand,
     Walk,
-    /// Keys up; feet planted; walk clip plays out to cycle end (experimental).
+    /// Keys up; feet planted; walk clip settles to the nearest neutral.
     Stopping,
 }
 
@@ -162,10 +162,8 @@ impl SelfState {
     /// `forward` / `strafe` are digital axes (−1…1). Diagonals normalize. Speed is
     /// constant [`WALK_SPEED_M_S`]. Phase advances with distance over [`WALK_STRIDE_M`].
     ///
-    /// **Experimental stop-settle:** wish → 0 freezes position and advances phase in
-    /// place until the cycle ends, then stand. To undo: on zero wish set
-    /// `Stand` + `walk_phase = 0` only; drop [`LocomotionMode::Stopping`]; present
-    /// pose samples walk for `Walk` only.
+    /// Wish → 0 freezes position and advances phase in place to the nearest
+    /// neutral, then stand ([`LocomotionMode::Stopping`] while settling).
     pub fn apply_move(&mut self, dt: f32, forward: f32, strafe: f32) {
         self.wish_forward = forward.clamp(-1.0, 1.0);
         self.wish_strafe = strafe.clamp(-1.0, 1.0);
@@ -195,7 +193,7 @@ impl SelfState {
         self.sync_pose();
     }
 
-    /// Experimental: finish walk in place to the nearest neutral, then stand.
+    /// Finish walk in place to the nearest neutral, then stand.
     ///
     /// Kenney walk neutrals land at phase 0 and 0.5 (same rest). From the first
     /// half, 0.5 is the fastest back-out; from the second half, the cycle end.

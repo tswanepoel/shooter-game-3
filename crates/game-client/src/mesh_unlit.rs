@@ -1100,7 +1100,7 @@ pub enum KitPose {
 /// Pose character parts from sim drive. Returns kit-space worlds and arm-right.
 ///
 /// Walk clip applies for [`KitPose::Present`] while locomotion uses the walk clip
-/// (walk or experimental stop-settle).
+/// (walk or stop-settle).
 pub fn pose_character_kit(
     parts: &[CharPart],
     self_state: &game_sim::SelfState,
