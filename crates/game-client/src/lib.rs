@@ -694,8 +694,9 @@ impl ClientInner {
             self.view.set_mounted_eye(gpu.view.look_origin);
         }
 
-        // Remote peers: present pose only from snapshot table (024).
+        // Remote peers: frame-clock interp (027 / 028).
         if self.mp.joined() {
+            self.mp.remotes.advance(dt);
             self.remote_present
                 .apply_all(&self.renderer.queue, &self.mp.remotes);
         } else {

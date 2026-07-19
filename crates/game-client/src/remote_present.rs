@@ -82,7 +82,7 @@ impl RemotePresent {
         }
     }
 
-    /// Present-pose each ready remote from interpolated samples (027).
+    /// Present-pose each ready remote from clock-sampled poses (027 / 028).
     pub fn apply_all(&mut self, queue: &wgpu::Queue, table: &RemoteTable) {
         for pose in table.present_poses() {
             let Some(Slot::Ready { gpu, kit }) = self.slots.get_mut(&pose.id) else {
