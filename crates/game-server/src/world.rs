@@ -184,11 +184,11 @@ impl World {
     }
 
     pub fn snapshot_for(&self, viewer: PlayerId) -> Snapshot {
-        let (key, issued) = self
+        let (key, issued, ack_seq) = self
             .players
             .get(&viewer)
-            .map(|p| (p.key, p.key_issued_tick))
-            .unwrap_or((0, 0));
+            .map(|p| (p.key, p.key_issued_tick, p.last_seq))
+            .unwrap_or((0, 0, 0));
 
         let you = self
             .players
@@ -205,6 +205,7 @@ impl World {
             tick: self.tick,
             key,
             issued_tick: issued,
+            ack_seq,
             you,
             others,
         }
@@ -332,6 +333,22 @@ mod tests {
         assert!(pending.sprint_tap);
         assert_eq!(pending.weapon_cycle, 1);
         assert_eq!(pending.wish_forward, 1.0);
+    }
+
+    #[test]
+    fn snapshot_carries_ack_seq() {
+        let mut world = World::new();
+        let (id, key, issued) = join(&mut world);
+
+        let snap0 = world.snapshot_for(id);
+        assert_eq!(snap0.ack_seq, 0);
+
+        assert!(world.queue_input(id, base_input(7, key, issued)));
+        world.advance_tick(1.0 / TICK_HZ as f32);
+
+        let snap = world.snapshot_for(id);
+        assert_eq!(snap.ack_seq, 7);
+        assert!(snap.you.is_some());
     }
 
     #[test]

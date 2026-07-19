@@ -85,6 +85,7 @@ mod tests {
             tick: 3,
             key: 0xDEAD_BEEF,
             issued_tick: 0,
+            ack_seq: 12,
             you: None,
             others: vec![],
         });

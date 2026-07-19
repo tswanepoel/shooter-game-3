@@ -629,7 +629,7 @@ impl ClientInner {
         #[cfg(not(feature = "debug-tools"))]
         let was_fly = false;
 
-        // Solo: local sim owns self. Joined: send Input; pose from Snapshot (023).
+        // Solo: local sim owns self. Joined: predict body + send Input; Snapshot hard-corrects (026).
         if session_ok && !console_open && !was_fly {
             self.self_state.apply_look(
                 dt,
@@ -654,8 +654,7 @@ impl ClientInner {
                 }
                 self.self_state.apply_move(dt, fwd, strafe, sprint_tap);
             } else {
-                // Intent only — server applies; Snapshot overwrites pose.
-                self.mp.push_input(&mp::InputIntent {
+                let intent = mp::InputIntent {
                     wish_forward: fwd.clamp(-1.0, 1.0),
                     wish_strafe: strafe.clamp(-1.0, 1.0),
                     look_yaw: self.self_state.ocular_yaw,
@@ -663,7 +662,9 @@ impl ClientInner {
                     jump,
                     sprint_tap,
                     weapon_cycle,
-                });
+                };
+                self.mp
+                    .push_input_predict(&mut self.self_state, &intent, dt);
             }
         } else if solo {
             if !session_ok || console_open || was_fly {
@@ -671,14 +672,16 @@ impl ClientInner {
             }
             self.self_state.apply_move(dt, 0.0, 0.0, false);
         } else {
-            // Joined but no active input session: still hold look, zero wish.
+            // Joined but no active input session: hold look, zero wish, still predict.
             if !session_ok || console_open || was_fly {
                 self.move_input.clear_keys();
             }
-            self.mp.push_input(&mp::InputIntent::idle_look(
+            let intent = mp::InputIntent::idle_look(
                 self.self_state.ocular_yaw,
                 self.self_state.ocular_pitch,
-            ));
+            );
+            self.mp
+                .push_input_predict(&mut self.self_state, &intent, dt);
         }
 
         // Flush Input frames built this frame.

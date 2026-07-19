@@ -1,7 +1,7 @@
 //! World slice: snapshots and peer lifecycle.
 
 use crate::types::NetVec3;
-use crate::types::{PlayerId, SessionKey, Tick};
+use crate::types::{PlayerId, Seq, SessionKey, Tick};
 
 /// Locomotion mode on the wire (mirrors sim; independent type).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -49,6 +49,9 @@ pub struct Snapshot {
     pub tick: Tick,
     pub key: SessionKey,
     pub issued_tick: Tick,
+    /// Last `Input.seq` applied for the recipient into the sim that produced `you`.
+    /// `0` before any Input has been applied.
+    pub ack_seq: Seq,
     pub you: Option<NetPlayerPose>,
     pub others: Vec<NetPlayerPose>,
 }

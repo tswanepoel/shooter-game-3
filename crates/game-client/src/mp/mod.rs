@@ -1,8 +1,8 @@
 //! Client multiplayer mode (`mp/`).
 //!
-//! Solo load does not require this module to talk to a server. Join (023) opens
-//! transport, yields authority, and applies server poses to local self. Snapshot
-//! `others` fill [`RemoteTable`] (024); present meshes live outside `mp/`.
+//! Solo load does not require this module to talk to a server. Join opens
+//! transport; while joined the client predicts self (026), hard-corrects from
+//! Snapshot + `ack_seq`, and fills [`RemoteTable`] from `others` (024).
 
 mod inbound;
 mod outbound;
@@ -13,16 +13,21 @@ mod transport;
 
 pub use inbound::InboundQueue;
 pub use outbound::OutboundQueue;
-pub use pose::{apply_pose, apply_spawn, pose_to_state};
+pub use pose::{apply_spawn, pose_to_state, predict_intent, reconcile_predicted, PredictedSample};
 pub use remotes::{RemoteKitKey, RemoteTable};
 pub use session::{MpPhase, MpSession};
 pub use transport::{default_ws_url, MpTransport, TransportEvent};
 
+use std::collections::VecDeque;
+
 use game_net::{
-    ClientToServer, Hello, Input, NetPlayerPose, NetSpawn, ServerToClient, CONTENT_REV,
+    ClientToServer, Hello, Input, NetPlayerPose, NetSpawn, Seq, ServerToClient, CONTENT_REV,
     PROTOCOL_VERSION,
 };
 use game_sim::SelfState;
+
+/// Cap predicted Input history (enough for RTT at high send rate).
+const PREDICT_HISTORY_CAP: usize = 256;
 
 /// One frame of movement intent for C→S Input.
 #[derive(Debug, Clone, Copy)]
@@ -50,6 +55,12 @@ impl InputIntent {
     }
 }
 
+/// Pending authority sample for hard reconcile (026).
+struct PendingYou {
+    pose: NetPlayerPose,
+    ack_seq: Seq,
+}
+
 /// Client multiplayer facade. Default phase is solo (no socket).
 pub struct MpClient {
     pub session: MpSession,
@@ -59,8 +70,10 @@ pub struct MpClient {
     pub remotes: RemoteTable,
     /// Spawn from Welcome; applied once to local self.
     pending_spawn: Option<NetSpawn>,
-    /// Latest authoritative `you` pose from Snapshot.
-    pending_you: Option<NetPlayerPose>,
+    /// Latest authoritative `you` + ack for hard reconcile.
+    pending_you: Option<PendingYou>,
+    /// Sent Inputs not yet covered by `ack_seq`.
+    predict_history: VecDeque<PredictedSample>,
     input_seq: u32,
     last_reject: Option<String>,
 }
@@ -75,12 +88,13 @@ impl MpClient {
             remotes: RemoteTable::new(),
             pending_spawn: None,
             pending_you: None,
+            predict_history: VecDeque::new(),
             input_seq: 0,
             last_reject: None,
         }
     }
 
-    /// True when local self should advance from server snapshots.
+    /// True when multiplayer session is joined.
     pub fn joined(&self) -> bool {
         self.session.phase() == MpPhase::Joined
     }
@@ -91,6 +105,7 @@ impl MpClient {
         self.remotes.clear();
         self.pending_spawn = None;
         self.pending_you = None;
+        self.predict_history.clear();
         self.last_reject = None;
         self.input_seq = 0;
         self.session.begin_connect();
@@ -110,6 +125,7 @@ impl MpClient {
         self.remotes.clear();
         self.pending_spawn = None;
         self.pending_you = None;
+        self.predict_history.clear();
         while self.inbound.pop().is_some() {}
         while self.outbound.pop_discard() {}
     }
@@ -120,10 +136,6 @@ impl MpClient {
 
     pub fn take_pending_spawn(&mut self) -> Option<NetSpawn> {
         self.pending_spawn.take()
-    }
-
-    pub fn take_pending_you(&mut self) -> Option<NetPlayerPose> {
-        self.pending_you.take()
     }
 
     pub fn take_reject_message(&mut self) -> Option<String> {
@@ -144,13 +156,13 @@ impl MpClient {
         }
     }
 
-    /// Queue one Input from local intent (joined only).
-    pub fn push_input(&mut self, intent: &InputIntent) {
+    /// Queue one Input, record predict history, and advance local body (joined only).
+    pub fn push_input_predict(&mut self, state: &mut SelfState, intent: &InputIntent, dt: f32) {
         if !self.joined() {
             return;
         }
         self.input_seq = self.input_seq.wrapping_add(1);
-        self.outbound.push(ClientToServer::Input(Input {
+        let input = Input {
             seq: self.input_seq,
             echo_key: self.session.key,
             echo_issued_tick: self.session.key_issued_tick,
@@ -161,7 +173,16 @@ impl MpClient {
             jump: intent.jump,
             sprint_tap: intent.sprint_tap,
             weapon_cycle: intent.weapon_cycle,
-        }));
+        };
+        self.predict_history.push_back(PredictedSample {
+            input: input.clone(),
+            dt,
+        });
+        while self.predict_history.len() > PREDICT_HISTORY_CAP {
+            self.predict_history.pop_front();
+        }
+        self.outbound.push(ClientToServer::Input(input));
+        predict_intent(state, intent, dt);
     }
 
     /// Drain transport → inbound → session; flush outbound → socket.
@@ -182,6 +203,7 @@ impl MpClient {
                         self.session.leave_to_solo();
                         self.remotes.clear();
                         self.pending_you = None;
+                        self.predict_history.clear();
                     }
                 }
             }
@@ -207,6 +229,7 @@ impl MpClient {
                 self.session
                     .accept_welcome(w.you, w.tick, w.key, w.issued_tick, w.content_rev);
                 self.pending_spawn = Some(w.spawn);
+                self.predict_history.clear();
             }
             ServerToClient::Reject(r) => {
                 self.last_reject = Some(format!("mp: rejected ({:?})", r.reason));
@@ -218,7 +241,14 @@ impl MpClient {
                 }
                 self.session.apply_key(s.key, s.issued_tick, s.tick);
                 if let Some(you) = s.you {
-                    self.pending_you = Some(you);
+                    self.pending_you = Some(PendingYou {
+                        pose: you,
+                        ack_seq: s.ack_seq,
+                    });
+                } else {
+                    // Still drop acked samples if pose omitted.
+                    self.predict_history
+                        .retain(|sample| sample.input.seq > s.ack_seq);
                 }
                 self.remotes.clear();
                 for pose in s.others {
@@ -231,13 +261,14 @@ impl MpClient {
         }
     }
 
-    /// Apply any pending authority samples onto local self.
+    /// Apply spawn and hard-reconcile any pending Snapshot `you`.
     pub fn apply_authority_to_self(&mut self, state: &mut SelfState) {
         if let Some(spawn) = self.take_pending_spawn() {
             apply_spawn(state, &spawn);
+            self.predict_history.clear();
         }
-        if let Some(you) = self.take_pending_you() {
-            apply_pose(state, &you);
+        if let Some(PendingYou { pose, ack_seq }) = self.pending_you.take() {
+            reconcile_predicted(state, &pose, ack_seq, &mut self.predict_history);
         }
     }
 }
