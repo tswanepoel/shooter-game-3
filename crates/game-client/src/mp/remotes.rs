@@ -1,12 +1,14 @@
-//! Remote peer pose buffers, present clock, and sampling (024 / 027 / 028).
+//! Remote peer pose buffers, present clock, and sampling (024 / 027 / 028 / 029).
 
 use std::collections::{HashMap, VecDeque};
 use std::f32::consts::{PI, TAU};
 
 use game_net::{NetPlayerPose, NetVec3, PlayerId, Tick, TICK_HZ};
 
-/// Draw remotes this far behind the present clock (027). ~3 ticks at 30 Hz.
-pub const REMOTE_INTERP_DELAY_SECS: f32 = 0.100;
+use super::lag::REMOTE_INTERP_DELAY_DEFAULT_SECS;
+
+/// Draw remotes this far behind the present clock before RTT samples (027 / 029 default).
+pub const REMOTE_INTERP_DELAY_SECS: f32 = REMOTE_INTERP_DELAY_DEFAULT_SECS;
 
 /// Samples kept per remote (~1 s at [`TICK_HZ`]).
 const BUFFER_CAP: usize = 32;
@@ -99,13 +101,15 @@ impl RemoteTrack {
     }
 }
 
-/// Buffered remote poses; present via delayed interpolation on a frame clock (028).
+/// Buffered remote poses; present via delayed interpolation on a frame clock (028 / 029).
 pub struct RemoteTable {
     tracks: HashMap<PlayerId, RemoteTrack>,
     /// Estimated server time (seconds). Advances every frame; pulled up on Snapshot.
     server_clock: f32,
     /// True after the first Snapshot so we do not free-run from 0.
     clock_live: bool,
+    /// How far behind `server_clock` remotes are drawn (029; default 100 ms).
+    interp_delay_secs: f32,
 }
 
 impl RemoteTable {
@@ -114,6 +118,7 @@ impl RemoteTable {
             tracks: HashMap::new(),
             server_clock: 0.0,
             clock_live: false,
+            interp_delay_secs: REMOTE_INTERP_DELAY_SECS,
         }
     }
 
@@ -121,6 +126,16 @@ impl RemoteTable {
         self.tracks.clear();
         self.server_clock = 0.0;
         self.clock_live = false;
+        self.interp_delay_secs = REMOTE_INTERP_DELAY_SECS;
+    }
+
+    /// Set remote present delay (seconds). Used by the lag estimator (029).
+    pub fn set_interp_delay_secs(&mut self, delay_secs: f32) {
+        self.interp_delay_secs = delay_secs.max(0.0);
+    }
+
+    pub fn interp_delay_secs(&self) -> f32 {
+        self.interp_delay_secs
     }
 
     /// Append Snapshot `others` at server `tick`; pull present clock up.
@@ -176,7 +191,7 @@ impl RemoteTable {
         if !self.clock_live {
             return Vec::new();
         }
-        let present_t = self.server_clock - REMOTE_INTERP_DELAY_SECS;
+        let present_t = self.server_clock - self.interp_delay_secs;
         self.tracks
             .values()
             .filter_map(|t| t.sample_at(present_t))
@@ -306,6 +321,22 @@ mod tests {
         assert_eq!(poses.len(), 1);
         let z = poses[0].position.z;
         assert!(z > 5.0 && z < 10.0, "z={z}");
+    }
+
+    #[test]
+    fn adaptive_delay_moves_present_sample() {
+        let mut table = RemoteTable::new();
+        table.apply_snapshot_others(100, vec![pose(1, 0.0, 0.0)]);
+        table.apply_snapshot_others(110, vec![pose(1, 0.0, 10.0)]);
+        table.set_interp_delay_secs(0.080);
+        let z_tight = table.present_poses()[0].position.z;
+        table.set_interp_delay_secs(0.200);
+        let z_loose = table.present_poses()[0].position.z;
+        // Larger delay → further in the past → smaller z on 0→10 segment.
+        assert!(
+            z_loose < z_tight,
+            "z_loose={z_loose} should be behind z_tight={z_tight}"
+        );
     }
 
     #[test]

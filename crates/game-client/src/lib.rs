@@ -694,7 +694,7 @@ impl ClientInner {
             self.view.set_mounted_eye(gpu.view.look_origin);
         }
 
-        // Remote peers: frame-clock interp (027 / 028).
+        // Remote peers: frame-clock interp + adaptive delay (027 / 028 / 029).
         if self.mp.joined() {
             self.mp.remotes.advance(dt);
             self.remote_present

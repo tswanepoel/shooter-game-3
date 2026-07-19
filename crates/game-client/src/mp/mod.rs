@@ -2,9 +2,11 @@
 //!
 //! Solo load does not require this module to talk to a server. Join opens
 //! transport; while joined the client predicts self (026), hard-corrects from
-//! Snapshot + `ack_seq`, and buffers `others` with a frame present clock (027 / 028).
+//! Snapshot + `ack_seq`, buffers `others` with a frame present clock (027 / 028),
+//! and adapts remote present delay from measured RTT (029).
 
 mod inbound;
+mod lag;
 mod outbound;
 mod pose;
 mod remotes;
@@ -25,6 +27,8 @@ use game_net::{
     PROTOCOL_VERSION,
 };
 use game_sim::SelfState;
+
+use lag::LagEstimator;
 
 /// Cap predicted Input history (enough for RTT at high send rate).
 const PREDICT_HISTORY_CAP: usize = 256;
@@ -68,6 +72,8 @@ pub struct MpClient {
     pub inbound: InboundQueue,
     pub outbound: OutboundQueue,
     pub remotes: RemoteTable,
+    /// RTT → adaptive remote interp delay (029).
+    lag: LagEstimator,
     /// Spawn from Welcome; applied once to local self.
     pending_spawn: Option<NetSpawn>,
     /// Latest authoritative `you` + ack for hard reconcile.
@@ -86,12 +92,18 @@ impl MpClient {
             inbound: InboundQueue::new(),
             outbound: OutboundQueue::new(),
             remotes: RemoteTable::new(),
+            lag: LagEstimator::new(),
             pending_spawn: None,
             pending_you: None,
             predict_history: VecDeque::new(),
             input_seq: 0,
             last_reject: None,
         }
+    }
+
+    fn reset_lag(&mut self) {
+        self.lag.clear();
+        self.remotes.set_interp_delay_secs(self.lag.delay_secs());
     }
 
     /// True when multiplayer session is joined.
@@ -103,6 +115,7 @@ impl MpClient {
     pub fn begin_join(&mut self, url: &str) -> Result<(), wasm_bindgen::JsValue> {
         self.leave_soft();
         self.remotes.clear();
+        self.reset_lag();
         self.pending_spawn = None;
         self.pending_you = None;
         self.predict_history.clear();
@@ -123,6 +136,7 @@ impl MpClient {
         self.leave_soft();
         self.session.leave_to_solo();
         self.remotes.clear();
+        self.reset_lag();
         self.pending_spawn = None;
         self.pending_you = None;
         self.predict_history.clear();
@@ -146,13 +160,22 @@ impl MpClient {
         match self.session.phase() {
             MpPhase::Solo => "mp: solo".into(),
             MpPhase::Connecting => "mp: connecting…".into(),
-            MpPhase::Joined => format!(
-                "mp: joined id={} tick={} key={:#x} remotes={}",
-                self.session.you.unwrap_or(0),
-                self.session.server_tick,
-                self.session.key,
-                self.remotes.count()
-            ),
+            MpPhase::Joined => {
+                let delay_ms = (self.remotes.interp_delay_secs() * 1000.0).round() as i32;
+                let rtt = match self.lag.rtt_ema() {
+                    Some(s) => format!(" rtt={:.0}ms", s * 1000.0),
+                    None => String::new(),
+                };
+                format!(
+                    "mp: joined id={} tick={} key={:#x} remotes={} delay={}ms{}",
+                    self.session.you.unwrap_or(0),
+                    self.session.server_tick,
+                    self.session.key,
+                    self.remotes.count(),
+                    delay_ms,
+                    rtt
+                )
+            }
         }
     }
 
@@ -181,6 +204,7 @@ impl MpClient {
         while self.predict_history.len() > PREDICT_HISTORY_CAP {
             self.predict_history.pop_front();
         }
+        self.lag.note_input_sent(input.seq, lag::client_now_secs());
         self.outbound.push(ClientToServer::Input(input));
         predict_intent(state, intent, dt);
     }
@@ -202,6 +226,7 @@ impl MpClient {
                     if self.session.phase() != MpPhase::Solo {
                         self.session.leave_to_solo();
                         self.remotes.clear();
+                        self.reset_lag();
                         self.pending_you = None;
                         self.predict_history.clear();
                     }
@@ -240,6 +265,8 @@ impl MpClient {
                     return;
                 }
                 self.session.apply_key(s.key, s.issued_tick, s.tick);
+                self.lag.on_ack(s.ack_seq, lag::client_now_secs());
+                self.remotes.set_interp_delay_secs(self.lag.delay_secs());
                 if let Some(you) = s.you {
                     self.pending_you = Some(PendingYou {
                         pose: you,
