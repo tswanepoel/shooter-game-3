@@ -70,7 +70,7 @@ A WebGPU-powered shooter game built with Rust and Vite.
    ```bash
    cargo run -p game-server
    ```
-   Override bind with `GAME_SERVER_BIND` (e.g. `0.0.0.0:9090`). Spec: [022](docs/features/022-mp-backbone.md). Join/remotes land in later features.
+   Override bind with `GAME_SERVER_BIND` (e.g. `0.0.0.0:9090`). Specs: [022](docs/features/022-mp-backbone.md), [023](docs/features/023-mp-join-authority.md). In the dev console (`` ` ``): `mp join` / `mp leave` / `mp status`.
 
 Running `npm run dev` cooks art packs, compiles the Rust WASM module, then starts the Vite dev server with hot-reload. See [Development Workflow](#development-workflow) for details.
 

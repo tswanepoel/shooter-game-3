@@ -1,7 +1,5 @@
 //! egui console shell — thin transport over the registry.
 
-use super::DebugRegistry;
-
 const MAX_LOG_LINES: usize = 200;
 const CONSOLE_FONT_SIZE: f32 = 12.0;
 
@@ -12,6 +10,8 @@ pub struct DebugShell {
     log: Vec<String>,
     history: Vec<String>,
     history_cursor: Option<usize>,
+    /// Console line submitted this frame (run by ClientInner after egui).
+    pending_command: Option<String>,
     egui_ctx: egui::Context,
     egui_renderer: egui_wgpu::Renderer,
 }
@@ -46,9 +46,14 @@ impl DebugShell {
             log: Vec::new(),
             history: Vec::new(),
             history_cursor: None,
+            pending_command: None,
             egui_ctx,
             egui_renderer,
         }
+    }
+
+    pub fn take_pending_command(&mut self) -> Option<String> {
+        self.pending_command.take()
     }
 
     pub fn push_log(&mut self, line: impl Into<String>) {
@@ -62,9 +67,9 @@ impl DebugShell {
     }
 
     /// Run egui for this frame when open; returns paint data for the renderer.
+    /// Submitted lines land in [`take_pending_command`] for the host to run.
     pub fn run_frame(
         &mut self,
-        registry: &mut DebugRegistry,
         raw_input: egui::RawInput,
         pixels_per_point: f32,
     ) -> Option<egui::FullOutput> {
@@ -165,10 +170,7 @@ impl DebugShell {
             self.history.push(trimmed.clone());
             self.history_cursor = None;
             self.input.clear();
-            let out = registry.execute(&trimmed);
-            if !out.is_empty() {
-                self.push_log(out);
-            }
+            self.pending_command = Some(trimmed);
             self.focus_input = true;
         }
 

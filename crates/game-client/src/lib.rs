@@ -8,8 +8,6 @@ mod input;
 #[cfg(feature = "debug-tools")]
 mod lineup;
 mod mesh_unlit;
-// Join/remotes/session apply surface for 023–024; backbone keeps the module live.
-#[allow(dead_code)]
 mod mp;
 mod pack;
 mod reticle;
@@ -544,6 +542,40 @@ impl ClientInner {
         self.pixels_per_point
     }
 
+    #[cfg(feature = "debug-tools")]
+    fn drain_debug_host_requests(&mut self) {
+        use debug::DebugHostRequest;
+        let reqs = self.debug.take_host_requests();
+        for req in reqs {
+            match req {
+                DebugHostRequest::Screenshot => {
+                    // Flag already set in execute; capture runs later in the frame.
+                }
+                DebugHostRequest::MpJoin => match self.mp.begin_join_default() {
+                    Ok(()) => {
+                        let url = mp::default_ws_url().unwrap_or_else(|_| "ws://…".into());
+                        self.debug.shell.push_log(format!("mp: connecting {url}"));
+                    }
+                    Err(e) => {
+                        self.debug
+                            .shell
+                            .push_log(format!("mp: join failed ({e:?})"));
+                    }
+                },
+                DebugHostRequest::MpLeave => {
+                    self.mp.leave();
+                    self.debug.shell.push_log("mp: left (solo)");
+                }
+                DebugHostRequest::MpStatus => {
+                    self.debug.shell.push_log(self.mp.status_line());
+                }
+            }
+        }
+        if let Some(msg) = self.mp.take_reject_message() {
+            self.debug.shell.push_log(msg);
+        }
+    }
+
     fn render_frame(&mut self) -> Result<(), JsValue> {
         let (width, height, ppp) = canvas_buffer_size(&self.canvas, self.renderer.max_texture_dim);
         self.pixels_per_point = ppp;
@@ -564,8 +596,11 @@ impl ClientInner {
         };
         self.last_frame_secs = now;
 
-        // MP transport only (022). Join / authority apply is 023.
         self.mp.poll_transport();
+        self.mp.apply_authority_to_self(&mut self.self_state);
+
+        #[cfg(feature = "debug-tools")]
+        self.drain_debug_host_requests();
 
         let look = self.session.take_look_px();
         let session_ok = self.session.is_active();
@@ -584,8 +619,8 @@ impl ClientInner {
         #[cfg(not(feature = "debug-tools"))]
         let was_fly = false;
 
-        // Solo: local sim owns self. Joined (023): server snapshots own pose.
-        if solo && session_ok && !console_open && !was_fly {
+        // Solo: local sim owns self. Joined: send Input; pose from Snapshot (023).
+        if session_ok && !console_open && !was_fly {
             self.self_state.apply_look(
                 dt,
                 -look.x * LOOK_SENS_RAD_PER_PX,
@@ -593,22 +628,52 @@ impl ClientInner {
             );
             let (fwd, strafe) = self.move_input.axes();
             let sprint_tap = self.move_input.take_sprint();
-            self.self_state.wish_forward = fwd.clamp(-1.0, 1.0);
-            self.self_state.wish_strafe = strafe.clamp(-1.0, 1.0);
-            if self.move_input.take_jump() {
-                self.self_state.try_jump();
-            }
+            let jump = self.move_input.take_jump();
             let weapon_steps = self.move_input.take_weapon_cycle();
             let wdir = weapon_steps.signum();
-            for _ in 0..weapon_steps.unsigned_abs() {
-                self.self_state.cycle_weapon(wdir);
+            let weapon_cycle = if weapon_steps == 0 { 0i8 } else { wdir };
+
+            if solo {
+                self.self_state.wish_forward = fwd.clamp(-1.0, 1.0);
+                self.self_state.wish_strafe = strafe.clamp(-1.0, 1.0);
+                if jump {
+                    self.self_state.try_jump();
+                }
+                for _ in 0..weapon_steps.unsigned_abs() {
+                    self.self_state.cycle_weapon(wdir);
+                }
+                self.self_state.apply_move(dt, fwd, strafe, sprint_tap);
+            } else {
+                // Intent only — server applies; Snapshot overwrites pose.
+                self.mp.push_input(&mp::InputIntent {
+                    wish_forward: fwd.clamp(-1.0, 1.0),
+                    wish_strafe: strafe.clamp(-1.0, 1.0),
+                    look_yaw: self.self_state.ocular_yaw,
+                    look_pitch: self.self_state.ocular_pitch,
+                    jump,
+                    sprint_tap,
+                    weapon_cycle,
+                });
             }
-            self.self_state.apply_move(dt, fwd, strafe, sprint_tap);
         } else if solo {
             if !session_ok || console_open || was_fly {
                 self.move_input.clear_keys();
             }
             self.self_state.apply_move(dt, 0.0, 0.0, false);
+        } else {
+            // Joined but no active input session: still hold look, zero wish.
+            if !session_ok || console_open || was_fly {
+                self.move_input.clear_keys();
+            }
+            self.mp.push_input(&mp::InputIntent::idle_look(
+                self.self_state.ocular_yaw,
+                self.self_state.ocular_pitch,
+            ));
+        }
+
+        // Flush Input frames built this frame.
+        if self.mp.joined() {
+            self.mp.poll_transport();
         }
 
         if let SelfPresentState::Ready(gpu) = &mut self.self_present {
@@ -711,12 +776,12 @@ impl ClientInner {
             let screen_h = height as f32 / ppp;
             let raw = self.debug.take_raw_input(screen_w, screen_h, time);
 
-            let full = {
-                let DebugTools {
-                    registry, shell, ..
-                } = &mut self.debug;
-                shell.run_frame(registry, raw, ppp)
-            };
+            let full = self.debug.shell.run_frame(raw, ppp);
+            if let Some(cmd) = self.debug.shell.take_pending_command() {
+                let _ = self.debug.execute(&cmd);
+            }
+            // mp join/leave/status after console execute
+            self.drain_debug_host_requests();
 
             if let Some(full) = full {
                 let mut encoder =

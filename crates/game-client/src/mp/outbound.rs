@@ -28,14 +28,6 @@ impl OutboundQueue {
         Ok(out)
     }
 
-    pub fn len(&self) -> usize {
-        self.pending.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.pending.is_empty()
-    }
-
     pub fn pop_discard(&mut self) -> bool {
         self.pending.pop_front().is_some()
     }

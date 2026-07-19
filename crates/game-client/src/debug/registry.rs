@@ -74,10 +74,20 @@ impl DebugRegistry {
                 self.set_bool("cam.fly", false);
                 "cam.fly = 0 (remount)".into()
             }
-            // Handled by DebugTools (needs canvas); listed here for help/discovery.
+            // Handled by DebugTools / ClientInner (host resources).
             "screenshot" | "shot" => "__REQUEST_SCREENSHOT__".into(),
+            "mp" => self.cmd_mp(&args),
             name if self.cvars.contains_key(name) => self.cmd_cvar(name, &args),
             _ => format!("unknown: '{head}'. type 'help'."),
+        }
+    }
+
+    fn cmd_mp(&self, args: &[&str]) -> String {
+        match args.first().copied() {
+            None | Some("status") => "__REQUEST_MP_STATUS__".into(),
+            Some("join") => "__REQUEST_MP_JOIN__".into(),
+            Some("leave") => "__REQUEST_MP_LEAVE__".into(),
+            Some(other) => format!("usage: mp [join|leave|status] (unknown '{other}')"),
         }
     }
 
@@ -90,6 +100,7 @@ impl DebugRegistry {
             "  lineup [on|off|toggle]  blaster lineup (armed characters)".into(),
             "  remount           leave flycam, restore self view".into(),
             "  screenshot|shot   capture frame (F9)".into(),
+            "  mp join|leave|status  multiplayer session (023)".into(),
             "cvars (get: name · set: name <value>):".into(),
         ];
         for (name, cvar) in &self.cvars {
@@ -192,7 +203,11 @@ mod tests {
         assert_eq!(r.get_bool("draw.grid"), Some(false));
         assert!(r.execute("help").contains("draw.grid"));
         assert!(r.execute("help").contains("screenshot"));
+        assert!(r.execute("help").contains("mp join"));
         assert_eq!(r.execute("screenshot"), "__REQUEST_SCREENSHOT__");
+        assert_eq!(r.execute("mp join"), "__REQUEST_MP_JOIN__");
+        assert_eq!(r.execute("mp leave"), "__REQUEST_MP_LEAVE__");
+        assert_eq!(r.execute("mp"), "__REQUEST_MP_STATUS__");
         assert!(r.execute("draw.grid 1").contains("1"));
         assert_eq!(r.get_bool("draw.grid"), Some(true));
     }

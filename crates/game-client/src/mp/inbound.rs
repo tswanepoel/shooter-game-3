@@ -39,14 +39,6 @@ impl InboundQueue {
     pub fn pop(&mut self) -> Option<ServerToClient> {
         self.pending.pop_front()
     }
-
-    pub fn len(&self) -> usize {
-        self.pending.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.pending.is_empty()
-    }
 }
 
 impl Default for InboundQueue {

@@ -1,6 +1,6 @@
 //! Join lifecycle and session key storage (client obeys server values).
 
-use game_net::{PlayerId, SessionKey, Tick, CONTENT_REV, PROTOCOL_VERSION};
+use game_net::{PlayerId, SessionKey, Tick, CONTENT_REV};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MpPhase {
@@ -18,7 +18,6 @@ pub struct MpSession {
     pub key: SessionKey,
     pub key_issued_tick: Tick,
     pub content_rev: u32,
-    pub protocol: u16,
 }
 
 impl MpSession {
@@ -30,7 +29,6 @@ impl MpSession {
             key: 0,
             key_issued_tick: 0,
             content_rev: CONTENT_REV,
-            protocol: PROTOCOL_VERSION,
         }
     }
 

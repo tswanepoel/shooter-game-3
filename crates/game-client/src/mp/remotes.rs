@@ -27,20 +27,8 @@ impl RemoteTable {
         self.poses.remove(&id);
     }
 
-    pub fn get(&self, id: PlayerId) -> Option<&NetPlayerPose> {
-        self.poses.get(&id)
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = (&PlayerId, &NetPlayerPose)> {
-        self.poses.iter()
-    }
-
-    pub fn len(&self) -> usize {
+    pub fn count(&self) -> usize {
         self.poses.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.poses.is_empty()
     }
 }
 

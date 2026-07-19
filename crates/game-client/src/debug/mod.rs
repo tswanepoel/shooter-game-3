@@ -11,6 +11,15 @@ pub use host::DebugHost;
 pub use registry::DebugRegistry;
 pub use shell::{DebugShell, OverlayGpu};
 
+/// Side effects that need `ClientInner` (mp, canvas).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DebugHostRequest {
+    Screenshot,
+    MpJoin,
+    MpLeave,
+    MpStatus,
+}
+
 /// Full debug stack owned by the client when `debug-tools` is enabled.
 pub struct DebugTools {
     pub registry: DebugRegistry,
@@ -19,6 +28,7 @@ pub struct DebugTools {
     modifiers: egui::Modifiers,
     toggle_requested: bool,
     screenshot_requested: bool,
+    host_requests: Vec<DebugHostRequest>,
 }
 
 impl DebugTools {
@@ -32,21 +42,41 @@ impl DebugTools {
             modifiers: egui::Modifiers::default(),
             toggle_requested: false,
             screenshot_requested: false,
+            host_requests: Vec::new(),
         }
     }
 
     pub fn execute(&mut self, line: &str) -> String {
         let out = self.registry.execute(line);
-        if out == "__REQUEST_SCREENSHOT__" {
-            self.request_screenshot();
-            let msg = "screenshot queued".to_string();
+        let msg = match out.as_str() {
+            "__REQUEST_SCREENSHOT__" => {
+                self.host_requests.push(DebugHostRequest::Screenshot);
+                self.request_screenshot();
+                "screenshot queued".to_string()
+            }
+            "__REQUEST_MP_JOIN__" => {
+                self.host_requests.push(DebugHostRequest::MpJoin);
+                "mp: join requested".to_string()
+            }
+            "__REQUEST_MP_LEAVE__" => {
+                self.host_requests.push(DebugHostRequest::MpLeave);
+                "mp: leave requested".to_string()
+            }
+            "__REQUEST_MP_STATUS__" => {
+                self.host_requests.push(DebugHostRequest::MpStatus);
+                String::new() // ClientInner logs status
+            }
+            other if !other.is_empty() => other.to_string(),
+            _ => String::new(),
+        };
+        if !msg.is_empty() {
             self.shell.push_log(msg.clone());
-            return msg;
         }
-        if !out.is_empty() {
-            self.shell.push_log(out.clone());
-        }
-        out
+        msg
+    }
+
+    pub fn take_host_requests(&mut self) -> Vec<DebugHostRequest> {
+        std::mem::take(&mut self.host_requests)
     }
 
     pub fn request_screenshot(&mut self) {
