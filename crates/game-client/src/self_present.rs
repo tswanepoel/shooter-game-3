@@ -1,6 +1,7 @@
-//! Self body + blaster presentation (013/015/016/017).
+//! Self body + blaster presentation (013/015/016/017/021).
 //!
 //! Present pose draws the body (walk included). Look pose mounts the view (017).
+//! Loadout may hold primary + secondary meshes; only the active letter is shown.
 
 use game_sim::{SelfState, FACE_OFFSET_HEAD_KIT};
 use glam::{Mat4, Vec3};
@@ -17,6 +18,13 @@ pub struct MountedView {
     pub reticle_world: Option<Vec3>,
 }
 
+struct EquippedBlaster {
+    letter: u8,
+    letter_index: usize,
+    local: Vec<Vec<MeshVertex>>,
+    batch: usize,
+}
+
 pub struct SelfGpu {
     mesh: UnlitMeshGpu,
     parts: Vec<CharPart>,
@@ -26,10 +34,8 @@ pub struct SelfGpu {
     sprint_clip: AnimClip,
     /// part index → primitive index in character batch (0), if meshful.
     part_prim: Vec<Option<usize>>,
-    blaster_local: Vec<Vec<MeshVertex>>,
-    blaster_batch: usize,
+    blasters: Vec<EquippedBlaster>,
     min_y: f32,
-    letter_index: usize,
     pub view: MountedView,
 }
 
@@ -46,20 +52,12 @@ impl SelfGpu {
         let gpu = layout.upload_ctx(device, queue);
 
         let ch = self_state.character as char;
-        let bl = self_state.blaster as char;
-        let bi = mesh_unlit::letter_index(self_state.blaster).map_err(|e| JsValue::from_str(&e))?;
 
         let char_glb = pack
             .get(&format!("character-{ch}.mesh"))
             .map_err(|e| JsValue::from_str(&e))?;
         let char_png = pack
             .get(&format!("character-{ch}.albedo"))
-            .map_err(|e| JsValue::from_str(&e))?;
-        let blaster_glb = pack
-            .get(&format!("blaster-{bl}.mesh"))
-            .map_err(|e| JsValue::from_str(&e))?;
-        let colormap = pack
-            .get("blaster.colormap")
             .map_err(|e| JsValue::from_str(&e))?;
 
         let (parts, min_y) =
@@ -68,8 +66,6 @@ impl SelfGpu {
             mesh_unlit::extract_clip(char_glb, "walk").map_err(|e| JsValue::from_str(&e))?;
         let sprint_clip =
             mesh_unlit::extract_clip(char_glb, "sprint").map_err(|e| JsValue::from_str(&e))?;
-        let blaster_prims =
-            mesh_unlit::extract_primitives(blaster_glb).map_err(|e| JsValue::from_str(&e))?;
 
         let loco = if self_state.locomotion.is_sprint() {
             &sprint_clip
@@ -95,40 +91,80 @@ impl SelfGpu {
             char_cpu.push((verts, part.indices.clone(), part.base_color));
         }
 
-        let aim_pitch = if self_state.locomotion.is_sprint() {
-            0.0
-        } else {
-            self_state.torso_pitch + self_state.shoulder_pitch
-        };
-        let blaster_root = mesh_unlit::held_blaster_root(k2w, arm_kit, bi, aim_pitch);
-        let mut blaster_local = Vec::new();
-        let mut blaster_cpu = Vec::new();
-        for (verts, indices, color) in blaster_prims {
-            blaster_local.push(verts.clone());
-            let mut world_verts = verts;
-            for v in &mut world_verts {
-                mesh_unlit::transform_vertex(v, blaster_root);
-            }
-            blaster_cpu.push((world_verts, indices, color));
-        }
-
         let char_batch =
             mesh_unlit::upload_batch(&gpu, char_png, char_cpu, Mat4::IDENTITY, "self-character")
                 .map_err(|e| JsValue::from_str(&e))?;
-        let blaster_batch =
-            mesh_unlit::upload_batch(&gpu, colormap, blaster_cpu, Mat4::IDENTITY, "self-blaster")
+
+        let mut batches = vec![char_batch];
+        let mut blasters = Vec::new();
+        let mut seen = Vec::new();
+        for letter in [self_state.primary, self_state.secondary]
+            .into_iter()
+            .flatten()
+        {
+            if seen.contains(&letter) {
+                continue;
+            }
+            seen.push(letter);
+            let bi = mesh_unlit::letter_index(letter).map_err(|e| JsValue::from_str(&e))?;
+            let bl = letter as char;
+            let blaster_glb = pack
+                .get(&format!("blaster-{bl}.mesh"))
                 .map_err(|e| JsValue::from_str(&e))?;
+            let colormap = pack
+                .get("blaster.colormap")
+                .map_err(|e| JsValue::from_str(&e))?;
+            let blaster_prims =
+                mesh_unlit::extract_primitives(blaster_glb).map_err(|e| JsValue::from_str(&e))?;
+
+            let show = self_state.active_blaster() == Some(letter);
+            let aim_pitch = if show && !self_state.locomotion.is_sprint() {
+                self_state.torso_pitch + self_state.shoulder_pitch
+            } else {
+                0.0
+            };
+            let root = if show {
+                mesh_unlit::held_blaster_root(k2w, arm_kit, bi, aim_pitch)
+            } else {
+                Mat4::from_scale(Vec3::ZERO)
+            };
+
+            let mut local = Vec::new();
+            let mut cpu = Vec::new();
+            for (verts, indices, color) in blaster_prims {
+                local.push(verts.clone());
+                let mut world_verts = verts;
+                for v in &mut world_verts {
+                    mesh_unlit::transform_vertex(v, root);
+                }
+                cpu.push((world_verts, indices, color));
+            }
+            let batch_idx = batches.len();
+            let batch = mesh_unlit::upload_batch(
+                &gpu,
+                colormap,
+                cpu,
+                Mat4::IDENTITY,
+                &format!("self-blaster-{bl}"),
+            )
+            .map_err(|e| JsValue::from_str(&e))?;
+            batches.push(batch);
+            blasters.push(EquippedBlaster {
+                letter,
+                letter_index: bi,
+                local,
+                batch: batch_idx,
+            });
+        }
 
         let mut s = Self {
-            mesh: layout.finish(vec![char_batch, blaster_batch]),
+            mesh: layout.finish(batches),
             parts,
             walk_clip,
             sprint_clip,
             part_prim,
-            blaster_local,
-            blaster_batch: 1,
+            blasters,
             min_y,
-            letter_index: bi,
             view: MountedView {
                 look_origin: Vec3::ZERO,
                 reticle_world: None,
@@ -162,20 +198,25 @@ impl SelfGpu {
             self.mesh.write_prim_verts(queue, 0, prim, &verts);
         }
 
-        let aim_pitch = if self_state.locomotion.is_sprint() {
-            0.0
-        } else {
+        let active = self_state.active_blaster();
+        let aim_pitch = if self_state.is_armed() && !self_state.locomotion.is_sprint() {
             self_state.torso_pitch + self_state.shoulder_pitch
+        } else {
+            0.0
         };
-        let blaster_root =
-            mesh_unlit::held_blaster_root(k2w, arm_kit, self.letter_index, aim_pitch);
-        for (pi, local) in self.blaster_local.iter().enumerate() {
-            let mut verts = local.clone();
-            for v in &mut verts {
-                mesh_unlit::transform_vertex(v, blaster_root);
+        for b in &self.blasters {
+            let root = if active == Some(b.letter) {
+                mesh_unlit::held_blaster_root(k2w, arm_kit, b.letter_index, aim_pitch)
+            } else {
+                Mat4::from_scale(Vec3::ZERO)
+            };
+            for (pi, local) in b.local.iter().enumerate() {
+                let mut verts = local.clone();
+                for v in &mut verts {
+                    mesh_unlit::transform_vertex(v, root);
+                }
+                self.mesh.write_prim_verts(queue, b.batch, pi, &verts);
             }
-            self.mesh
-                .write_prim_verts(queue, self.blaster_batch, pi, &verts);
         }
 
         // Look pose: mount and aim (locomotion held at stand).

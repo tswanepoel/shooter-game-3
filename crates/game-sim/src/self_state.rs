@@ -91,6 +91,43 @@ impl LocomotionMode {
     }
 }
 
+/// Blaster class (021). Secondary may only hold launcher or pistol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WeaponClass {
+    Launcher,
+    Pistol,
+    Smg,
+    AssaultRifle,
+    SniperRifle,
+    Shotgun,
+}
+
+impl WeaponClass {
+    pub fn from_letter(letter: u8) -> Option<Self> {
+        Some(match letter {
+            b'a' => Self::Launcher,
+            b'b' | b'i' => Self::Pistol,
+            b'c' | b'g' | b'h' | b'l' | b'm' | b'p' => Self::Smg,
+            b'd' | b'n' | b'q' | b'r' => Self::AssaultRifle,
+            b'e' | b'f' => Self::SniperRifle,
+            b'j' | b'k' | b'o' => Self::Shotgun,
+            _ => return None,
+        })
+    }
+
+    pub fn allowed_in_secondary(self) -> bool {
+        matches!(self, Self::Launcher | Self::Pistol)
+    }
+}
+
+/// Which loadout slot is in hand (021). Unarmed = active slot empty.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ActiveWeapon {
+    #[default]
+    Primary,
+    Secondary,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelfState {
     pub position: Vec3,
@@ -99,9 +136,13 @@ pub struct SelfState {
     /// Look elevation (radians). Positive looks up. Clamped to ±90°.
     pub ocular_pitch: f32,
     pub character: u8,
-    pub blaster: u8,
+    /// Primary slot blaster letter (`a`…`r`), or empty (021).
+    pub primary: Option<u8>,
+    /// Secondary slot blaster letter; launcher/pistol only when set (021).
+    pub secondary: Option<u8>,
+    /// Which hand is active: a filled slot or unarmed (021).
+    pub active: ActiveWeapon,
     pub alive: bool,
-    pub armed: bool,
 
     /// Look-relative forward wish (−1…1). Positive is W.
     pub wish_forward: f32,
@@ -142,9 +183,10 @@ impl SelfState {
             ocular_yaw: 0.0,
             ocular_pitch: 0.0,
             character: b'a',
-            blaster: b'p',
+            primary: Some(b'p'),
+            secondary: Some(b'b'),
+            active: ActiveWeapon::Primary,
             alive: true,
-            armed: true,
             wish_forward: 0.0,
             wish_strafe: 0.0,
             locomotion: LocomotionMode::Stand,
@@ -160,6 +202,51 @@ impl SelfState {
             head_yaw: 0.0,
             head_pitch: 0.0,
         }
+    }
+
+    /// Letter of the active slot, if that slot is filled.
+    pub fn active_blaster(&self) -> Option<u8> {
+        match self.active {
+            ActiveWeapon::Primary => self.primary,
+            ActiveWeapon::Secondary => self.secondary,
+        }
+    }
+
+    /// True when the active slot holds a blaster.
+    pub fn is_armed(&self) -> bool {
+        self.active_blaster().is_some()
+    }
+
+    /// Set primary (any class, or clear). Invalid letter rejected.
+    pub fn set_primary(&mut self, letter: Option<u8>) -> Result<(), &'static str> {
+        if let Some(l) = letter {
+            WeaponClass::from_letter(l).ok_or("unknown blaster letter")?;
+        }
+        self.primary = letter;
+        Ok(())
+    }
+
+    /// Set secondary (launcher/pistol only, or clear). Invalid class rejected.
+    pub fn set_secondary(&mut self, letter: Option<u8>) -> Result<(), &'static str> {
+        if let Some(l) = letter {
+            let class = WeaponClass::from_letter(l).ok_or("unknown blaster letter")?;
+            if !class.allowed_in_secondary() {
+                return Err("secondary only allows launcher or pistol");
+            }
+        }
+        self.secondary = letter;
+        Ok(())
+    }
+
+    /// Toggle active slot: primary ↔ secondary. Empty slots stay in the cycle (unarmed).
+    pub fn cycle_weapon(&mut self, dir: i8) {
+        if dir.signum() == 0 {
+            return;
+        }
+        self.active = match self.active {
+            ActiveWeapon::Primary => ActiveWeapon::Secondary,
+            ActiveWeapon::Secondary => ActiveWeapon::Primary,
+        };
     }
 
     pub fn is_grounded(&self) -> bool {
@@ -397,7 +484,7 @@ impl SelfState {
 
     /// World point for the screen-centre reticle billboard (along look from look origin).
     pub fn reticle_world(&self, look_origin: Vec3) -> Option<Vec3> {
-        if !(self.alive && self.armed) {
+        if !(self.alive && self.is_armed()) {
             return None;
         }
         let dir = self.ocular_forward();
@@ -426,7 +513,11 @@ mod tests {
         let s = SelfState::default_loadout();
         assert_eq!(s.position, Vec3::ZERO);
         assert_eq!(s.character, b'a');
-        assert_eq!(s.blaster, b'p');
+        assert_eq!(s.primary, Some(b'p'));
+        assert_eq!(s.secondary, Some(b'b'));
+        assert_eq!(s.active, ActiveWeapon::Primary);
+        assert_eq!(s.active_blaster(), Some(b'p'));
+        assert!(s.is_armed());
         let f = s.ocular_forward();
         assert!(f.dot(Vec3::Z) > 0.99);
         assert!((f.length() - 1.0).abs() < 1e-5);
@@ -806,6 +897,65 @@ mod tests {
             s.stamina
         );
         assert!(s.stamina < before);
+    }
+
+    #[test]
+    fn weapon_class_map_covers_a_through_r() {
+        assert_eq!(WeaponClass::from_letter(b'a'), Some(WeaponClass::Launcher));
+        assert_eq!(WeaponClass::from_letter(b'b'), Some(WeaponClass::Pistol));
+        assert_eq!(WeaponClass::from_letter(b'p'), Some(WeaponClass::Smg));
+        assert_eq!(WeaponClass::from_letter(b'z'), None);
+        assert!(WeaponClass::Launcher.allowed_in_secondary());
+        assert!(WeaponClass::Pistol.allowed_in_secondary());
+        assert!(!WeaponClass::Smg.allowed_in_secondary());
+    }
+
+    #[test]
+    fn secondary_rejects_non_sidearm() {
+        let mut s = SelfState::default_loadout();
+        assert!(s.set_secondary(Some(b'p')).is_err());
+        assert_eq!(s.secondary, Some(b'b'));
+        assert!(s.set_secondary(Some(b'i')).is_ok());
+        assert_eq!(s.secondary, Some(b'i'));
+        assert!(s.set_secondary(None).is_ok());
+        assert_eq!(s.secondary, None);
+    }
+
+    #[test]
+    fn primary_accepts_any_class() {
+        let mut s = SelfState::default_loadout();
+        assert!(s.set_primary(Some(b'a')).is_ok());
+        assert_eq!(s.primary, Some(b'a'));
+        assert!(s.set_primary(Some(b'e')).is_ok());
+        assert!(s.set_primary(None).is_ok());
+        assert_eq!(s.primary, None);
+        // Still on primary slot — empty means unarmed, not a third mode.
+        assert_eq!(s.active, ActiveWeapon::Primary);
+        assert!(!s.is_armed());
+    }
+
+    #[test]
+    fn cycle_weapon_toggles_two_slots_only() {
+        let mut s = SelfState::default_loadout();
+        assert_eq!(s.active, ActiveWeapon::Primary);
+        s.cycle_weapon(1);
+        assert_eq!(s.active, ActiveWeapon::Secondary);
+        assert_eq!(s.active_blaster(), Some(b'b'));
+        s.cycle_weapon(1);
+        assert_eq!(s.active, ActiveWeapon::Primary);
+        assert_eq!(s.active_blaster(), Some(b'p'));
+        // Both filled → always armed; no free third unarmed step.
+        assert!(s.is_armed());
+
+        s.set_secondary(None).unwrap();
+        s.active = ActiveWeapon::Primary;
+        s.cycle_weapon(1);
+        assert_eq!(s.active, ActiveWeapon::Secondary);
+        assert!(!s.is_armed());
+        assert!(s.reticle_world(Vec3::new(0.0, 1.5, 0.0)).is_none());
+        s.cycle_weapon(-1);
+        assert_eq!(s.active, ActiveWeapon::Primary);
+        assert!(s.is_armed());
     }
 
     #[test]

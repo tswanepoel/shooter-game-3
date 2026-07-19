@@ -1204,6 +1204,9 @@ pub fn pose_character_kit(
     pose: KitPose,
 ) -> (Vec<Mat4>, Mat4) {
     let sprinting = self_state.locomotion.is_sprint();
+    let armed = self_state.is_armed();
+    // Hold + aim owns the right arm only while armed and not sprinting.
+    let hold_right = armed && !sprinting;
     let loco_over = match (pose, loco_clip) {
         (KitPose::Present, Some(clip)) if self_state.locomotion.uses_loco_clip() => {
             Some(clip.sample_overrides(self_state.walk_phase))
@@ -1220,8 +1223,8 @@ pub fn pose_character_kit(
         let mut local = p.bind_local;
         if let Some(ref over) = loco_over {
             if let Some(sample) = over.get(&p.name) {
-                // Walk: legs + left arm (right arm stays aim hold). Sprint: both arms swing.
-                let apply_loco = if sprinting {
+                // Walk armed: legs + left arm (right stays hold). Sprint or unarmed: both arms.
+                let apply_loco = if sprinting || !armed {
                     matches!(
                         p.name.as_str(),
                         "root" | "leg-left" | "leg-right" | "arm-left" | "arm-right"
@@ -1247,7 +1250,7 @@ pub fn pose_character_kit(
             "torso" if !sprinting => {
                 local *= Mat4::from_quat(Quat::from_rotation_x(-self_state.torso_pitch));
             }
-            "arm-right" if !sprinting => {
+            "arm-right" if hold_right => {
                 // Armed hold + aim owns the right arm (walk arm swing is presentation for left).
                 let (_s, _r, t) = local.to_scale_rotation_translation();
                 let scale = {

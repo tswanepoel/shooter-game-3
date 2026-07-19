@@ -592,6 +592,11 @@ impl ClientInner {
             if self.move_input.take_jump() {
                 self.self_state.try_jump();
             }
+            let weapon_steps = self.move_input.take_weapon_cycle();
+            let wdir = weapon_steps.signum();
+            for _ in 0..weapon_steps.unsigned_abs() {
+                self.self_state.cycle_weapon(wdir);
+            }
             self.self_state.apply_move(dt, fwd, strafe, sprint_tap);
         } else {
             if !session_ok || console_open || was_fly {

@@ -7,9 +7,7 @@ use glam::Vec2;
 use js_sys::{Function, Object, Promise, Reflect};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
-#[cfg(feature = "debug-tools")]
-use web_sys::WheelEvent;
-use web_sys::{Document, HtmlCanvasElement, KeyboardEvent, MouseEvent};
+use web_sys::{Document, HtmlCanvasElement, KeyboardEvent, MouseEvent, WheelEvent};
 
 use crate::ClientInner;
 
@@ -47,7 +45,7 @@ fn request_pointer_lock_raw(canvas: &HtmlCanvasElement) {
     }
 }
 
-/// Held WASD + Shift sprint edge + jump edge for mounted locomotion.
+/// Held WASD + Shift sprint edge + jump edge + weapon-cycle edge for mounted locomotion.
 #[derive(Debug, Default, Clone)]
 pub struct MoveInput {
     pub forward: bool,
@@ -56,6 +54,8 @@ pub struct MoveInput {
     pub right: bool,
     jump_edge: bool,
     sprint_edge: bool,
+    /// Accumulated wheel steps: +1 next weapon, −1 previous (021).
+    weapon_cycle: i8,
 }
 
 impl MoveInput {
@@ -87,6 +87,22 @@ impl MoveInput {
         let s = self.sprint_edge;
         self.sprint_edge = false;
         s
+    }
+
+    /// One wheel notch: positive `delta_y` (scroll down) advances primary→secondary→unarmed.
+    pub fn note_weapon_wheel(&mut self, delta_y: f64) {
+        if delta_y > 0.0 {
+            self.weapon_cycle = self.weapon_cycle.saturating_add(1);
+        } else if delta_y < 0.0 {
+            self.weapon_cycle = self.weapon_cycle.saturating_sub(1);
+        }
+    }
+
+    /// Signed cycle steps since last take (+ next, − previous).
+    pub fn take_weapon_cycle(&mut self) -> i8 {
+        let c = self.weapon_cycle;
+        self.weapon_cycle = 0;
+        c
     }
 
     pub fn is_move_key(code: &str) -> bool {
@@ -236,6 +252,49 @@ pub fn install_input_handlers(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCanv
             .add_event_listener_with_callback("keyup", on_key_up.as_ref().unchecked_ref())
             .expect("keyup listener");
         on_key_up.forget();
+    }
+
+    {
+        let inner = inner.clone();
+        let on_wheel = Closure::<dyn FnMut(WheelEvent)>::new(move |event: WheelEvent| {
+            let mut client = inner.borrow_mut();
+
+            #[cfg(feature = "debug-tools")]
+            if client.debug.is_open() {
+                event.prevent_default();
+                let delta = match event.delta_mode() {
+                    1 => egui::vec2(event.delta_x() as f32, event.delta_y() as f32) * 8.0,
+                    2 => egui::vec2(event.delta_x() as f32, event.delta_y() as f32) * 30.0,
+                    _ => egui::vec2(event.delta_x() as f32, event.delta_y() as f32),
+                };
+                let modifiers = client.debug.modifiers();
+                client.debug.push_event(egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta,
+                    modifiers,
+                });
+                return;
+            }
+
+            if !client.session.is_active() {
+                return;
+            }
+
+            #[cfg(feature = "debug-tools")]
+            let fly = client.view.is_flycam() || client.debug.flycam_wanted();
+            #[cfg(not(feature = "debug-tools"))]
+            let fly = false;
+            if fly {
+                return;
+            }
+
+            event.prevent_default();
+            client.move_input.note_weapon_wheel(event.delta_y());
+        });
+        canvas
+            .add_event_listener_with_callback("wheel", on_wheel.as_ref().unchecked_ref())
+            .expect("weapon wheel");
+        on_wheel.forget();
     }
 
     #[cfg(feature = "debug-tools")]
@@ -498,31 +557,5 @@ fn install_debug_shell_pointer(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCan
             .add_event_listener_with_callback("mouseup", on_up.as_ref().unchecked_ref())
             .expect("debug mouseup");
         on_up.forget();
-    }
-
-    {
-        let inner = inner.clone();
-        let on_wheel = Closure::<dyn FnMut(WheelEvent)>::new(move |event: WheelEvent| {
-            let mut client = inner.borrow_mut();
-            if !client.debug.is_open() {
-                return;
-            }
-            event.prevent_default();
-            let delta = match event.delta_mode() {
-                1 => egui::vec2(event.delta_x() as f32, event.delta_y() as f32) * 8.0,
-                2 => egui::vec2(event.delta_x() as f32, event.delta_y() as f32) * 30.0,
-                _ => egui::vec2(event.delta_x() as f32, event.delta_y() as f32),
-            };
-            let modifiers = client.debug.modifiers();
-            client.debug.push_event(egui::Event::MouseWheel {
-                unit: egui::MouseWheelUnit::Point,
-                delta,
-                modifiers,
-            });
-        });
-        canvas
-            .add_event_listener_with_callback("wheel", on_wheel.as_ref().unchecked_ref())
-            .expect("debug wheel");
-        on_wheel.forget();
     }
 }
