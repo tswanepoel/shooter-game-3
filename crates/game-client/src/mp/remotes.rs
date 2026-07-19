@@ -3,19 +3,13 @@
 use std::collections::{HashMap, VecDeque};
 use std::f32::consts::{PI, TAU};
 
-use game_net::{NetPlayerPose, NetVec3, PlayerId, Tick};
+use game_net::{NetPlayerPose, NetVec3, PlayerId, Tick, TICK_HZ};
 
 /// Draw remotes this far behind the present clock (027). ~3 ticks at 30 Hz.
 pub const REMOTE_INTERP_DELAY_SECS: f32 = 0.100;
 
-/// Server tick rate used to map `tick` → seconds (must match server `TICK_HZ`).
-const SERVER_TICK_HZ: f32 = 30.0;
-
-/// Samples kept per remote (~1 s at 30 Hz).
+/// Samples kept per remote (~1 s at [`TICK_HZ`]).
 const BUFFER_CAP: usize = 32;
-
-/// If estimated clock is this far behind a new snapshot tick, snap (tab stall).
-const CLOCK_SNAP_BEHIND_SECS: f32 = 0.5;
 
 /// Character + loadout letters that decide which meshes a remote body needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -68,7 +62,7 @@ impl RemoteTrack {
         self.samples.back().map(|s| &s.pose)
     }
 
-    /// Sample at absolute time `t_secs` (tick / SERVER_TICK_HZ).
+    /// Sample at absolute time `t_secs` (tick / [`TICK_HZ`]).
     fn sample_at(&self, t_secs: f32) -> Option<NetPlayerPose> {
         if self.samples.is_empty() {
             return None;
@@ -108,7 +102,6 @@ impl RemoteTrack {
 /// Buffered remote poses; present via delayed interpolation on a frame clock (028).
 pub struct RemoteTable {
     tracks: HashMap<PlayerId, RemoteTrack>,
-    last_tick: Tick,
     /// Estimated server time (seconds). Advances every frame; pulled up on Snapshot.
     server_clock: f32,
     /// True after the first Snapshot so we do not free-run from 0.
@@ -119,7 +112,6 @@ impl RemoteTable {
     pub fn new() -> Self {
         Self {
             tracks: HashMap::new(),
-            last_tick: 0,
             server_clock: 0.0,
             clock_live: false,
         }
@@ -127,21 +119,16 @@ impl RemoteTable {
 
     pub fn clear(&mut self) {
         self.tracks.clear();
-        self.last_tick = 0;
         self.server_clock = 0.0;
         self.clock_live = false;
     }
 
     /// Append Snapshot `others` at server `tick`; pull present clock up.
     pub fn apply_snapshot_others(&mut self, tick: Tick, others: Vec<NetPlayerPose>) {
-        self.last_tick = tick;
         let target = tick_to_secs(tick);
         if !self.clock_live {
             self.server_clock = target;
             self.clock_live = true;
-        } else if target - self.server_clock > CLOCK_SNAP_BEHIND_SECS {
-            // Large stall (tab background, etc.): hard snap.
-            self.server_clock = target;
         } else {
             self.server_clock = self.server_clock.max(target);
         }
@@ -204,7 +191,7 @@ impl Default for RemoteTable {
 }
 
 fn tick_to_secs(tick: Tick) -> f32 {
-    tick as f32 / SERVER_TICK_HZ
+    tick as f32 / TICK_HZ as f32
 }
 
 fn lerp_pose(a: &NetPlayerPose, b: &NetPlayerPose, u: f32) -> NetPlayerPose {
@@ -347,10 +334,9 @@ mod tests {
     }
 
     #[test]
-    fn large_stall_snaps_clock() {
+    fn snapshot_pulls_clock_to_tick() {
         let mut table = RemoteTable::new();
         table.apply_snapshot_others(10, vec![pose(1, 0.0, 0.0)]);
-        // Simulate free-run falling behind: force clock old, then big tick jump.
         table.server_clock = tick_to_secs(10);
         table.apply_snapshot_others(100, vec![pose(1, 0.0, 5.0)]);
         assert!((table.server_clock - tick_to_secs(100)).abs() < 1e-5);

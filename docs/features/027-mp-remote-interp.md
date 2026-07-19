@@ -2,11 +2,11 @@
 
 Draw **other** players from a short pose history, slightly in the past, so motion blends between Snapshots. Self stays **026**.
 
-Depends on **024** and **026**. Server tick **30 Hz** (`TICK_HZ`). Snapshot contents unchanged.
+Depends on **024** and **026**. Server tick is shared **`game_net::TICK_HZ`** (30). Snapshot contents unchanged.
 
 ## Present delay
 
-Draw remotes at **present − 100 ms** (`REMOTE_INTERP_DELAY_SECS`). Sample time is server **`tick`** mapped at 30 Hz. Client `SERVER_TICK_HZ` must match the server.
+Draw remotes at **present − 100 ms** (`REMOTE_INTERP_DELAY_SECS`). Sample time is server **`tick`** mapped with `TICK_HZ`.
 
 ## Buffer
 

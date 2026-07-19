@@ -14,7 +14,7 @@ pub use codec::{decode_c2s, decode_s2c, encode_c2s, encode_s2c, DecodeError, Enc
 pub use movement::Input;
 pub use session::{Hello, Reject, RejectReason, Welcome};
 pub use types::{ContentRev, NetVec3, PlayerId, Protocol, Seq, SessionKey, Tick};
-pub use version::{CONTENT_REV, PROTOCOL_VERSION};
+pub use version::{CONTENT_REV, PROTOCOL_VERSION, TICK_HZ};
 pub use world::{NetActiveWeapon, NetLocomotion, NetPlayerPose, NetSpawn, PlayerLeft, Snapshot};
 
 /// Client → server only.

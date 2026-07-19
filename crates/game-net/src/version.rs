@@ -7,3 +7,6 @@ pub const PROTOCOL_VERSION: Protocol = 2;
 
 /// Content stamp carried on Hello/Welcome. Bump when cooked kits change identity rules.
 pub const CONTENT_REV: ContentRev = 1;
+
+/// Fixed server simulation rate (Hz). Client maps `tick` → seconds with the same value.
+pub const TICK_HZ: u32 = 30;

@@ -10,9 +10,6 @@ use game_sim::SelfState;
 
 use crate::map::player_pose;
 
-/// Fixed server tick rate (Hz). Client render stays independent.
-pub const TICK_HZ: u32 = 30;
-
 /// Spawn half-extent on XZ (metres).
 const SPAWN_HALF_EXTENT_M: f32 = 8.0;
 
@@ -246,7 +243,7 @@ fn merge_pending_input(prev: Input, next: Input) -> Input {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use game_net::{Hello, PROTOCOL_VERSION};
+    use game_net::{Hello, PROTOCOL_VERSION, TICK_HZ};
 
     fn join(world: &mut World) -> (PlayerId, SessionKey, Tick) {
         let (id, welcome) = world

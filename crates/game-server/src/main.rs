@@ -12,12 +12,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
+use game_net::TICK_HZ;
 use game_net::{decode_c2s, encode_s2c, ClientToServer, ServerToClient, CONTENT_REV};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, Mutex};
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{info, warn};
-use world::{snapshot_msg, World, TICK_HZ};
+use world::{snapshot_msg, World};
 
 /// Default listen address (separate from Vite :3000).
 const DEFAULT_BIND: &str = "0.0.0.0:9090";
