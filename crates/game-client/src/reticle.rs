@@ -1,4 +1,4 @@
-//! World-space aim reticle billboard (feature 014).
+//! World-space aim reticle billboard on the look ray (feature 015, screen centre).
 
 use game_sim::{CAMERA_VERTICAL_FOV_RAD, RETICLE_SIZE_PX};
 use glam::{Mat4, Vec3};

@@ -71,6 +71,8 @@ pub const BLASTER_MUZZLE_POINTS: &[&[[f32; 3]]] = &[
     &[[0.0, -1.81, 0.23]],                            // r
 ];
 
+/// Primary muzzle in blaster-local units (future muzzle FX; not an aim basis — 015).
+#[allow(dead_code)]
 pub fn primary_muzzle_offset(letter_index: usize) -> Vec3 {
     let pts = BLASTER_MUZZLE_POINTS[letter_index];
     Vec3::from_array(pts[0])
@@ -395,7 +397,7 @@ pub fn kit_to_world(placement: Mat4, min_y_kit: f32) -> Mat4 {
         * Mat4::from_translation(Vec3::new(0.0, -min_y_kit, 0.0))
 }
 
-/// Grip from arm; `aim_pitch` positive = look up (weapon line). Lineup passes 0.
+/// Grip from arm; `aim_pitch` positive = look up (presentation elevation). Lineup passes 0.
 pub fn held_blaster_root(
     kit_to_world: Mat4,
     arm_right_kit: Mat4,

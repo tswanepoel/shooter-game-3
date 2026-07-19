@@ -565,18 +565,54 @@ impl ClientInner {
         #[cfg(not(feature = "debug-tools"))]
         let console_open = false;
 
+        // Fly sync runs *after* mounted look + posed eye so F8 seeds at the true FP camera.
+        #[cfg(feature = "debug-tools")]
+        let want_fly = self.debug.flycam_wanted();
+        #[cfg(feature = "debug-tools")]
+        let was_fly = self.view.is_flycam();
+        #[cfg(not(feature = "debug-tools"))]
+        let was_fly = false;
+
+        // Mounted look while the view is still on the self (including the enter frame).
+        if session_ok && !console_open && !was_fly {
+            let spike = look.x.abs() > LOOK_SPIKE_PX || look.y.abs() > LOOK_SPIKE_PX;
+            if !spike {
+                self.self_state.apply_look(
+                    dt,
+                    -look.x * LOOK_SENS_RAD_PER_PX,
+                    -look.y * LOOK_SENS_RAD_PER_PX,
+                );
+            }
+        }
+
+        if let SelfPresentState::Ready(gpu) = &mut self.self_present {
+            gpu.apply_state(&self.renderer.queue, &self.self_state);
+            self.view.set_mounted_eye(gpu.view.eye);
+        }
+
         #[cfg(feature = "debug-tools")]
         {
-            let want_fly = self.debug.flycam_wanted();
-            if let Some(msg) = self.view.sync_fly_intent(want_fly, &self.self_state) {
+            let mounted_eye = self.view.mounted_eye();
+            if let Some(msg) = self
+                .view
+                .sync_fly_intent(want_fly, &self.self_state, mounted_eye)
+            {
                 self.debug.shell.push_log(msg.to_string());
-                if !want_fly {
-                    self.fly_input.clear_keys();
-                }
+                // Enter or leave: drop sticky WASD (held keys may only start
+                // counting once flycam_wanted flips true mid-hold).
+                self.fly_input.clear_keys();
             }
 
-            if session_ok && self.view.is_flycam() && !console_open {
-                self.view.update_flycam(dt, &self.fly_input, look);
+            let flycam = self.view.is_flycam();
+            if session_ok && flycam && !console_open {
+                // Enter frame already baked this look into self → fly pose; don't double-apply.
+                let look = if was_fly { look } else { glam::Vec2::ZERO };
+                let spike = look.x.abs() > LOOK_SPIKE_PX || look.y.abs() > LOOK_SPIKE_PX;
+                self.view.update_flycam(
+                    dt,
+                    &self.fly_input,
+                    if spike { glam::Vec2::ZERO } else { look },
+                );
             } else if console_open || !session_ok {
                 self.fly_input.clear_keys();
             }
@@ -586,29 +622,6 @@ impl ClientInner {
         let flycam = self.view.is_flycam();
         #[cfg(not(feature = "debug-tools"))]
         let flycam = false;
-
-        if session_ok && !console_open && !flycam {
-            let spike = look.x.abs() > LOOK_SPIKE_PX || look.y.abs() > LOOK_SPIKE_PX;
-            if !spike {
-                self.self_state.apply_look(
-                    dt,
-                    -look.x * LOOK_SENS_RAD_PER_PX,
-                    -look.y * LOOK_SENS_RAD_PER_PX,
-                );
-            } else {
-                self.self_state.step_cascade(dt);
-            }
-        } else {
-            self.self_state.step_cascade(dt);
-        }
-
-        {
-            let (cam_eye, _) = self.view.eye_and_forward(&self.self_state);
-            if let SelfPresentState::Ready(gpu) = &mut self.self_present {
-                gpu.apply_state(&self.renderer.queue, &self.self_state, Some(cam_eye));
-                self.view.set_mounted_eye(gpu.view.eye);
-            }
-        }
 
         let (cam_eye, cam_fwd) = self.view.eye_and_forward(&self.self_state);
         let view_mat = self.view.view_matrix(&self.self_state);

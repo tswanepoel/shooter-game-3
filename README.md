@@ -114,7 +114,7 @@ Vite serves cook outputs from `assets/cooked/` (not authoring kits). Production 
 
 ### Player self
 
-The default view mounts on the player **self**: a standing Kenney body with a held blaster (`character-a` + `blaster-p` until loadout exists). Mouse look drives the ocular line; the body lags; a world reticle marks the weapon bore. Camera sits on the posed head and turns with the eyes. Production and dev both load this path; kit facts stay in the source kit READMEs.
+The default view mounts on the player **self**: a standing Kenney body with a held blaster (`character-a` + `blaster-p` until loadout exists). Mouse look aims the **view centre** (sim look, no lag); the body poses with that look as presentation; a screen-centre reticle marks aim. Camera sits on the eyes and matches sim look. Production and dev both load this path; kit facts stay in the source kit READMEs.
 
 ### Debug tools
 

@@ -1,9 +1,9 @@
-//! Player self: position, ocular command, derived aim cascade.
+//! Player self: position, look command, and body presentation pose.
 
 use glam::{Mat4, Quat, Vec3};
 
-/// Ocular elevation hard cap. Weapon budget may exceed this.
-pub const OCULAR_ELEV_CAP_RAD: f32 = 80.0_f32.to_radians();
+/// Look elevation hard cap: straight up / straight down (015).
+pub const OCULAR_ELEV_CAP_RAD: f32 = std::f32::consts::FRAC_PI_2;
 
 /// Settled torso pitch at full look-down (inward).
 pub const TORSO_PITCH_INWARD_RAD: f32 = 15.0_f32.to_radians();
@@ -15,42 +15,31 @@ pub const SHOULDER_PITCH_INWARD_RAD: f32 = 75.0_f32.to_radians();
 pub const SHOULDER_PITCH_OUTWARD_RAD: f32 = 82.5_f32.to_radians();
 
 const HEAD_PITCH_BUDGET_RAD: f32 = 50.0_f32.to_radians();
-const HEAD_YAW_BUDGET_RAD: f32 = 60.0_f32.to_radians();
 
-const RATE_HEAD_SNAPPY: f32 = 368.0;
-const RATE_HEAD_LAGGY: f32 = 96.0;
-const RATE_TORSO_YAW_SNAPPY: f32 = 256.0;
-const RATE_TORSO_YAW_LAGGY: f32 = 32.0;
-const RATE_PITCH_SNAPPY: f32 = 48.0;
-const RATE_PITCH_LAGGY: f32 = 10.0;
-const LOOK_SPEED_SMOOTH: f32 = 4.0;
-/// Look-speed (rad/s) at which chase rates fully soften to laggy.
-const LOOK_SPEED_SOFT_RAD_S: f32 = 8.0;
-
-/// Default bore ray length when blaster max range is unknown (metres).
+/// Default range along look for aim markers when max range is unknown (metres).
 pub const DEFAULT_BORE_RANGE_M: f32 = 100.0;
-/// Reticle nudge toward camera (metres).
-pub const RETICLE_CAM_NUDGE_M: f32 = 0.03;
+/// World depth of the screen-centre reticle billboard (metres).
+pub const RETICLE_DEPTH_M: f32 = 4.0;
 /// On-screen reticle diameter (CSS/logical px).
 pub const RETICLE_SIZE_PX: f32 = 6.0;
 
 /// Head-local face offset in character-kit units (applied under posed `head` node).
-/// Chosen so the eye sits in the face volume at rest (~1.52 m height, slight +Z).
+/// With character-a head scale 0.1 and kit→m 1/1.5: rest eye ≈ (0, 1.43, 0.23) m.
 pub const FACE_OFFSET_HEAD_KIT: Vec3 = Vec3::new(0.0, 2.5, 3.5);
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelfState {
     pub position: Vec3,
-    /// Ocular azimuth (radians). 0 faces **+Z**.
+    /// Look azimuth (radians). 0 faces **+Z**.
     pub ocular_yaw: f32,
-    /// Ocular elevation (radians). Positive looks up.
+    /// Look elevation (radians). Positive looks up. Clamped to ±90°.
     pub ocular_pitch: f32,
     pub character: u8,
     pub blaster: u8,
     pub alive: bool,
     pub armed: bool,
 
-    /// Body absolute yaw (lags ocular).
+    /// Body absolute yaw (presentation; matches look in sim).
     pub torso_yaw: f32,
     pub torso_pitch: f32,
     pub shoulder_pitch: f32,
@@ -58,8 +47,6 @@ pub struct SelfState {
     pub head_yaw: f32,
     /// Head relative pitch (cosmetic).
     pub head_pitch: f32,
-
-    look_speed_smooth: f32,
 }
 
 impl Default for SelfState {
@@ -83,11 +70,10 @@ impl SelfState {
             shoulder_pitch: 0.0,
             head_yaw: 0.0,
             head_pitch: 0.0,
-            look_speed_smooth: 0.0,
         }
     }
 
-    /// Unit ocular look direction (yaw + pitch).
+    /// Unit look direction (yaw + pitch). Aim / camera forward.
     pub fn ocular_forward(&self) -> Vec3 {
         let cp = self.ocular_pitch.cos();
         Vec3::new(
@@ -97,7 +83,7 @@ impl SelfState {
         )
     }
 
-    /// Body facing on XZ from lagged torso yaw.
+    /// Body facing on XZ from torso yaw.
     pub fn body_facing(&self) -> Vec3 {
         Vec3::new(self.torso_yaw.sin(), 0.0, self.torso_yaw.cos())
     }
@@ -107,53 +93,37 @@ impl SelfState {
         Mat4::from_rotation_translation(Quat::from_rotation_y(self.torso_yaw), self.position)
     }
 
-    /// Apply mouse look deltas (radians) then step the aim cascade.
-    pub fn apply_look(&mut self, dt: f32, delta_yaw: f32, delta_pitch: f32) {
-        let look_speed = if dt > 1e-6 {
-            (delta_yaw * delta_yaw + delta_pitch * delta_pitch).sqrt() / dt
-        } else {
-            0.0
-        };
-        self.look_speed_smooth +=
-            (look_speed - self.look_speed_smooth) * (1.0 - (-LOOK_SPEED_SMOOTH * dt).exp());
-
+    /// Apply mouse look deltas (radians) and snap body presentation to look.
+    /// `dt` is unused; kept so call sites stay frame-shaped.
+    pub fn apply_look(&mut self, _dt: f32, delta_yaw: f32, delta_pitch: f32) {
         self.ocular_yaw += delta_yaw;
         self.ocular_pitch =
             (self.ocular_pitch + delta_pitch).clamp(-OCULAR_ELEV_CAP_RAD, OCULAR_ELEV_CAP_RAD);
-
-        self.step_cascade(dt);
+        self.sync_pose();
     }
 
-    /// Step cascade without new look input (settle).
-    pub fn step_cascade(&mut self, dt: f32) {
-        let soft = (self.look_speed_smooth / LOOK_SPEED_SOFT_RAD_S).clamp(0.0, 1.0);
-        // Fast look → laggy rates; slow/held → snappy.
-        let rate = |snappy: f32, laggy: f32| laggy + (snappy - laggy) * (1.0 - soft);
-
+    /// Snap body presentation pose to current look (no lag in sim).
+    pub fn sync_pose(&mut self) {
         let (torso_tgt, shoulder_tgt) = elevation_targets(self.ocular_pitch);
-        let head_yaw_tgt =
-            (self.ocular_yaw - self.torso_yaw).clamp(-HEAD_YAW_BUDGET_RAD, HEAD_YAW_BUDGET_RAD);
-        let head_pitch_tgt = (self.ocular_pitch - self.torso_pitch)
+        self.torso_yaw = self.ocular_yaw;
+        self.torso_pitch = torso_tgt;
+        self.shoulder_pitch = shoulder_tgt;
+        // Torso yaw matches look; head yaw relative is zero.
+        self.head_yaw = 0.0;
+        self.head_pitch = (self.ocular_pitch - self.torso_pitch)
             .clamp(-HEAD_PITCH_BUDGET_RAD, HEAD_PITCH_BUDGET_RAD);
-
-        let r_ty = rate(RATE_TORSO_YAW_SNAPPY, RATE_TORSO_YAW_LAGGY);
-        let r_pitch = rate(RATE_PITCH_SNAPPY, RATE_PITCH_LAGGY);
-        let r_head = rate(RATE_HEAD_SNAPPY, RATE_HEAD_LAGGY);
-
-        self.torso_yaw = exp_chase_angle(self.torso_yaw, self.ocular_yaw, r_ty, dt);
-        self.torso_pitch = exp_chase(self.torso_pitch, torso_tgt, r_pitch, dt);
-        self.shoulder_pitch = exp_chase(self.shoulder_pitch, shoulder_tgt, r_pitch, dt);
-        self.head_yaw = exp_chase(self.head_yaw, head_yaw_tgt, r_head, dt);
-        self.head_pitch = exp_chase(self.head_pitch, head_pitch_tgt, r_head, dt);
     }
 
-    /// Weapon elevation relative to ocular (settled ≈ torso + shoulder − ocular).
-    pub fn weapon_elev_separation(&self) -> f32 {
-        self.torso_pitch + self.shoulder_pitch - self.ocular_pitch
-    }
-
-    pub fn weapon_azim_separation(&self) -> f32 {
-        angle_delta(self.torso_yaw, self.ocular_yaw)
+    /// World point for the screen-centre reticle billboard (along look from `eye`).
+    pub fn reticle_world(&self, eye: Vec3) -> Option<Vec3> {
+        if !(self.alive && self.armed) {
+            return None;
+        }
+        let dir = self.ocular_forward();
+        if dir.length_squared() < 1e-12 {
+            return None;
+        }
+        Some(eye + dir * RETICLE_DEPTH_M)
     }
 }
 
@@ -164,27 +134,6 @@ fn elevation_targets(ocular_pitch: f32) -> (f32, f32) {
     } else {
         (t * TORSO_PITCH_INWARD_RAD, t * SHOULDER_PITCH_INWARD_RAD)
     }
-}
-
-fn exp_chase(current: f32, target: f32, rate: f32, dt: f32) -> f32 {
-    current + (target - current) * (1.0 - (-rate * dt).exp())
-}
-
-fn exp_chase_angle(current: f32, target: f32, rate: f32, dt: f32) -> f32 {
-    let d = angle_delta(current, target);
-    current + d * (1.0 - (-rate * dt).exp())
-}
-
-fn angle_delta(from: f32, to: f32) -> f32 {
-    let mut d = to - from;
-    let pi = std::f32::consts::PI;
-    while d > pi {
-        d -= 2.0 * pi;
-    }
-    while d < -pi {
-        d += 2.0 * pi;
-    }
-    d
 }
 
 #[cfg(test)]
@@ -203,38 +152,43 @@ mod tests {
     }
 
     #[test]
-    fn azimuth_settles_to_ocular() {
+    fn look_snaps_body_pose_immediately() {
         let mut s = SelfState::default_loadout();
-        s.ocular_yaw = 1.0;
-        for _ in 0..120 {
-            s.step_cascade(1.0 / 60.0);
-        }
-        assert!(
-            s.weapon_azim_separation().abs() < 0.02,
-            "sep={}",
-            s.weapon_azim_separation()
-        );
+        s.apply_look(1.0 / 60.0, 1.0, 0.3);
+        assert!((s.torso_yaw - s.ocular_yaw).abs() < 1e-6);
+        assert!((s.head_yaw).abs() < 1e-6);
+        let (torso_tgt, shoulder_tgt) = elevation_targets(s.ocular_pitch);
+        assert!((s.torso_pitch - torso_tgt).abs() < 1e-6);
+        assert!((s.shoulder_pitch - shoulder_tgt).abs() < 1e-6);
     }
 
     #[test]
-    fn elevation_budget_at_full_look_up() {
+    fn elevation_at_full_look_up() {
         let mut s = SelfState::default_loadout();
         s.ocular_pitch = OCULAR_ELEV_CAP_RAD;
-        for _ in 0..180 {
-            s.step_cascade(1.0 / 60.0);
-        }
-        let weapon = s.torso_pitch + s.shoulder_pitch;
-        assert!(
-            (weapon - (TORSO_PITCH_OUTWARD_RAD + SHOULDER_PITCH_OUTWARD_RAD)).abs() < 0.05,
-            "weapon elev={weapon}"
-        );
-        assert!(s.weapon_elev_separation() > 0.1);
+        s.sync_pose();
+        assert!((s.torso_pitch - TORSO_PITCH_OUTWARD_RAD).abs() < 1e-5);
+        assert!((s.shoulder_pitch - SHOULDER_PITCH_OUTWARD_RAD).abs() < 1e-5);
+        let f = s.ocular_forward();
+        assert!(f.dot(Vec3::Y) > 0.99, "forward={f}");
     }
 
     #[test]
-    fn ocular_pitch_clamped() {
+    fn ocular_pitch_clamped_to_pm_90() {
         let mut s = SelfState::default_loadout();
         s.apply_look(1.0 / 60.0, 0.0, 10.0);
         assert!((s.ocular_pitch - OCULAR_ELEV_CAP_RAD).abs() < 1e-5);
+        s.apply_look(1.0 / 60.0, 0.0, -20.0);
+        assert!((s.ocular_pitch + OCULAR_ELEV_CAP_RAD).abs() < 1e-5);
+    }
+
+    #[test]
+    fn reticle_lies_on_look_ray() {
+        let s = SelfState::default_loadout();
+        let eye = Vec3::new(0.0, 1.5, 0.0);
+        let r = s.reticle_world(eye).expect("armed");
+        let along = (r - eye).normalize();
+        assert!(along.dot(s.ocular_forward()) > 0.99);
+        assert!(((r - eye).length() - RETICLE_DEPTH_M).abs() < 1e-5);
     }
 }
