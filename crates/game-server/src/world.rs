@@ -10,8 +10,8 @@ use game_sim::SelfState;
 
 use crate::map::player_pose;
 
-/// Default production-ish tick rate (025 may elevate in dev).
-pub const TICK_HZ: u32 = 30;
+/// Fixed server tick rate (Hz). Client render stays independent.
+pub const TICK_HZ: u32 = 128;
 
 /// Spawn half-extent on XZ (metres).
 const SPAWN_HALF_EXTENT_M: f32 = 8.0;
@@ -122,6 +122,10 @@ impl World {
     }
 
     /// Queue input when echo key matches and seq advances.
+    ///
+    /// Continuous fields (wish, look) take the latest sample. Edge actions
+    /// (jump, sprint tap, weapon cycle) sticky-merge so a one-frame press is
+    /// not lost when several Inputs arrive between ticks (common at low Hz).
     pub fn queue_input(&mut self, id: PlayerId, input: Input) -> bool {
         let Some(player) = self.players.get_mut(&id) else {
             return false;
@@ -133,7 +137,10 @@ impl World {
             return false;
         }
         player.last_seq = input.seq;
-        player.pending_input = Some(input);
+        player.pending_input = Some(match player.pending_input.take() {
+            Some(prev) => merge_pending_input(prev, input),
+            None => input,
+        });
         true
     }
 
@@ -213,4 +220,152 @@ impl Default for World {
 /// Build S2C for a viewer after tick.
 pub fn snapshot_msg(world: &World, viewer: PlayerId) -> ServerToClient {
     ServerToClient::Snapshot(world.snapshot_for(viewer))
+}
+
+/// Latest continuous sample + sticky edge actions across Inputs in one tick.
+fn merge_pending_input(prev: Input, next: Input) -> Input {
+    Input {
+        seq: next.seq,
+        echo_key: next.echo_key,
+        echo_issued_tick: next.echo_issued_tick,
+        wish_forward: next.wish_forward,
+        wish_strafe: next.wish_strafe,
+        look_yaw: next.look_yaw,
+        look_pitch: next.look_pitch,
+        jump: prev.jump || next.jump,
+        sprint_tap: prev.sprint_tap || next.sprint_tap,
+        // Prefer a non-zero cycle; sum if both fire (clamped).
+        weapon_cycle: {
+            let sum = i16::from(prev.weapon_cycle) + i16::from(next.weapon_cycle);
+            sum.clamp(i8::MIN as i16, i8::MAX as i16) as i8
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use game_net::{Hello, PROTOCOL_VERSION};
+
+    fn join(world: &mut World) -> (PlayerId, SessionKey, Tick) {
+        let (id, welcome) = world
+            .try_join(&Hello {
+                protocol: PROTOCOL_VERSION,
+                content_rev: CONTENT_REV,
+            })
+            .expect("join");
+        (id, welcome.key, welcome.issued_tick)
+    }
+
+    fn base_input(seq: u32, key: SessionKey, issued: Tick) -> Input {
+        Input {
+            seq,
+            echo_key: key,
+            echo_issued_tick: issued,
+            wish_forward: 0.0,
+            wish_strafe: 0.0,
+            look_yaw: 0.0,
+            look_pitch: 0.0,
+            jump: false,
+            sprint_tap: false,
+            weapon_cycle: 0,
+        }
+    }
+
+    #[test]
+    fn jump_edge_survives_overwrite_before_tick() {
+        let mut world = World::new();
+        let (id, key, issued) = join(&mut world);
+
+        let mut jump = base_input(1, key, issued);
+        jump.jump = true;
+        assert!(world.queue_input(id, jump));
+
+        // Later frame in the same tick: continuous sample, no jump edge.
+        let quiet = base_input(2, key, issued);
+        assert!(world.queue_input(id, quiet));
+
+        let pending = world
+            .players
+            .get(&id)
+            .unwrap()
+            .pending_input
+            .as_ref()
+            .unwrap();
+        assert!(
+            pending.jump,
+            "jump must sticky-merge across Inputs before tick"
+        );
+
+        let dt = 1.0 / 30.0;
+        world.advance_tick(dt);
+
+        let loco = world.players.get(&id).unwrap().state.locomotion;
+        assert!(
+            matches!(loco, game_sim::LocomotionMode::Air),
+            "merged jump should apply on tick"
+        );
+    }
+
+    #[test]
+    fn sprint_tap_and_weapon_cycle_sticky_merge() {
+        let mut world = World::new();
+        let (id, key, issued) = join(&mut world);
+
+        let mut a = base_input(1, key, issued);
+        a.sprint_tap = true;
+        a.weapon_cycle = 1;
+        assert!(world.queue_input(id, a));
+
+        let mut b = base_input(2, key, issued);
+        b.wish_forward = 1.0;
+        b.weapon_cycle = 0;
+        assert!(world.queue_input(id, b));
+
+        let pending = world
+            .players
+            .get(&id)
+            .unwrap()
+            .pending_input
+            .as_ref()
+            .unwrap();
+        assert!(pending.sprint_tap);
+        assert_eq!(pending.weapon_cycle, 1);
+        assert_eq!(pending.wish_forward, 1.0);
+    }
+
+    #[test]
+    fn merge_pending_or_edges() {
+        let prev = Input {
+            seq: 1,
+            echo_key: 0,
+            echo_issued_tick: 0,
+            wish_forward: 0.0,
+            wish_strafe: 0.0,
+            look_yaw: 0.1,
+            look_pitch: 0.0,
+            jump: true,
+            sprint_tap: false,
+            weapon_cycle: 1,
+        };
+        let next = Input {
+            seq: 2,
+            echo_key: 0,
+            echo_issued_tick: 0,
+            wish_forward: 1.0,
+            wish_strafe: -0.5,
+            look_yaw: 0.2,
+            look_pitch: -0.1,
+            jump: false,
+            sprint_tap: true,
+            weapon_cycle: 0,
+        };
+        let m = merge_pending_input(prev, next);
+        assert!(m.jump);
+        assert!(m.sprint_tap);
+        assert_eq!(m.weapon_cycle, 1);
+        assert_eq!(m.wish_forward, 1.0);
+        assert_eq!(m.look_yaw, 0.2);
+        assert_eq!(m.seq, 2);
+    }
 }

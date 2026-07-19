@@ -10,6 +10,7 @@ mod lineup;
 mod mesh_unlit;
 mod mp;
 mod pack;
+mod remote_present;
 mod reticle;
 mod self_present;
 mod view;
@@ -32,6 +33,7 @@ use input::MoveInput;
 use input::{install_input_handlers, InputSession};
 #[cfg(feature = "debug-tools")]
 use lineup::{LineupGpu, LineupState};
+use remote_present::RemotePresent;
 use reticle::ReticleGpu;
 use self_present::{SelfGpu, SelfPresentState};
 #[cfg(feature = "debug-tools")]
@@ -332,6 +334,7 @@ impl Renderer {
         &mut self,
         draw_grid: bool,
         self_body: Option<&SelfGpu>,
+        remotes: Option<&RemotePresent>,
         #[cfg(feature = "debug-tools")] lineup: Option<&LineupGpu>,
         draw_reticle: bool,
     ) -> Result<wgpu::SurfaceTexture, JsValue> {
@@ -374,6 +377,10 @@ impl Renderer {
 
             if let Some(body) = self_body {
                 body.draw(&mut pass);
+            }
+
+            if let Some(remotes) = remotes {
+                remotes.draw_all(&mut pass);
             }
 
             #[cfg(feature = "debug-tools")]
@@ -525,6 +532,8 @@ pub(crate) struct ClientInner {
     pub(crate) session: InputSession,
     pub(crate) move_input: MoveInput,
     self_present: SelfPresentState,
+    /// Remote peer present bodies (024); driven by `mp.remotes`.
+    remote_present: RemotePresent,
     last_frame_secs: f64,
     /// Multiplayer mode (022). Default solo; join is 023.
     pub(crate) mp: mp::MpClient,
@@ -564,6 +573,7 @@ impl ClientInner {
                 },
                 DebugHostRequest::MpLeave => {
                     self.mp.leave();
+                    self.remote_present.clear();
                     self.debug.shell.push_log("mp: left (solo)");
                 }
                 DebugHostRequest::MpStatus => {
@@ -681,6 +691,14 @@ impl ClientInner {
             self.view.set_mounted_eye(gpu.view.look_origin);
         }
 
+        // Remote peers: present pose only from snapshot table (024).
+        if self.mp.joined() {
+            self.remote_present
+                .apply_all(&self.renderer.queue, &self.mp.remotes);
+        } else {
+            self.remote_present.clear();
+        }
+
         #[cfg(feature = "debug-tools")]
         {
             let mounted_eye = self.view.mounted_eye();
@@ -730,9 +748,16 @@ impl ClientInner {
         if let SelfPresentState::Ready(gpu) = &self.self_present {
             gpu.write_view_proj(&self.renderer.queue, view_proj);
         }
+        self.remote_present
+            .write_view_proj_all(&self.renderer.queue, view_proj);
         let self_ref = match &self.self_present {
             SelfPresentState::Ready(gpu) => Some(gpu),
             _ => None,
+        };
+        let remotes_ref = if self.mp.joined() {
+            Some(&self.remote_present)
+        } else {
+            None
         };
 
         #[cfg(feature = "debug-tools")]
@@ -754,13 +779,18 @@ impl ClientInner {
                 LineupState::Ready(gpu) if want_lineup => Some(gpu),
                 _ => None,
             };
-            self.renderer
-                .render_scene(draw_grid, self_ref, lineup_ref, draw_reticle)?
+            self.renderer.render_scene(
+                draw_grid,
+                self_ref,
+                remotes_ref,
+                lineup_ref,
+                draw_reticle,
+            )?
         };
         #[cfg(not(feature = "debug-tools"))]
         let frame = self
             .renderer
-            .render_scene(draw_grid, self_ref, draw_reticle)?;
+            .render_scene(draw_grid, self_ref, remotes_ref, draw_reticle)?;
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -876,6 +906,55 @@ fn maybe_kick_self_load(inner: &Rc<RefCell<ClientInner>>) {
     });
 }
 
+fn maybe_kick_remote_loads(inner: &Rc<RefCell<ClientInner>>) {
+    let loads = {
+        let mut c = inner.borrow_mut();
+        if !c.mp.joined() {
+            if c.mp.remotes.count() == 0 {
+                c.remote_present.clear();
+            }
+            return;
+        }
+        let ids: Vec<_> = c.mp.remotes.ids().collect();
+        let poses: Vec<_> = c.mp.remotes.iter().cloned().collect();
+        c.remote_present.plan_loads(&ids, &poses)
+    };
+    if loads.is_empty() {
+        return;
+    }
+
+    let (device, queue, format) = {
+        let c = inner.borrow();
+        (
+            c.renderer.device.clone(),
+            c.renderer.queue.clone(),
+            c.renderer.config.format,
+        )
+    };
+
+    for (id, state, kit) in loads {
+        let device = device.clone();
+        let queue = queue.clone();
+        let inner = inner.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = SelfGpu::load(&device, &queue, format, MSAA_SAMPLE_COUNT, &state).await;
+            let mut c = inner.borrow_mut();
+            match &result {
+                Ok(_) => {
+                    web_sys::console::log_1(&format!("mp: remote id={id} present ready").into());
+                }
+                Err(err) => {
+                    let msg = err.as_string().unwrap_or_else(|| format!("{err:?}"));
+                    web_sys::console::error_1(&JsValue::from_str(&format!(
+                        "mp: remote id={id} load failed: {msg}"
+                    )));
+                }
+            }
+            c.remote_present.finish_load(id, kit, result);
+        });
+    }
+}
+
 #[cfg(feature = "debug-tools")]
 fn maybe_kick_lineup_load(inner: &Rc<RefCell<ClientInner>>) {
     {
@@ -981,6 +1060,7 @@ impl GameClient {
             session: InputSession::new(),
             move_input: MoveInput::default(),
             self_present: SelfPresentState::Idle,
+            remote_present: RemotePresent::new(),
             last_frame_secs: 0.0,
             mp: mp::MpClient::new(),
             #[cfg(feature = "debug-tools")]
@@ -1019,6 +1099,7 @@ impl GameClient {
 
         *frame_cb.borrow_mut() = Some(Closure::new(move || {
             maybe_kick_self_load(&client);
+            maybe_kick_remote_loads(&client);
             #[cfg(feature = "debug-tools")]
             maybe_kick_lineup_load(&client);
 

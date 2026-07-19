@@ -1,7 +1,8 @@
 //! Client multiplayer mode (`mp/`).
 //!
 //! Solo load does not require this module to talk to a server. Join (023) opens
-//! transport, yields authority, and applies server poses to local self.
+//! transport, yields authority, and applies server poses to local self. Snapshot
+//! `others` fill [`RemoteTable`] (024); present meshes live outside `mp/`.
 
 mod inbound;
 mod outbound;
@@ -12,8 +13,8 @@ mod transport;
 
 pub use inbound::InboundQueue;
 pub use outbound::OutboundQueue;
-pub use pose::{apply_pose, apply_spawn};
-pub use remotes::RemoteTable;
+pub use pose::{apply_pose, apply_spawn, pose_to_state};
+pub use remotes::{RemoteKitKey, RemoteTable};
 pub use session::{MpPhase, MpSession};
 pub use transport::{default_ws_url, MpTransport, TransportEvent};
 

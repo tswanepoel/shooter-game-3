@@ -174,10 +174,11 @@ impl SelfGpu {
         Ok(s)
     }
 
-    pub fn apply_state(&mut self, queue: &wgpu::Queue, self_state: &SelfState) {
+    /// Present pose only: body + active blaster (walk/sprint/jump/stand).
+    /// Used for local self body and remote peers (024).
+    pub fn apply_present(&mut self, queue: &wgpu::Queue, self_state: &SelfState) {
         let k2w = mesh_unlit::kit_to_world(self_state.placement_matrix(), self.min_y);
 
-        // Present pose: drawn body (walk/sprint + look).
         let loco = if self_state.locomotion.is_sprint() {
             &self.sprint_clip
         } else {
@@ -218,8 +219,11 @@ impl SelfGpu {
                 self.mesh.write_prim_verts(queue, b.batch, pi, &verts);
             }
         }
+    }
 
-        // Look pose: mount and aim (locomotion held at stand).
+    /// Look pose: mount and aim (locomotion held at stand). Local self only.
+    pub fn apply_look_view(&mut self, self_state: &SelfState) {
+        let k2w = mesh_unlit::kit_to_world(self_state.placement_matrix(), self.min_y);
         let (look_worlds, _) = mesh_unlit::pose_character_kit(
             &self.parts,
             self_state,
@@ -233,6 +237,11 @@ impl SelfGpu {
             look_origin,
             reticle_world,
         };
+    }
+
+    pub fn apply_state(&mut self, queue: &wgpu::Queue, self_state: &SelfState) {
+        self.apply_present(queue, self_state);
+        self.apply_look_view(self_state);
     }
 
     pub fn write_view_proj(&self, queue: &wgpu::Queue, view_proj: Mat4) {

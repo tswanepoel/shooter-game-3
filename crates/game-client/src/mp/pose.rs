@@ -36,3 +36,10 @@ pub fn apply_pose(state: &mut SelfState, pose: &NetPlayerPose) {
     state.walk_phase = pose.walk_phase;
     state.velocity_y = pose.velocity_y;
 }
+
+/// Build a presentation drive from a net pose (remotes and authority samples).
+pub fn pose_to_state(pose: &NetPlayerPose) -> SelfState {
+    let mut state = SelfState::default_loadout();
+    apply_pose(&mut state, pose);
+    state
+}
