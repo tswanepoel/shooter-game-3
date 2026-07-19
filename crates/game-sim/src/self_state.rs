@@ -323,6 +323,13 @@ impl SelfState {
         self.sync_pose();
     }
 
+    /// Set absolute look (radians) and snap body presentation. Used by server net apply.
+    pub fn set_look(&mut self, yaw: f32, pitch: f32) {
+        self.ocular_yaw = yaw;
+        self.ocular_pitch = pitch.clamp(-OCULAR_ELEV_CAP_RAD, OCULAR_ELEV_CAP_RAD);
+        self.sync_pose();
+    }
+
     /// Look-relative walk wish (−1…1). Ground: phase from distance. Air: coast + gravity.
     /// `sprint_tap` is a Shift press edge (020); latches sprint only (no cancel). Stamina gates start/drain.
     pub fn apply_move(&mut self, dt: f32, forward: f32, strafe: f32, sprint_tap: bool) {

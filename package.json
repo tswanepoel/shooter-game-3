@@ -9,6 +9,7 @@
     "preview": "npm run cook && npm run build-wasm:release && vite preview",
     "build-wasm": "cd crates/game-client && wasm-pack build --target web --out-dir ../../pkg",
     "build-wasm:release": "cd crates/game-client && wasm-pack build --target web --out-dir ../../pkg -- --no-default-features",
+    "server": "cargo run -p game-server",
     "format": "prettier --write \"web/**/*.{js,css,html}\" \"*.ts\" \"*.js\" \"tools/**/*.mjs\"",
     "format:check": "prettier --check \"web/**/*.{js,css,html}\" \"*.ts\" \"*.js\" \"tools/**/*.mjs\"",
     "prepare": "husky"

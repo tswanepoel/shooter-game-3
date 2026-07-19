@@ -18,8 +18,10 @@ A WebGPU-powered shooter game built with Rust and Vite.
 ```
 .
 ├── crates/
-│   ├── game-client/     # WebGPU frontend using Rust and wgpu
-│   └── game-sim/        # Server-side game logic using Rust and glam
+│   ├── game-client/     # WebGPU frontend (solo default; mp/ for multiplayer)
+│   ├── game-sim/        # Pure sim rules (client solo + server authority)
+│   ├── game-net/        # Wire protocol + postcard codec
+│   └── game-server/     # Native multiplayer host (WebSocket, fixed tick)
 ├── web/                 # Web frontend source (HTML, CSS, JS)
 │   └── dist/            # Sole ship tree (Vite build + cooked packs)
 ├── assets/
@@ -63,6 +65,12 @@ A WebGPU-powered shooter game built with Rust and Vite.
    ```bash
    npm run dev
    ```
+
+5. (Optional) Multiplayer authority host on a **separate port** (default `9090`; Vite is `3000`):
+   ```bash
+   cargo run -p game-server
+   ```
+   Override bind with `GAME_SERVER_BIND` (e.g. `0.0.0.0:9090`). Spec: [022](docs/features/022-mp-backbone.md). Join/remotes land in later features.
 
 Running `npm run dev` cooks art packs, compiles the Rust WASM module, then starts the Vite dev server with hot-reload. See [Development Workflow](#development-workflow) for details.
 

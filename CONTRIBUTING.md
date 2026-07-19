@@ -16,10 +16,12 @@ Thanks for your interest in contributing! This guide covers everything you need 
 
 ## Project Overview
 
-The shooter game is structured as a Rust workspace with two main crates:
+The shooter game is structured as a Rust workspace:
 
-- **`game-sim`** — server-side game logic and simulation
-- **`game-client`** — WebGPU rendering and client-side logic
+- **`game-sim`** — pure simulation rules (shared by client solo and server authority)
+- **`game-net`** — multiplayer wire DTOs and postcard codec (no sockets)
+- **`game-server`** — native WebSocket authority host (fixed tick)
+- **`game-client`** — WebGPU client; solo by default; multiplayer under `mp/`
 
 ## Environment Setup
 
@@ -37,12 +39,20 @@ npm run dev
 - Game logic and state management
 - Uses [`glam`](https://crates.io/crates/glam) for math
 - Ground-truth world constants (metres, Y-up, camera/grid quantities) live here; client consumes them
-- Serialization (e.g. serde) and physics (e.g. rapier3d) are planned; not wired in yet
+
+### `game-net` crate
+- Directed messages (`ClientToServer` / `ServerToClient`) and postcard binary codec
+- No sockets, no sim apply, no GPU
+
+### `game-server` crate
+- Native binary: WebSocket accept, fixed tick, server sim, broadcast
+- Run: `cargo run -p game-server` (default `0.0.0.0:9090`, override with `GAME_SERVER_BIND`)
 
 ### `game-client` crate
 - WebGPU rendering logic via [`wgpu`](https://crates.io/crates/wgpu)
 - JavaScript interop via [`wasm-bindgen`](https://crates.io/crates/wasm-bindgen)
-- Depends on `game-sim` so client and server share simulation types and world constants
+- Depends on `game-sim` and `game-net`
+- Multiplayer mode lives under `src/mp/` only; page load is solo
 - Client-only debug visuals (e.g. floor grid) must not invent world quantities already defined in `game-sim`
 
 ### Web assets (`web/`)
@@ -105,6 +115,8 @@ This project follows [Conventional Commits](https://www.conventionalcommits.org/
 | Scope | Paths / meaning |
 |-------|-----------------|
 | `sim` | `crates/game-sim` |
+| `net` | `crates/game-net` |
+| `server` | `crates/game-server` |
 | `client` | `crates/game-client` |
 | `web` | `web/` |
 | `assets` | `assets/` |

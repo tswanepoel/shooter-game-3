@@ -8,6 +8,9 @@ mod input;
 #[cfg(feature = "debug-tools")]
 mod lineup;
 mod mesh_unlit;
+// Join/remotes/session apply surface for 023–024; backbone keeps the module live.
+#[allow(dead_code)]
+mod mp;
 mod pack;
 mod reticle;
 mod self_present;
@@ -525,6 +528,8 @@ pub(crate) struct ClientInner {
     pub(crate) move_input: MoveInput,
     self_present: SelfPresentState,
     last_frame_secs: f64,
+    /// Multiplayer mode (022). Default solo; join is 023.
+    pub(crate) mp: mp::MpClient,
     #[cfg(feature = "debug-tools")]
     pub(crate) debug: DebugTools,
     #[cfg(feature = "debug-tools")]
@@ -559,8 +564,12 @@ impl ClientInner {
         };
         self.last_frame_secs = now;
 
+        // MP transport only (022). Join / authority apply is 023.
+        self.mp.poll_transport();
+
         let look = self.session.take_look_px();
         let session_ok = self.session.is_active();
+        let solo = !self.mp.joined();
 
         #[cfg(feature = "debug-tools")]
         let console_open = self.debug.is_open();
@@ -575,8 +584,8 @@ impl ClientInner {
         #[cfg(not(feature = "debug-tools"))]
         let was_fly = false;
 
-        // Mounted look + walk while the view is still on the self (including the enter frame).
-        if session_ok && !console_open && !was_fly {
+        // Solo: local sim owns self. Joined (023): server snapshots own pose.
+        if solo && session_ok && !console_open && !was_fly {
             self.self_state.apply_look(
                 dt,
                 -look.x * LOOK_SENS_RAD_PER_PX,
@@ -595,7 +604,7 @@ impl ClientInner {
                 self.self_state.cycle_weapon(wdir);
             }
             self.self_state.apply_move(dt, fwd, strafe, sprint_tap);
-        } else {
+        } else if solo {
             if !session_ok || console_open || was_fly {
                 self.move_input.clear_keys();
             }
@@ -908,6 +917,7 @@ impl GameClient {
             move_input: MoveInput::default(),
             self_present: SelfPresentState::Idle,
             last_frame_secs: 0.0,
+            mp: mp::MpClient::new(),
             #[cfg(feature = "debug-tools")]
             debug,
             #[cfg(feature = "debug-tools")]
