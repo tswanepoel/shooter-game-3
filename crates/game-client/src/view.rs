@@ -19,8 +19,8 @@ pub const LOOK_SENS_RAD_PER_PX: f32 = 0.0025;
 pub const LOOK_SPIKE_PX: f32 = 1024.0;
 /// Flycam pitch matches mounted look (±90°). View matrix stays stable at the poles.
 /// Rest-pose eye before the body mesh reports a posed face point (character-a).
-/// Matches head + FACE_OFFSET under kit scale — not the older feet stub (0, 1.52, 0.27).
-const DEFAULT_MOUNTED_EYE_M: Vec3 = Vec3::new(0.0, 1.433_333_3, 0.233_333_33);
+/// Matches calibrated mount / `FACE_OFFSET_HEAD_KIT` at rest: (0, 1.52, 0.27) m.
+const DEFAULT_MOUNTED_EYE_M: Vec3 = Vec3::new(0.0, 1.52, 0.27);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ViewMode {

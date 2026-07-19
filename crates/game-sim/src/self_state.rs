@@ -35,8 +35,11 @@ pub const WALK_CLIP_DURATION_S: f32 = 2.0 / 3.0;
 pub const WALK_STRIDE_M: f32 = WALK_SPEED_M_S * WALK_CLIP_DURATION_S;
 
 /// Head-local face offset in character-kit units (applied under posed `head` node).
-/// With character-a head scale 0.1 and kit→m 1/1.5: rest eye ≈ (0, 1.43, 0.23) m.
-pub const FACE_OFFSET_HEAD_KIT: Vec3 = Vec3::new(0.0, 2.5, 3.5);
+///
+/// Chosen so rest look origin matches the calibrated feet-local eye
+/// `(0, 1.52, 0.27)` m (character-a: head pivot `(0, 1.9, 0)` kit, scale `0.1`,
+/// kit→m `1/1.5`, soles on y = 0).
+pub const FACE_OFFSET_HEAD_KIT: Vec3 = Vec3::new(0.0, 3.8, 4.05);
 
 /// Ground locomotion mode (016).
 ///
