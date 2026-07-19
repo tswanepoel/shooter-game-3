@@ -82,16 +82,16 @@ impl RemotePresent {
         }
     }
 
-    /// Present-pose each ready remote from the latest table samples.
+    /// Present-pose each ready remote from interpolated samples (027).
     pub fn apply_all(&mut self, queue: &wgpu::Queue, table: &RemoteTable) {
-        for pose in table.iter() {
+        for pose in table.present_poses() {
             let Some(Slot::Ready { gpu, kit }) = self.slots.get_mut(&pose.id) else {
                 continue;
             };
-            if *kit != RemoteKitKey::from_pose(pose) {
+            if *kit != RemoteKitKey::from_pose(&pose) {
                 continue;
             }
-            let state = pose_to_state(pose);
+            let state = pose_to_state(&pose);
             gpu.apply_present(queue, &state);
         }
     }

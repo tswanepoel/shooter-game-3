@@ -2,7 +2,7 @@
 //!
 //! Solo load does not require this module to talk to a server. Join opens
 //! transport; while joined the client predicts self (026), hard-corrects from
-//! Snapshot + `ack_seq`, and fills [`RemoteTable`] from `others` (024).
+//! Snapshot + `ack_seq`, and buffers `others` for remote interp (024 / 027).
 
 mod inbound;
 mod outbound;
@@ -250,10 +250,7 @@ impl MpClient {
                     self.predict_history
                         .retain(|sample| sample.input.seq > s.ack_seq);
                 }
-                self.remotes.clear();
-                for pose in s.others {
-                    self.remotes.insert(pose);
-                }
+                self.remotes.apply_snapshot_others(s.tick, s.others);
             }
             ServerToClient::PlayerLeft(left) => {
                 self.remotes.remove(left.id);

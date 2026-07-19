@@ -919,7 +919,7 @@ fn maybe_kick_remote_loads(inner: &Rc<RefCell<ClientInner>>) {
             return;
         }
         let ids: Vec<_> = c.mp.remotes.ids().collect();
-        let poses: Vec<_> = c.mp.remotes.iter().cloned().collect();
+        let poses = c.mp.remotes.latest_poses();
         c.remote_present.plan_loads(&ids, &poses)
     };
     if loads.is_empty() {
