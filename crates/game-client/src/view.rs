@@ -13,10 +13,6 @@ const FLY_SPEED_M_S: f32 = 6.0;
 const FLY_SPRINT_MULT: f32 = 3.0;
 /// Mouse look sensitivity (radians per pixel). Shared with mounted ocular.
 pub const LOOK_SENS_RAD_PER_PX: f32 = 0.00015;
-/// Discard only pathological single-frame pointer spikes (px), e.g. pointer-lock
-/// re-entry jumps. Must stay well above real flicks: at 60 Hz, 48 px/frame is only
-/// ~7° and freezes the camera on any fast turn. True browser glitches are hundreds+.
-pub const LOOK_SPIKE_PX: f32 = 1024.0;
 /// Flycam pitch matches mounted look (±90°). View matrix stays stable at the poles.
 /// Rest-pose eye before the body mesh reports a posed face point (character-a).
 /// Matches calibrated mount / `FACE_OFFSET_HEAD_KIT` at rest: (0, 1.52, 0.27) m.

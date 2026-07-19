@@ -35,7 +35,7 @@ use reticle::ReticleGpu;
 use self_present::{SelfGpu, SelfPresentState};
 #[cfg(feature = "debug-tools")]
 use view::FlyInput;
-use view::{ViewController, LOOK_SENS_RAD_PER_PX, LOOK_SPIKE_PX};
+use view::{ViewController, LOOK_SENS_RAD_PER_PX};
 
 const CLEAR_COLOR: wgpu::Color = wgpu::Color {
     r: 0.05,
@@ -577,14 +577,11 @@ impl ClientInner {
 
         // Mounted look + walk while the view is still on the self (including the enter frame).
         if session_ok && !console_open && !was_fly {
-            let spike = look.x.abs() > LOOK_SPIKE_PX || look.y.abs() > LOOK_SPIKE_PX;
-            if !spike {
-                self.self_state.apply_look(
-                    dt,
-                    -look.x * LOOK_SENS_RAD_PER_PX,
-                    -look.y * LOOK_SENS_RAD_PER_PX,
-                );
-            }
+            self.self_state.apply_look(
+                dt,
+                -look.x * LOOK_SENS_RAD_PER_PX,
+                -look.y * LOOK_SENS_RAD_PER_PX,
+            );
             let (fwd, strafe) = self.move_input.axes();
             let sprint_tap = self.move_input.take_sprint();
             self.self_state.wish_forward = fwd.clamp(-1.0, 1.0);
@@ -628,12 +625,7 @@ impl ClientInner {
             if session_ok && flycam && !console_open {
                 // Enter frame already baked this look into self → fly pose; don't double-apply.
                 let look = if was_fly { look } else { glam::Vec2::ZERO };
-                let spike = look.x.abs() > LOOK_SPIKE_PX || look.y.abs() > LOOK_SPIKE_PX;
-                self.view.update_flycam(
-                    dt,
-                    &self.fly_input,
-                    if spike { glam::Vec2::ZERO } else { look },
-                );
+                self.view.update_flycam(dt, &self.fly_input, look);
             } else if console_open || !session_ok {
                 self.fly_input.clear_keys();
             }
