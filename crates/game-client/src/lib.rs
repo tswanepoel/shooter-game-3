@@ -586,17 +586,18 @@ impl ClientInner {
                 );
             }
             let (fwd, strafe) = self.move_input.axes();
+            let sprint_tap = self.move_input.take_sprint();
             self.self_state.wish_forward = fwd.clamp(-1.0, 1.0);
             self.self_state.wish_strafe = strafe.clamp(-1.0, 1.0);
             if self.move_input.take_jump() {
                 self.self_state.try_jump();
             }
-            self.self_state.apply_move(dt, fwd, strafe);
+            self.self_state.apply_move(dt, fwd, strafe, sprint_tap);
         } else {
             if !session_ok || console_open || was_fly {
                 self.move_input.clear_keys();
             }
-            self.self_state.apply_move(dt, 0.0, 0.0);
+            self.self_state.apply_move(dt, 0.0, 0.0, false);
         }
 
         if let SelfPresentState::Ready(gpu) = &mut self.self_present {

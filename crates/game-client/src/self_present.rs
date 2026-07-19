@@ -22,6 +22,8 @@ pub struct SelfGpu {
     parts: Vec<CharPart>,
     /// Kenney `walk` clip (phase from sim).
     walk_clip: AnimClip,
+    /// Kenney `sprint` clip (phase from sim while sprinting).
+    sprint_clip: AnimClip,
     /// part index → primitive index in character batch (0), if meshful.
     part_prim: Vec<Option<usize>>,
     blaster_local: Vec<Vec<MeshVertex>>,
@@ -64,11 +66,18 @@ impl SelfGpu {
             mesh_unlit::extract_character_parts(char_glb).map_err(|e| JsValue::from_str(&e))?;
         let walk_clip =
             mesh_unlit::extract_clip(char_glb, "walk").map_err(|e| JsValue::from_str(&e))?;
+        let sprint_clip =
+            mesh_unlit::extract_clip(char_glb, "sprint").map_err(|e| JsValue::from_str(&e))?;
         let blaster_prims =
             mesh_unlit::extract_primitives(blaster_glb).map_err(|e| JsValue::from_str(&e))?;
 
+        let loco = if self_state.locomotion.is_sprint() {
+            &sprint_clip
+        } else {
+            &walk_clip
+        };
         let (worlds, arm_kit) =
-            mesh_unlit::pose_character_kit(&parts, self_state, Some(&walk_clip), KitPose::Present);
+            mesh_unlit::pose_character_kit(&parts, self_state, Some(loco), KitPose::Present);
         let k2w = mesh_unlit::kit_to_world(self_state.placement_matrix(), min_y);
 
         let mut char_cpu: Vec<(Vec<MeshVertex>, Vec<u32>, [f32; 4])> = Vec::new();
@@ -86,7 +95,11 @@ impl SelfGpu {
             char_cpu.push((verts, part.indices.clone(), part.base_color));
         }
 
-        let aim_pitch = self_state.torso_pitch + self_state.shoulder_pitch;
+        let aim_pitch = if self_state.locomotion.is_sprint() {
+            0.0
+        } else {
+            self_state.torso_pitch + self_state.shoulder_pitch
+        };
         let blaster_root = mesh_unlit::held_blaster_root(k2w, arm_kit, bi, aim_pitch);
         let mut blaster_local = Vec::new();
         let mut blaster_cpu = Vec::new();
@@ -110,6 +123,7 @@ impl SelfGpu {
             mesh: layout.finish(vec![char_batch, blaster_batch]),
             parts,
             walk_clip,
+            sprint_clip,
             part_prim,
             blaster_local,
             blaster_batch: 1,
@@ -127,13 +141,14 @@ impl SelfGpu {
     pub fn apply_state(&mut self, queue: &wgpu::Queue, self_state: &SelfState) {
         let k2w = mesh_unlit::kit_to_world(self_state.placement_matrix(), self.min_y);
 
-        // Present pose: drawn body (walk + look).
-        let (present_worlds, arm_kit) = mesh_unlit::pose_character_kit(
-            &self.parts,
-            self_state,
-            Some(&self.walk_clip),
-            KitPose::Present,
-        );
+        // Present pose: drawn body (walk/sprint + look).
+        let loco = if self_state.locomotion.is_sprint() {
+            &self.sprint_clip
+        } else {
+            &self.walk_clip
+        };
+        let (present_worlds, arm_kit) =
+            mesh_unlit::pose_character_kit(&self.parts, self_state, Some(loco), KitPose::Present);
 
         for (i, part) in self.parts.iter().enumerate() {
             let Some(prim) = self.part_prim[i] else {
@@ -147,7 +162,11 @@ impl SelfGpu {
             self.mesh.write_prim_verts(queue, 0, prim, &verts);
         }
 
-        let aim_pitch = self_state.torso_pitch + self_state.shoulder_pitch;
+        let aim_pitch = if self_state.locomotion.is_sprint() {
+            0.0
+        } else {
+            self_state.torso_pitch + self_state.shoulder_pitch
+        };
         let blaster_root =
             mesh_unlit::held_blaster_root(k2w, arm_kit, self.letter_index, aim_pitch);
         for (pi, local) in self.blaster_local.iter().enumerate() {

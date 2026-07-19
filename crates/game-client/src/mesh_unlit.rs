@@ -1195,16 +1195,17 @@ pub enum KitPose {
 
 /// Pose character parts from sim drive. Returns kit-space worlds and arm-right.
 ///
-/// Walk clip applies for [`KitPose::Present`] while locomotion uses the walk clip
-/// (walk or stop-settle).
+/// Locomotion clip applies for [`KitPose::Present`] while mode uses a loco clip
+/// (walk, sprint, or stop-settle). Pass the matching clip (walk or sprint).
 pub fn pose_character_kit(
     parts: &[CharPart],
     self_state: &game_sim::SelfState,
-    walk_clip: Option<&AnimClip>,
+    loco_clip: Option<&AnimClip>,
     pose: KitPose,
 ) -> (Vec<Mat4>, Mat4) {
-    let walk_over = match (pose, walk_clip) {
-        (KitPose::Present, Some(clip)) if self_state.locomotion.uses_walk_clip() => {
+    let sprinting = self_state.locomotion.is_sprint();
+    let loco_over = match (pose, loco_clip) {
+        (KitPose::Present, Some(clip)) if self_state.locomotion.uses_loco_clip() => {
             Some(clip.sample_overrides(self_state.walk_phase))
         }
         _ => None,
@@ -1217,14 +1218,21 @@ pub fn pose_character_kit(
     let mut locals = Vec::with_capacity(parts.len());
     for p in parts {
         let mut local = p.bind_local;
-        if let Some(ref over) = walk_over {
+        if let Some(ref over) = loco_over {
             if let Some(sample) = over.get(&p.name) {
-                // Legs and soft body bob from walk; upper aim layers on after.
-                let apply_walk = matches!(
-                    p.name.as_str(),
-                    "root" | "leg-left" | "leg-right" | "arm-left"
-                );
-                if apply_walk {
+                // Walk: legs + left arm (right arm stays aim hold). Sprint: both arms swing.
+                let apply_loco = if sprinting {
+                    matches!(
+                        p.name.as_str(),
+                        "root" | "leg-left" | "leg-right" | "arm-left" | "arm-right"
+                    )
+                } else {
+                    matches!(
+                        p.name.as_str(),
+                        "root" | "leg-left" | "leg-right" | "arm-left"
+                    )
+                };
+                if apply_loco {
                     let sample = if p.name == "root" {
                         damp_walk_body_bob(p.bind_local, *sample, WALK_BODY_BOB_SCALE)
                     } else {
@@ -1236,10 +1244,10 @@ pub fn pose_character_kit(
         }
 
         match p.name.as_str() {
-            "torso" => {
+            "torso" if !sprinting => {
                 local *= Mat4::from_quat(Quat::from_rotation_x(-self_state.torso_pitch));
             }
-            "arm-right" => {
+            "arm-right" if !sprinting => {
                 // Armed hold + aim owns the right arm (walk arm swing is presentation for left).
                 let (_s, _r, t) = local.to_scale_rotation_translation();
                 let scale = {

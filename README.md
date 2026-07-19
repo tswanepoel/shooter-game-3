@@ -114,7 +114,7 @@ Vite serves cook outputs from `assets/cooked/` (not authoring kits). Production 
 
 ### Player self
 
-The default view mounts on the player **self**: a standing Kenney body with a held blaster (`character-a` + `blaster-p` until loadout exists). Mouse look aims the **view centre** (sim look, no lag); **WASD** walks on the ground at clip-native speed (~3.46 m/s; look-relative); **Space** jumps (~1.2 m peak). One sim drive rebuilds two poses: **look pose** (head-mounted on look — camera, reticle, aim) and **present pose** (drawn body and blaster, including walk). The **look origin** is the look-pose face point; walk does not move the crosshair. Kit body and blaster meshes use matte lighting (directional key + ambient; [018](docs/features/018-lit-kit-meshes.md)). Specs: `docs/features/017-look-mounted-view.md`, `016-wasd-walks.md`, `019-jump.md`. Production and dev both load this path; kit facts stay in the source kit READMEs.
+The default view mounts on the player **self**: a standing Kenney body with a held blaster (`character-a` + `blaster-p` until loadout exists). Mouse look aims the **view centre** (sim look, no lag); **WASD** walks on the ground at clip-native speed (~3.46 m/s; look-relative); **Shift** tap sprints (~1.75× walk, sticky until empty/stop; limited stamina; [020](docs/features/020-shift-sprint.md)); **Space** jumps (~1.2 m peak). One sim drive rebuilds two poses: **look pose** (head-mounted on look — camera, reticle, aim) and **present pose** (drawn body and blaster, including walk/sprint). The **look origin** is the look-pose face point; walk does not move the crosshair. Kit body and blaster meshes use matte lighting (directional key + ambient; [018](docs/features/018-lit-kit-meshes.md)). Specs: `docs/features/017-look-mounted-view.md`, `016-wasd-walks.md`, `019-jump.md`, `020-shift-sprint.md`. Production and dev both load this path; kit facts stay in the source kit READMEs.
 
 ### Debug tools
 
@@ -124,6 +124,8 @@ With `npm run dev`, press **`` ` ``** (backtick) for the in-game developer conso
 |---|---|
 | **Click canvas** | Enter / resume input session |
 | **WASD** | Walk (mounted; look-relative) |
+| **Shift** | Tap to sprint (sticky until empty/stop; stamina-limited; mounted) |
+| **Space** | Jump (mounted; ~1.2 m peak) |
 | **Mouse** | Look / aim |
 | **`` ` ``** | Toggle developer console |
 | **F9** / `screenshot` | Capture frame to `debug/shots/` |

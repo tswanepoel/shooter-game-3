@@ -34,6 +34,22 @@ pub const WALK_CLIP_DURATION_S: f32 = 2.0 / 3.0;
 /// Ground metres per full walk cycle (phase 0→1). At walk speed this plays the clip at 1×.
 pub const WALK_STRIDE_M: f32 = WALK_SPEED_M_S * WALK_CLIP_DURATION_S;
 
+/// Sprint speed on the ground plane (020). ~1.75× walk.
+pub const SPRINT_SPEED_M_S: f32 = WALK_SPEED_M_S * 1.75;
+/// Kenney `sprint` clip duration (seconds).
+pub const SPRINT_CLIP_DURATION_S: f32 = 0.5;
+/// Ground metres per full sprint cycle (phase 0→1). At sprint speed this plays the clip at 1×.
+pub const SPRINT_STRIDE_M: f32 = SPRINT_SPEED_M_S * SPRINT_CLIP_DURATION_S;
+
+/// Full stamina (0…1).
+pub const STAMINA_MAX: f32 = 1.0;
+/// Continuous sprint duration on a full bar (seconds).
+pub const STAMINA_SPRINT_S: f32 = 4.0;
+/// Full refill time while not sprinting (seconds).
+pub const STAMINA_REGEN_S: f32 = 4.0;
+/// Minimum fill required to *start* a sprint (avoid premature flicker).
+pub const STAMINA_MIN_TO_START: f32 = 0.25;
+
 pub const JUMP_PEAK_M: f32 = 1.2;
 pub const JUMP_TIME_TO_APEX_S: f32 = 0.25;
 pub const JUMP_GRAVITY_M_S2: f32 = 2.0 * JUMP_PEAK_M / (JUMP_TIME_TO_APEX_S * JUMP_TIME_TO_APEX_S);
@@ -52,6 +68,7 @@ pub enum LocomotionMode {
     #[default]
     Stand,
     Walk,
+    Sprint,
     Stopping,
     Air,
 }
@@ -59,6 +76,14 @@ pub enum LocomotionMode {
 impl LocomotionMode {
     pub fn uses_walk_clip(self) -> bool {
         matches!(self, Self::Walk | Self::Stopping)
+    }
+
+    pub fn uses_loco_clip(self) -> bool {
+        matches!(self, Self::Walk | Self::Sprint | Self::Stopping)
+    }
+
+    pub fn is_sprint(self) -> bool {
+        matches!(self, Self::Sprint)
     }
 
     pub fn is_air(self) -> bool {
@@ -83,8 +108,12 @@ pub struct SelfState {
     /// Look-relative strafe wish (−1…1). Positive is D (right).
     pub wish_strafe: f32,
     pub locomotion: LocomotionMode,
-    /// Fraction through the walk cycle, [0, 1).
+    /// Fraction through the locomotion cycle, [0, 1).
     pub walk_phase: f32,
+    /// Sprint stamina 0…[`STAMINA_MAX`] (020).
+    pub stamina: f32,
+    /// Sticky sprint wish from Shift tap (020); cleared on cancel, stop, or empty bar.
+    pub sprint_latched: bool,
     pub velocity_y: f32,
     /// Horizontal air velocity locked at jump (world XZ).
     pub air_vel_x: f32,
@@ -120,6 +149,8 @@ impl SelfState {
             wish_strafe: 0.0,
             locomotion: LocomotionMode::Stand,
             walk_phase: 0.0,
+            stamina: STAMINA_MAX,
+            sprint_latched: false,
             velocity_y: 0.0,
             air_vel_x: 0.0,
             air_vel_z: 0.0,
@@ -135,17 +166,27 @@ impl SelfState {
         !self.locomotion.is_air() && self.position.y <= 1e-5 && self.velocity_y <= 0.0
     }
 
+    /// Ground plane speed for the current locomotion (walk or sprint).
+    pub fn ground_speed(&self) -> f32 {
+        if self.locomotion.is_sprint() {
+            SPRINT_SPEED_M_S
+        } else {
+            WALK_SPEED_M_S
+        }
+    }
+
     pub fn try_jump(&mut self) {
         if !self.is_grounded() {
             return;
         }
+        let speed = self.ground_speed();
         let mut wish =
             self.look_forward_xz() * self.wish_forward + self.look_right_xz() * self.wish_strafe;
         wish.y = 0.0;
         if wish.length_squared() > 1e-12 {
             let dir = wish.normalize();
-            self.air_vel_x = dir.x * WALK_SPEED_M_S;
-            self.air_vel_z = dir.z * WALK_SPEED_M_S;
+            self.air_vel_x = dir.x * speed;
+            self.air_vel_z = dir.z * speed;
         } else {
             self.air_vel_x = 0.0;
             self.air_vel_z = 0.0;
@@ -196,9 +237,15 @@ impl SelfState {
     }
 
     /// Look-relative walk wish (−1…1). Ground: phase from distance. Air: coast + gravity.
-    pub fn apply_move(&mut self, dt: f32, forward: f32, strafe: f32) {
+    /// `sprint_tap` is a Shift press edge (020); latches sprint only (no cancel). Stamina gates start/drain.
+    pub fn apply_move(&mut self, dt: f32, forward: f32, strafe: f32, sprint_tap: bool) {
         self.wish_forward = forward.clamp(-1.0, 1.0);
         self.wish_strafe = strafe.clamp(-1.0, 1.0);
+
+        // Shift tap only engages; never cancels (empty bar / stop / lose W clear the latch).
+        if sprint_tap && !self.sprint_latched && self.stamina >= STAMINA_MIN_TO_START {
+            self.sprint_latched = true;
+        }
 
         let mut wish =
             self.look_forward_xz() * self.wish_forward + self.look_right_xz() * self.wish_strafe;
@@ -209,28 +256,80 @@ impl SelfState {
 
         if self.locomotion.is_air() {
             self.integrate_air(dt, moving);
+            // Latched sprint still costs stamina aloft (no jump-regen exploit).
+            if self.sprint_latched {
+                self.drain_stamina(dt);
+            } else {
+                self.regen_stamina(dt);
+            }
         } else if moving {
+            // Sprint is forward-only (W); A/D/S alone walk.
+            let forward_ok = self.wish_forward > 1e-6;
+            if self.sprint_latched && !forward_ok {
+                self.sprint_latched = false;
+            }
+            let sprinting = self.sprint_latched && forward_ok && self.stamina > 0.0;
+
+            let (speed, stride) = if sprinting {
+                (SPRINT_SPEED_M_S, SPRINT_STRIDE_M)
+            } else {
+                (WALK_SPEED_M_S, WALK_STRIDE_M)
+            };
+
             let dir = wish.normalize();
-            let step = WALK_SPEED_M_S * dt;
-            self.position += dir * step;
+            self.position += dir * (speed * dt);
             self.position.y = 0.0;
-            self.locomotion = LocomotionMode::Walk;
-            let dphase = if WALK_STRIDE_M > 1e-8 {
-                WALK_SPEED_M_S * dt / WALK_STRIDE_M
+            self.locomotion = if sprinting {
+                LocomotionMode::Sprint
+            } else {
+                LocomotionMode::Walk
+            };
+            let dphase = if stride > 1e-8 {
+                speed * dt / stride
             } else {
                 0.0
             };
             self.walk_phase = (self.walk_phase + dphase).rem_euclid(1.0);
-        } else {
-            let dphase = if WALK_STRIDE_M > 1e-8 {
-                WALK_SPEED_M_S * dt / WALK_STRIDE_M
+
+            if self.sprint_latched {
+                self.drain_stamina(dt);
+                if !self.sprint_latched {
+                    self.locomotion = LocomotionMode::Walk;
+                }
             } else {
-                0.0
-            };
-            self.settle_walk_stop(dphase);
+                self.regen_stamina(dt);
+            }
+        } else {
+            self.sprint_latched = false;
+            if self.locomotion.is_sprint() {
+                self.locomotion = LocomotionMode::Stand;
+                self.walk_phase = 0.0;
+            } else {
+                let dphase = if WALK_STRIDE_M > 1e-8 {
+                    WALK_SPEED_M_S * dt / WALK_STRIDE_M
+                } else {
+                    0.0
+                };
+                self.settle_walk_stop(dphase);
+            }
+            self.regen_stamina(dt);
         }
 
         self.sync_pose();
+    }
+
+    fn drain_stamina(&mut self, dt: f32) {
+        self.stamina = (self.stamina - dt / STAMINA_SPRINT_S).max(0.0);
+        if self.stamina <= 0.0 {
+            self.stamina = 0.0;
+            self.sprint_latched = false;
+        }
+    }
+
+    fn regen_stamina(&mut self, dt: f32) {
+        if self.stamina < STAMINA_MAX {
+            self.stamina = (self.stamina + dt / STAMINA_REGEN_S).min(STAMINA_MAX);
+        }
     }
 
     fn integrate_air(&mut self, dt: f32, land_wish: bool) {
@@ -378,7 +477,7 @@ mod tests {
     #[test]
     fn walk_forward_along_look_at_constant_speed() {
         let mut s = SelfState::default_loadout();
-        s.apply_move(1.0, 1.0, 0.0);
+        s.apply_move(1.0, 1.0, 0.0, false);
         assert_eq!(s.locomotion, LocomotionMode::Walk);
         assert!((s.position.z - WALK_SPEED_M_S).abs() < 1e-5);
         assert!(s.position.x.abs() < 1e-5);
@@ -390,7 +489,7 @@ mod tests {
     #[test]
     fn diagonal_wish_normalizes_speed() {
         let mut s = SelfState::default_loadout();
-        s.apply_move(1.0, 1.0, 1.0);
+        s.apply_move(1.0, 1.0, 1.0, false);
         let dist = s.position.length();
         assert!((dist - WALK_SPEED_M_S).abs() < 1e-4, "dist={dist}");
     }
@@ -399,7 +498,7 @@ mod tests {
     fn strafe_is_look_relative_and_keys_do_not_yaw() {
         let mut s = SelfState::default_loadout();
         s.ocular_yaw = 0.0;
-        s.apply_move(1.0, 0.0, 1.0);
+        s.apply_move(1.0, 0.0, 1.0, false);
         // Facing +Z, screen-right is −X (RH look_to / forward × up).
         assert!((s.position.x + WALK_SPEED_M_S).abs() < 1e-4);
         assert!(s.position.z.abs() < 1e-4);
@@ -411,7 +510,7 @@ mod tests {
     fn zero_wish_settles_to_nearest_neutral_then_stands() {
         let mut s = SelfState::default_loadout();
         // First half: stop should aim at mid-cycle neutral (0.5), not full end.
-        s.apply_move(0.1, 1.0, 0.0);
+        s.apply_move(0.1, 1.0, 0.0, false);
         assert!(
             s.walk_phase > 1e-6 && s.walk_phase < 0.5,
             "phase={}",
@@ -419,13 +518,13 @@ mod tests {
         );
         let pos = s.position;
 
-        s.apply_move(1e-3, 0.0, 0.0);
+        s.apply_move(1e-3, 0.0, 0.0, false);
         assert_eq!(s.locomotion, LocomotionMode::Stopping);
         assert!((s.position - pos).length() < 1e-6, "feet plant on stop");
 
         let remain = 0.5 - s.walk_phase;
         let dt_finish = remain * WALK_STRIDE_M / WALK_SPEED_M_S + 1e-3;
-        s.apply_move(dt_finish, 0.0, 0.0);
+        s.apply_move(dt_finish, 0.0, 0.0, false);
         assert_eq!(s.locomotion, LocomotionMode::Stand);
         assert!((s.walk_phase).abs() < 1e-6);
         assert!((s.position - pos).length() < 1e-6);
@@ -435,16 +534,16 @@ mod tests {
     fn stop_in_second_half_settles_to_cycle_end() {
         let mut s = SelfState::default_loadout();
         // One full stride-second lands past mid (speed/stride * t).
-        s.apply_move(0.4, 1.0, 0.0);
+        s.apply_move(0.4, 1.0, 0.0, false);
         assert!(s.walk_phase >= 0.5, "phase={}", s.walk_phase);
         let pos = s.position;
         let remain = 1.0 - s.walk_phase;
-        s.apply_move(1e-3, 0.0, 0.0);
+        s.apply_move(1e-3, 0.0, 0.0, false);
         assert_eq!(s.locomotion, LocomotionMode::Stopping);
         let dt_finish = (remain - 1e-3 * WALK_SPEED_M_S / WALK_STRIDE_M).max(0.0) * WALK_STRIDE_M
             / WALK_SPEED_M_S
             + 1e-3;
-        s.apply_move(dt_finish, 0.0, 0.0);
+        s.apply_move(dt_finish, 0.0, 0.0, false);
         assert_eq!(s.locomotion, LocomotionMode::Stand);
         assert!((s.position - pos).length() < 1e-6);
     }
@@ -452,13 +551,13 @@ mod tests {
     #[test]
     fn walk_after_settled_stand_starts_at_phase_zero() {
         let mut s = SelfState::default_loadout();
-        s.apply_move(0.1, 1.0, 0.0);
+        s.apply_move(0.1, 1.0, 0.0, false);
         let remain = 0.5 - s.walk_phase;
         let dt_finish = remain * WALK_STRIDE_M / WALK_SPEED_M_S + 1e-3;
-        s.apply_move(dt_finish, 0.0, 0.0);
+        s.apply_move(dt_finish, 0.0, 0.0, false);
         assert_eq!(s.locomotion, LocomotionMode::Stand);
 
-        s.apply_move(1e-3, 1.0, 0.0);
+        s.apply_move(1e-3, 1.0, 0.0, false);
         let expect = (WALK_SPEED_M_S * 1e-3 / WALK_STRIDE_M).rem_euclid(1.0);
         assert!(
             (s.walk_phase - expect).abs() < 1e-5,
@@ -470,11 +569,11 @@ mod tests {
     #[test]
     fn wish_during_stopping_resumes_walk() {
         let mut s = SelfState::default_loadout();
-        s.apply_move(0.15, 1.0, 0.0);
-        s.apply_move(1e-3, 0.0, 0.0);
+        s.apply_move(0.15, 1.0, 0.0, false);
+        s.apply_move(1e-3, 0.0, 0.0, false);
         assert_eq!(s.locomotion, LocomotionMode::Stopping);
         let phase = s.walk_phase;
-        s.apply_move(1e-3, 1.0, 0.0);
+        s.apply_move(1e-3, 1.0, 0.0, false);
         assert_eq!(s.locomotion, LocomotionMode::Walk);
         assert!(s.walk_phase > phase);
     }
@@ -489,7 +588,7 @@ mod tests {
         let dt = 1.0 / 120.0;
         let mut peak = 0.0_f32;
         for _ in 0..200 {
-            s.apply_move(dt, 0.0, 0.0);
+            s.apply_move(dt, 0.0, 0.0, false);
             peak = peak.max(s.position.y);
             if s.is_grounded() {
                 break;
@@ -508,7 +607,7 @@ mod tests {
     fn jump_while_airborne_is_ignored() {
         let mut s = SelfState::default_loadout();
         s.try_jump();
-        s.apply_move(0.05, 0.0, 0.0);
+        s.apply_move(0.05, 0.0, 0.0, false);
         let y = s.position.y;
         let vy = s.velocity_y;
         s.try_jump();
@@ -519,11 +618,11 @@ mod tests {
     #[test]
     fn air_coasts_at_launch_direction_and_freezes_phase() {
         let mut s = SelfState::default_loadout();
-        s.apply_move(0.1, 1.0, 0.0);
+        s.apply_move(0.1, 1.0, 0.0, false);
         let phase = s.walk_phase;
         s.try_jump();
         // Strafe mid-air must not change path — still +Z from launch.
-        s.apply_move(0.2, 0.0, 1.0);
+        s.apply_move(0.2, 0.0, 1.0, false);
         assert_eq!(s.locomotion, LocomotionMode::Air);
         assert!((s.walk_phase - phase).abs() < 1e-6, "phase must freeze");
         assert!(
@@ -540,7 +639,7 @@ mod tests {
         s.try_jump();
         let dt = 1.0 / 60.0;
         for _ in 0..120 {
-            s.apply_move(dt, 1.0, 0.0);
+            s.apply_move(dt, 1.0, 0.0, false);
             if !s.locomotion.is_air() {
                 break;
             }
@@ -548,5 +647,186 @@ mod tests {
         assert_eq!(s.locomotion, LocomotionMode::Walk);
         assert!(s.position.y.abs() < 1e-5);
         assert!((s.walk_phase).abs() < 1e-6);
+    }
+
+    #[test]
+    fn sprint_moves_faster_than_walk() {
+        let mut walk = SelfState::default_loadout();
+        let mut sprint = SelfState::default_loadout();
+        walk.apply_move(1.0, 1.0, 0.0, false);
+        sprint.apply_move(1.0, 1.0, 0.0, true);
+        assert_eq!(sprint.locomotion, LocomotionMode::Sprint);
+        assert!(sprint.sprint_latched);
+        assert!((walk.position.z - WALK_SPEED_M_S).abs() < 1e-4);
+        assert!((sprint.position.z - SPRINT_SPEED_M_S).abs() < 1e-4);
+        assert!(sprint.stamina < STAMINA_MAX);
+    }
+
+    #[test]
+    fn sprint_stays_without_holding() {
+        let mut s = SelfState::default_loadout();
+        s.apply_move(0.05, 1.0, 0.0, true);
+        assert_eq!(s.locomotion, LocomotionMode::Sprint);
+        s.apply_move(0.2, 1.0, 0.0, false);
+        assert_eq!(s.locomotion, LocomotionMode::Sprint);
+        assert!(s.sprint_latched);
+    }
+
+    #[test]
+    fn second_tap_keeps_sprint() {
+        let mut s = SelfState::default_loadout();
+        s.apply_move(0.05, 1.0, 0.0, true);
+        assert_eq!(s.locomotion, LocomotionMode::Sprint);
+        s.apply_move(0.05, 1.0, 0.0, true);
+        assert_eq!(s.locomotion, LocomotionMode::Sprint);
+        assert!(s.sprint_latched);
+    }
+
+    #[test]
+    fn sprint_requires_min_stamina_to_start() {
+        let mut s = SelfState::default_loadout();
+        s.stamina = STAMINA_MIN_TO_START - 0.01;
+        s.apply_move(0.1, 1.0, 0.0, true);
+        assert_eq!(s.locomotion, LocomotionMode::Walk);
+        assert!(!s.sprint_latched);
+        assert!((s.position.z - WALK_SPEED_M_S * 0.1).abs() < 1e-4);
+    }
+
+    #[test]
+    fn sprint_continues_below_min_until_empty() {
+        let mut s = SelfState::default_loadout();
+        s.apply_move(0.05, 1.0, 0.0, true);
+        assert_eq!(s.locomotion, LocomotionMode::Sprint);
+        s.stamina = STAMINA_MIN_TO_START - 0.05;
+        s.apply_move(0.05, 1.0, 0.0, false);
+        assert_eq!(s.locomotion, LocomotionMode::Sprint);
+    }
+
+    #[test]
+    fn empty_stamina_drops_to_walk_without_restart() {
+        let mut s = SelfState::default_loadout();
+        s.apply_move(0.05, 1.0, 0.0, true);
+        assert_eq!(s.locomotion, LocomotionMode::Sprint);
+        s.stamina = 1e-4;
+        s.apply_move(0.05, 1.0, 0.0, false);
+        assert_eq!(s.locomotion, LocomotionMode::Walk);
+        assert!(!s.sprint_latched);
+        assert!(s.stamina < STAMINA_MIN_TO_START);
+        let z = s.position.z;
+        // Fresh tap still blocked until min fill.
+        s.apply_move(0.1, 1.0, 0.0, true);
+        assert_eq!(s.locomotion, LocomotionMode::Walk);
+        assert!((s.position.z - z - WALK_SPEED_M_S * 0.1).abs() < 1e-3);
+    }
+
+    #[test]
+    fn stamina_regens_when_not_sprinting() {
+        let mut s = SelfState::default_loadout();
+        s.stamina = 0.0;
+        s.apply_move(STAMINA_REGEN_S, 0.0, 0.0, false);
+        assert!((s.stamina - STAMINA_MAX).abs() < 1e-4);
+    }
+
+    #[test]
+    fn stop_wish_clears_sprint_latch() {
+        let mut s = SelfState::default_loadout();
+        s.apply_move(0.1, 1.0, 0.0, true);
+        assert!(s.sprint_latched);
+        s.apply_move(0.1, 0.0, 0.0, false);
+        assert!(!s.sprint_latched);
+        assert_ne!(s.locomotion, LocomotionMode::Sprint);
+    }
+
+    #[test]
+    fn air_does_not_start_sprint() {
+        let mut s = SelfState::default_loadout();
+        s.try_jump();
+        s.apply_move(0.05, 1.0, 0.0, true);
+        assert_eq!(s.locomotion, LocomotionMode::Air);
+    }
+
+    #[test]
+    fn jump_from_sprint_locks_sprint_air_speed() {
+        let mut s = SelfState::default_loadout();
+        s.apply_move(0.1, 1.0, 0.0, true);
+        assert_eq!(s.locomotion, LocomotionMode::Sprint);
+        s.try_jump();
+        assert!((s.air_vel_z - SPRINT_SPEED_M_S).abs() < 1e-4);
+        assert!(s.air_vel_x.abs() < 1e-5);
+    }
+
+    #[test]
+    fn sprint_rejects_strafe_only_and_back() {
+        let mut s = SelfState::default_loadout();
+        s.apply_move(0.1, 0.0, 1.0, true);
+        assert_eq!(s.locomotion, LocomotionMode::Walk);
+        assert!(!s.sprint_latched);
+        assert!((s.position.length() - WALK_SPEED_M_S * 0.1).abs() < 1e-3);
+
+        s = SelfState::default_loadout();
+        s.apply_move(0.1, -1.0, 0.0, true);
+        assert_eq!(s.locomotion, LocomotionMode::Walk);
+        assert!(!s.sprint_latched);
+    }
+
+    #[test]
+    fn sprint_allows_forward_with_strafe() {
+        let mut s = SelfState::default_loadout();
+        s.apply_move(0.1, 1.0, 1.0, true);
+        assert_eq!(s.locomotion, LocomotionMode::Sprint);
+        assert!((s.position.length() - SPRINT_SPEED_M_S * 0.1).abs() < 1e-3);
+    }
+
+    #[test]
+    fn losing_forward_ends_sprint() {
+        let mut s = SelfState::default_loadout();
+        s.apply_move(0.05, 1.0, 0.0, true);
+        assert_eq!(s.locomotion, LocomotionMode::Sprint);
+        s.apply_move(0.05, 0.0, 1.0, false);
+        assert_eq!(s.locomotion, LocomotionMode::Walk);
+        assert!(!s.sprint_latched);
+    }
+
+    #[test]
+    fn latched_sprint_drains_in_air_no_jump_regen() {
+        let mut s = SelfState::default_loadout();
+        s.apply_move(0.05, 1.0, 0.0, true);
+        assert!(s.sprint_latched);
+        let before = s.stamina;
+        s.try_jump();
+        assert_eq!(s.locomotion, LocomotionMode::Air);
+        // Full hop time is short; still must drain, never regen.
+        let dt = 1.0 / 60.0;
+        for _ in 0..30 {
+            s.apply_move(dt, 1.0, 0.0, false);
+        }
+        assert!(
+            s.stamina < before - 0.05,
+            "stamina={before} -> {} (expected drain while latched aloft)",
+            s.stamina
+        );
+        assert!(s.stamina < before);
+    }
+
+    #[test]
+    fn continuous_jump_while_latched_empties_stamina() {
+        let mut s = SelfState::default_loadout();
+        s.apply_move(0.02, 1.0, 0.0, true);
+        let dt = 1.0 / 60.0;
+        for _ in 0..500 {
+            if s.is_grounded() {
+                s.try_jump();
+            }
+            s.apply_move(dt, 1.0, 0.0, false);
+            if !s.sprint_latched && s.stamina <= 0.0 {
+                break;
+            }
+        }
+        assert!(
+            !s.sprint_latched && s.stamina <= 1e-5,
+            "latch={} stamina={}",
+            s.sprint_latched,
+            s.stamina
+        );
     }
 }

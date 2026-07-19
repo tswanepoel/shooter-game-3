@@ -47,7 +47,7 @@ fn request_pointer_lock_raw(canvas: &HtmlCanvasElement) {
     }
 }
 
-/// Held WASD + jump edge for mounted locomotion.
+/// Held WASD + Shift sprint edge + jump edge for mounted locomotion.
 #[derive(Debug, Default, Clone)]
 pub struct MoveInput {
     pub forward: bool,
@@ -55,6 +55,7 @@ pub struct MoveInput {
     pub left: bool,
     pub right: bool,
     jump_edge: bool,
+    sprint_edge: bool,
 }
 
 impl MoveInput {
@@ -78,8 +79,22 @@ impl MoveInput {
         j
     }
 
+    pub fn note_sprint_press(&mut self) {
+        self.sprint_edge = true;
+    }
+
+    pub fn take_sprint(&mut self) -> bool {
+        let s = self.sprint_edge;
+        self.sprint_edge = false;
+        s
+    }
+
     pub fn is_move_key(code: &str) -> bool {
         matches!(code, "KeyW" | "KeyA" | "KeyS" | "KeyD")
+    }
+
+    pub fn is_sprint_key(code: &str) -> bool {
+        matches!(code, "ShiftLeft" | "ShiftRight")
     }
 
     pub fn clear_keys(&mut self) {
@@ -310,6 +325,11 @@ fn on_session_key_down(inner: &Rc<RefCell<ClientInner>>, event: &KeyboardEvent) 
     } else if MoveInput::is_move_key(&code) {
         event.prevent_default();
         client.move_input.set_key(&code, true);
+    } else if MoveInput::is_sprint_key(&code) {
+        event.prevent_default();
+        if !event.repeat() {
+            client.move_input.note_sprint_press();
+        }
     } else if code == "Space" {
         event.prevent_default();
         if !event.repeat() {
