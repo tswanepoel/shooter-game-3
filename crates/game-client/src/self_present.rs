@@ -80,9 +80,7 @@ impl SelfGpu {
             let world = k2w * worlds[i];
             let mut verts = part.local_verts.clone();
             for v in &mut verts {
-                v.position = world
-                    .transform_point3(Vec3::from_array(v.position))
-                    .to_array();
+                mesh_unlit::transform_vertex(v, world);
             }
             part_prim[i] = Some(char_cpu.len());
             char_cpu.push((verts, part.indices.clone(), part.base_color));
@@ -96,9 +94,7 @@ impl SelfGpu {
             blaster_local.push(verts.clone());
             let mut world_verts = verts;
             for v in &mut world_verts {
-                v.position = blaster_root
-                    .transform_point3(Vec3::from_array(v.position))
-                    .to_array();
+                mesh_unlit::transform_vertex(v, blaster_root);
             }
             blaster_cpu.push((world_verts, indices, color));
         }
@@ -146,9 +142,7 @@ impl SelfGpu {
             let world = k2w * present_worlds[i];
             let mut verts = part.local_verts.clone();
             for v in &mut verts {
-                v.position = world
-                    .transform_point3(Vec3::from_array(v.position))
-                    .to_array();
+                mesh_unlit::transform_vertex(v, world);
             }
             self.mesh.write_prim_verts(queue, 0, prim, &verts);
         }
@@ -159,9 +153,7 @@ impl SelfGpu {
         for (pi, local) in self.blaster_local.iter().enumerate() {
             let mut verts = local.clone();
             for v in &mut verts {
-                v.position = blaster_root
-                    .transform_point3(Vec3::from_array(v.position))
-                    .to_array();
+                mesh_unlit::transform_vertex(v, blaster_root);
             }
             self.mesh
                 .write_prim_verts(queue, self.blaster_batch, pi, &verts);

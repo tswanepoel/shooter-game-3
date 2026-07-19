@@ -1,4 +1,7 @@
-//! Flat unlit kit meshes: load, hold pose, grip attach, GPU upload.
+//! Kit meshes: load, hold pose, grip attach, GPU upload.
+//!
+//! Characters and blasters use lit matte shading (018): albedo × (ambient + key × N·L).
+//! Solid debug batches (markers) stay unlit via a material flag.
 
 use std::io::Cursor;
 
@@ -6,6 +9,13 @@ use glam::{Mat4, Quat, Vec3};
 use wasm_bindgen::JsValue;
 
 use crate::pack::{self, Pack};
+
+/// Direction **toward** the key light (world space). Slightly elevated front-right.
+const KEY_LIGHT_DIR: Vec3 = Vec3::new(0.45, 0.82, 0.35);
+/// Key contribution at N·L = 1 (display-referred multiply).
+const KEY_COLOR: [f32; 3] = [0.70, 0.70, 0.68];
+/// Ambient fill so unlit sides stay readable (moderately darker than full-bright).
+const AMBIENT_COLOR: [f32; 3] = [0.42, 0.42, 0.44];
 
 pub const KENNEY_CORE_PACK: &str = "kenney-core";
 
@@ -78,13 +88,21 @@ pub fn primary_muzzle_offset(letter_index: usize) -> Vec3 {
     Vec3::from_array(pts[0])
 }
 
-const UNLIT_SHADER: &str = r#"
+const KIT_SHADER: &str = r#"
 struct FrameUniforms {
     view_proj: mat4x4<f32>,
+    light_dir: vec3<f32>,
+    _pad0: f32,
+    key_color: vec3<f32>,
+    _pad1: f32,
+    ambient: vec3<f32>,
+    _pad2: f32,
 };
 
 struct MaterialUniforms {
     base_color: vec4<f32>,
+    // x: 1 = lit kit mesh, 0 = unlit solid/debug. (vec4 for uniform alignment)
+    flags: vec4<f32>,
 };
 
 @group(0) @binding(0)
@@ -99,26 +117,48 @@ var albedo_samp: sampler;
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
-    @location(1) uv: vec2<f32>,
+    @location(1) normal: vec3<f32>,
+    @location(2) uv: vec2<f32>,
 };
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
+    @location(0) normal: vec3<f32>,
+    @location(1) uv: vec2<f32>,
 };
 
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
     out.clip_position = frame.view_proj * vec4<f32>(in.position, 1.0);
+    out.normal = in.normal;
     out.uv = in.uv;
     return out;
 }
 
 @fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+fn fs_main(
+    in: VertexOutput,
+    @builtin(front_facing) front_facing: bool,
+) -> @location(0) vec4<f32> {
     let tex = textureSample(albedo, albedo_samp, in.uv);
-    return tex * material.base_color;
+    let albedo = tex * material.base_color;
+
+    if (material.flags.x < 0.5) {
+        return albedo;
+    }
+
+    // Double-sided: flip N on backfaces so lighting does not invert.
+    var n = normalize(in.normal);
+    if (!front_facing) {
+        n = -n;
+    }
+    // Half-Lambert (Valve-style wrap): softens the lit/dark edge on blocky kits.
+    let ndotl = dot(n, normalize(frame.light_dir));
+    let wrap = ndotl * 0.5 + 0.5;
+    let diffuse = wrap * wrap;
+    let lighting = frame.ambient + frame.key_color * diffuse;
+    return vec4<f32>(albedo.rgb * lighting, albedo.a);
 }
 "#;
 
@@ -126,6 +166,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct MeshVertex {
     pub position: [f32; 3],
+    pub normal: [f32; 3],
     pub uv: [f32; 2],
 }
 
@@ -133,12 +174,20 @@ pub struct MeshVertex {
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct FrameUniforms {
     view_proj: [[f32; 4]; 4],
+    light_dir: [f32; 3],
+    _pad0: f32,
+    key_color: [f32; 3],
+    _pad1: f32,
+    ambient: [f32; 3],
+    _pad2: f32,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct MaterialUniforms {
     base_color: [f32; 4],
+    /// x: 1 = lit, 0 = unlit solid/debug.
+    flags: [f32; 4],
 }
 
 struct GpuPrimitive {
@@ -184,8 +233,8 @@ impl UnlitMeshLayout {
         sample_count: u32,
     ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("kit-unlit"),
-            source: wgpu::ShaderSource::Wgsl(UNLIT_SHADER.into()),
+            label: Some("kit-lit"),
+            source: wgpu::ShaderSource::Wgsl(KIT_SHADER.into()),
         });
 
         let frame_uniform = device.create_buffer(&wgpu::BufferDescriptor {
@@ -199,7 +248,7 @@ impl UnlitMeshLayout {
             label: Some("kit-frame-bgl"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -257,7 +306,7 @@ impl UnlitMeshLayout {
         });
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("kit-unlit-pipeline"),
+            label: Some("kit-lit-pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
@@ -265,7 +314,11 @@ impl UnlitMeshLayout {
                 buffers: &[wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<MeshVertex>() as u64,
                     step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2],
+                    attributes: &wgpu::vertex_attr_array![
+                        0 => Float32x3,
+                        1 => Float32x3,
+                        2 => Float32x2,
+                    ],
                 }],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
@@ -347,8 +400,15 @@ impl UnlitMeshLayout {
 
 impl UnlitMeshGpu {
     pub fn write_view_proj(&self, queue: &wgpu::Queue, view_proj: Mat4) {
+        let dir = KEY_LIGHT_DIR.normalize_or_zero();
         let uniforms = FrameUniforms {
             view_proj: view_proj.to_cols_array_2d(),
+            light_dir: dir.to_array(),
+            _pad0: 0.0,
+            key_color: KEY_COLOR,
+            _pad1: 0.0,
+            ambient: AMBIENT_COLOR,
+            _pad2: 0.0,
         };
         queue.write_buffer(&self.frame_uniform, 0, bytemuck::bytes_of(&uniforms));
     }
@@ -520,7 +580,10 @@ pub fn upload_batch(
     gpu.queue.write_buffer(
         &material_uniform,
         0,
-        bytemuck::bytes_of(&MaterialUniforms { base_color }),
+        bytemuck::bytes_of(&MaterialUniforms {
+            base_color,
+            flags: [1.0, 0.0, 0.0, 0.0],
+        }),
     );
 
     let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -545,8 +608,7 @@ pub fn upload_batch(
     let mut gpu_prims = Vec::with_capacity(prims.len());
     for (mut verts, indices, _) in prims.drain(..) {
         for v in &mut verts {
-            let p = root.transform_point3(Vec3::from_array(v.position));
-            v.position = p.to_array();
+            transform_vertex(v, root);
         }
 
         let vbuf = gpu.device.create_buffer(&wgpu::BufferDescriptor {
@@ -635,7 +697,10 @@ pub fn upload_solid_batch(
     gpu.queue.write_buffer(
         &material_uniform,
         0,
-        bytemuck::bytes_of(&MaterialUniforms { base_color: color }),
+        bytemuck::bytes_of(&MaterialUniforms {
+            base_color: color,
+            flags: [0.0, 0.0, 0.0, 0.0],
+        }),
     );
 
     let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -659,8 +724,7 @@ pub fn upload_solid_batch(
 
     let (mut verts, indices, _) = prim;
     for v in &mut verts {
-        let p = root.transform_point3(Vec3::from_array(v.position));
-        v.position = p.to_array();
+        transform_vertex(v, root);
     }
 
     let vbuf = gpu.device.create_buffer(&wgpu::BufferDescriptor {
@@ -709,8 +773,10 @@ pub fn unit_sphere_prim(segments: u32, rings: u32) -> CpuPrim {
             let u = seg as f32 / segments as f32;
             let theta = u * std::f32::consts::TAU;
             let (sx, cx) = theta.sin_cos();
+            let n = [sx * sy, cy, cx * sy];
             verts.push(MeshVertex {
-                position: [sx * sy, cy, cx * sy],
+                position: n,
+                normal: n,
                 uv: [u, v],
             });
         }
@@ -731,6 +797,34 @@ pub fn unit_sphere_prim(segments: u32, rings: u32) -> CpuPrim {
 }
 
 pub type CpuPrim = (Vec<MeshVertex>, Vec<u32>, [f32; 4]);
+
+/// Transform position and normal by `m` (normal uses direction only, then normalize).
+pub fn transform_vertex(v: &mut MeshVertex, m: Mat4) {
+    v.position = m.transform_point3(Vec3::from_array(v.position)).to_array();
+    let n = m.transform_vector3(Vec3::from_array(v.normal));
+    v.normal = if n.length_squared() > 1e-12 {
+        n.normalize().to_array()
+    } else {
+        [0.0, 1.0, 0.0]
+    };
+}
+
+fn read_normals<'a, 's, F>(reader: &gltf::mesh::Reader<'a, 's, F>, count: usize) -> Vec<[f32; 3]>
+where
+    F: Clone + Fn(gltf::Buffer<'a>) -> Option<&'s [u8]>,
+{
+    match reader.read_normals() {
+        Some(iter) => {
+            let n: Vec<[f32; 3]> = iter.collect();
+            if n.len() == count {
+                n
+            } else {
+                vec![[0.0, 1.0, 0.0]; count]
+            }
+        }
+        None => vec![[0.0, 1.0, 0.0]; count],
+    }
+}
 
 /// One skinned-by-node character part: mesh in node-local space + bind local TRS.
 #[derive(Clone)]
@@ -1023,6 +1117,7 @@ fn walk_parts(
                 .read_positions()
                 .ok_or_else(|| "primitive missing POSITION".to_string())?
                 .collect();
+            let normals = read_normals(&reader, positions.len());
             let uvs: Vec<[f32; 2]> = match reader.read_tex_coords(0) {
                 Some(tc) => tc.into_f32().collect(),
                 None => vec![[0.0, 0.0]; positions.len()],
@@ -1038,6 +1133,7 @@ fn walk_parts(
             for (i, p) in positions.iter().enumerate() {
                 local_verts.push(MeshVertex {
                     position: *p,
+                    normal: normals[i],
                     uv: uvs[i],
                 });
             }
@@ -1340,6 +1436,7 @@ fn walk_node(
                 .read_positions()
                 .ok_or_else(|| "primitive missing POSITION".to_string())?
                 .collect();
+            let normals = read_normals(&reader, positions.len());
             let uvs: Vec<[f32; 2]> = match reader.read_tex_coords(0) {
                 Some(tc) => tc.into_f32().collect(),
                 None => vec![[0.0, 0.0]; positions.len()],
@@ -1355,12 +1452,14 @@ fn walk_node(
 
             let mut verts = Vec::with_capacity(positions.len());
             for (i, p) in positions.iter().enumerate() {
-                let wp = world.transform_point3(Vec3::from_array(*p));
-                *min_y = min_y.min(wp.y);
-                verts.push(MeshVertex {
-                    position: wp.to_array(),
+                let mut v = MeshVertex {
+                    position: *p,
+                    normal: normals[i],
                     uv: uvs[i],
-                });
+                };
+                transform_vertex(&mut v, world);
+                *min_y = min_y.min(v.position[1]);
+                verts.push(v);
             }
 
             let base_color = material_base_color(&prim);

@@ -114,7 +114,7 @@ Vite serves cook outputs from `assets/cooked/` (not authoring kits). Production 
 
 ### Player self
 
-The default view mounts on the player **self**: a standing Kenney body with a held blaster (`character-a` + `blaster-p` until loadout exists). Mouse look aims the **view centre** (sim look, no lag); **WASD** walks on the ground at clip-native speed (~3.46 m/s; look-relative). One sim drive rebuilds two poses: **look pose** (head-mounted on look — camera, reticle, aim) and **present pose** (drawn body and blaster, including walk). The **look origin** is the look-pose face point; walk does not move the crosshair. Specs: `docs/features/017-look-mounted-view.md`, `016-wasd-walks.md`. Production and dev both load this path; kit facts stay in the source kit READMEs.
+The default view mounts on the player **self**: a standing Kenney body with a held blaster (`character-a` + `blaster-p` until loadout exists). Mouse look aims the **view centre** (sim look, no lag); **WASD** walks on the ground at clip-native speed (~3.46 m/s; look-relative). One sim drive rebuilds two poses: **look pose** (head-mounted on look — camera, reticle, aim) and **present pose** (drawn body and blaster, including walk). The **look origin** is the look-pose face point; walk does not move the crosshair. Kit body and blaster meshes use matte lighting (directional key + ambient; [018](docs/features/018-lit-kit-meshes.md)). Specs: `docs/features/017-look-mounted-view.md`, `016-wasd-walks.md`. Production and dev both load this path; kit facts stay in the source kit READMEs.
 
 ### Debug tools
 
