@@ -86,6 +86,9 @@ mod tests {
             key: 0xDEAD_BEEF,
             issued_tick: 0,
             ack_seq: 12,
+            land_delay_secs: 0.01,
+            uplink_secs: 0.002,
+            l_min_secs: 0.001,
             you: None,
             others: vec![],
         });
@@ -96,6 +99,7 @@ mod tests {
             seq: 9,
             echo_key: 0xDEAD_BEEF,
             echo_issued_tick: 0,
+            intent_stamp_secs: 1.25,
             wish_forward: 1.0,
             wish_strafe: 0.0,
             look_yaw: 0.1,

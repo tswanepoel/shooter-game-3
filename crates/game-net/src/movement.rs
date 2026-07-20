@@ -8,6 +8,8 @@ pub struct Input {
     pub seq: Seq,
     pub echo_key: SessionKey,
     pub echo_issued_tick: Tick,
+    /// Client clock at send (seconds). Server uses this for uplink age / land schedule (032).
+    pub intent_stamp_secs: f64,
     /// Look-relative forward wish (−1…1).
     pub wish_forward: f32,
     /// Look-relative strafe wish (−1…1).

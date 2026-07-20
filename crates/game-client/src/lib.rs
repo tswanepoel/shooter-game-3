@@ -642,7 +642,7 @@ impl ClientInner {
         #[cfg(not(feature = "debug-tools"))]
         let was_fly = false;
 
-        // Solo: local sim owns self. Joined: predict body + send Input; Snapshot hard-corrects (026).
+        // Solo: local sim owns self. Joined: eager Input + body land delay (032); look immediate.
         if session_ok && !console_open && !was_fly {
             self.self_state.apply_look(
                 dt,
@@ -676,8 +676,7 @@ impl ClientInner {
                     sprint_tap,
                     weapon_cycle,
                 };
-                self.mp
-                    .push_input_predict(&mut self.self_state, &intent, dt);
+                self.mp.push_input_land(&mut self.self_state, &intent, dt);
             }
         } else if solo {
             if !session_ok || console_open || was_fly {
@@ -685,7 +684,7 @@ impl ClientInner {
             }
             self.self_state.apply_move(dt, 0.0, 0.0, false);
         } else {
-            // Joined but no active input session: hold look, zero wish, still predict.
+            // Joined but no active input session: hold look, zero wish, still land-send.
             if !session_ok || console_open || was_fly {
                 self.move_input.clear_keys();
             }
@@ -693,8 +692,7 @@ impl ClientInner {
                 self.self_state.ocular_yaw,
                 self.self_state.ocular_pitch,
             );
-            self.mp
-                .push_input_predict(&mut self.self_state, &intent, dt);
+            self.mp.push_input_land(&mut self.self_state, &intent, dt);
         }
 
         // Flush Input frames built this frame.

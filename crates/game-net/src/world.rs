@@ -52,6 +52,12 @@ pub struct Snapshot {
     /// Last `Input.seq` applied for the recipient into the sim that produced `you`.
     /// `0` before any Input has been applied.
     pub ack_seq: Seq,
+    /// Full body-channel land delay for the recipient: `L_i + TICK_DURATION_SECS` (032).
+    pub land_delay_secs: f32,
+    /// Smoothed uplink `L_i` for the recipient (intent → server recv).
+    pub uplink_secs: f32,
+    /// Session floor `L_min` (min smoothed uplink among joined peers).
+    pub l_min_secs: f32,
     pub you: Option<NetPlayerPose>,
     pub others: Vec<NetPlayerPose>,
 }

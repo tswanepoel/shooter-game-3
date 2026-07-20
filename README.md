@@ -70,7 +70,7 @@ A WebGPU-powered shooter game built with Rust and Vite.
    ```bash
    cargo run -p game-server
    ```
-   Override bind with `GAME_SERVER_BIND` (e.g. `0.0.0.0:9090`). Specs: [022](docs/features/022-mp-backbone.md)–[029](docs/features/029-mp-remote-adaptive-delay.md). In the dev console (`` ` ``): `mp join` / `mp leave` / `mp status`. Two joined clients each see the other’s body at the server pose (walk / sprint / jump / stand); remote present delay adapts from measured RTT (029).
+   Override bind with `GAME_SERVER_BIND` (e.g. `0.0.0.0:9090`). Specs: [022](docs/features/022-mp-backbone.md)–[032](docs/features/032-mp-input-land.md). In the dev console (`` ` ``): `mp join` / `mp leave` / `mp status`. Two joined clients each see the other’s body at the server pose (walk / sprint / jump / stand); body inputs land on a shared delay (032); remote present delay adapts from measured RTT (029).
 
 Running `npm run dev` cooks art packs, compiles the Rust WASM module, then starts the Vite dev server with hot-reload. See [Development Workflow](#development-workflow) for details.
 
@@ -140,7 +140,7 @@ With `npm run dev`, press **`` ` ``** (backtick) for the in-game developer conso
 | **F9** / `screenshot` | Capture frame to `debug/shots/` |
 | **F8** / `flycam` / `remount` | Debug flycam (WASD + mouse look, Q/E up/down, Shift sprint); remount restores the look-mounted self view |
 | `lineup` / `draw.lineup` | Toggle blaster lineup (held Kenney row: scale, paint, grip, muzzle markers) |
-| `nethud` / `hud.net` | Top FPS / RTT / delay banner (on by default; [031](docs/features/031-mp-net-hud.md)) |
+| `nethud` / `hud.net` | Top FPS / RTT / rdelay / land stall banner (on by default; [031](docs/features/031-mp-net-hud.md), [032](docs/features/032-mp-input-land.md)) |
 
 ## Contributing
 

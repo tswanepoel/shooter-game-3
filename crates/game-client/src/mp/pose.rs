@@ -1,6 +1,6 @@
-//! Map net poses onto local `SelfState` (present drive and predict/reconcile).
+//! Map net poses onto local `SelfState` (present drive and authority body).
 
-use game_net::{Input, NetActiveWeapon, NetLocomotion, NetPlayerPose, NetSpawn};
+use game_net::{NetActiveWeapon, NetLocomotion, NetPlayerPose, NetSpawn};
 use game_sim::{ActiveWeapon, LocomotionMode, SelfState};
 use glam::Vec3;
 
@@ -22,7 +22,7 @@ pub fn apply_pose(state: &mut SelfState, pose: &NetPlayerPose) {
     state.set_look(pose.ocular_yaw, pose.ocular_pitch);
 }
 
-/// Authoritative body only — does not touch ocular yaw/pitch (026 local camera).
+/// Authoritative body only — does not touch ocular yaw/pitch (local camera).
 pub fn apply_body_from_pose(state: &mut SelfState, pose: &NetPlayerPose) {
     state.position = Vec3::new(pose.position.x, pose.position.y, pose.position.z);
     state.character = pose.character;
@@ -41,63 +41,24 @@ pub fn apply_body_from_pose(state: &mut SelfState, pose: &NetPlayerPose) {
     };
     state.walk_phase = pose.walk_phase;
     state.velocity_y = pose.velocity_y;
-    // air_vel / stamina / sprint latch are not on the wire; hard-correct may
-    // mispredict mid-air until the next grounded sample.
-    // Refresh body presentation from the preserved local look.
+    // Sprint latch is not on the wire. Infer from authority loco.
+    state.sprint_latched = match pose.locomotion {
+        NetLocomotion::Sprint => true,
+        NetLocomotion::Air => state.sprint_latched,
+        _ => false,
+    };
+    if state.sprint_latched && state.stamina <= 0.0 {
+        state.stamina = f32::EPSILON;
+    }
     state.sync_pose();
 }
 
-/// Apply one Input the way the server tick does (look → jump → weapon → move).
-pub fn apply_input_to_state(state: &mut SelfState, input: &Input, dt: f32) {
-    state.set_look(input.look_yaw, input.look_pitch);
-    if input.jump {
-        state.try_jump();
-    }
-    if input.weapon_cycle != 0 {
-        state.cycle_weapon(input.weapon_cycle);
-    }
-    state.apply_move(dt, input.wish_forward, input.wish_strafe, input.sprint_tap);
-}
-
-/// Predict from a local intent (look already applied by the frame loop).
-pub fn predict_intent(state: &mut SelfState, intent: &super::InputIntent, dt: f32) {
-    if intent.jump {
-        state.try_jump();
-    }
-    if intent.weapon_cycle != 0 {
-        state.cycle_weapon(intent.weapon_cycle);
-    }
-    state.apply_move(
-        dt,
-        intent.wish_forward,
-        intent.wish_strafe,
-        intent.sprint_tap,
-    );
-}
-
-/// Hard-set body from `you`, drop acked history, resim the rest; restore camera look.
-pub fn reconcile_predicted(
-    state: &mut SelfState,
-    you: &NetPlayerPose,
-    ack_seq: u32,
-    history: &mut std::collections::VecDeque<PredictedSample>,
-) {
-    let yaw = state.ocular_yaw;
-    let pitch = state.ocular_pitch;
-
-    apply_body_from_pose(state, you);
-    history.retain(|s| s.input.seq > ack_seq);
-    for sample in history.iter() {
-        apply_input_to_state(state, &sample.input, sample.dt);
-    }
-    state.set_look(yaw, pitch);
-}
-
-/// One sent Input plus the dt used when it was predicted.
+/// One sent Input held until land time (032); body sim uses held channels at tick rate.
 #[derive(Debug, Clone)]
-pub struct PredictedSample {
-    pub input: Input,
-    pub dt: f32,
+pub struct LandSample {
+    pub input: game_net::Input,
+    /// Client clock when this sample may enter the held body channels.
+    pub land_at_secs: f64,
 }
 
 /// Build a presentation drive from a net pose (remotes).
@@ -139,49 +100,15 @@ mod tests {
     }
 
     #[test]
-    fn reconcile_drops_acked_and_restores_look() {
+    fn sprint_pose_restores_latch() {
         let mut state = SelfState::default_loadout();
-        state.set_look(0.3, -0.1);
-        state.position = Vec3::new(10.0, 0.0, 10.0);
-
-        let mut history = std::collections::VecDeque::new();
-        history.push_back(PredictedSample {
-            input: Input {
-                seq: 1,
-                echo_key: 0,
-                echo_issued_tick: 0,
-                wish_forward: 1.0,
-                wish_strafe: 0.0,
-                look_yaw: 0.0,
-                look_pitch: 0.0,
-                jump: false,
-                sprint_tap: false,
-                weapon_cycle: 0,
-            },
-            dt: 1.0 / 60.0,
-        });
-        history.push_back(PredictedSample {
-            input: Input {
-                seq: 2,
-                echo_key: 0,
-                echo_issued_tick: 0,
-                wish_forward: 1.0,
-                wish_strafe: 0.0,
-                look_yaw: 0.0,
-                look_pitch: 0.0,
-                jump: false,
-                sprint_tap: false,
-                weapon_cycle: 0,
-            },
-            dt: 1.0 / 60.0,
-        });
-
-        reconcile_predicted(&mut state, &pose_at(0.0, 0.0), 1, &mut history);
-        assert_eq!(history.len(), 1);
-        assert_eq!(history[0].input.seq, 2);
-        assert!((state.ocular_yaw - 0.3).abs() < 1e-5);
-        assert!((state.ocular_pitch - (-0.1)).abs() < 1e-5);
-        // Resim of seq 2 moved forward from origin.
-        assert!(state.position.z > 0.0);
+        state.sprint_latched = false;
+        state.stamina = 0.0;
+        let mut pose = pose_at(0.0, 0.0);
+        pose.locomotion = NetLocomotion::Sprint;
+        apply_body_from_pose(&mut state, &pose);
+        assert!(state.sprint_latched);
+        assert!(state.stamina > 0.0);
+        assert_eq!(state.locomotion, LocomotionMode::Sprint);
     }
 }
