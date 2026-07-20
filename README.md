@@ -18,10 +18,10 @@ A WebGPU-powered shooter game built with Rust and Vite.
 ```
 .
 ├── crates/
-│   ├── game-client/     # WebGPU frontend (solo default; mp/ for multiplayer)
-│   ├── game-sim/        # Pure sim rules (client solo + server authority)
-│   ├── game-net/        # Wire protocol + postcard codec
-│   └── game-server/     # Native multiplayer host (WebSocket, fixed tick)
+│   ├── game-client/     # WebGPU frontend (solo)
+│   ├── game-sim/        # Pure sim rules
+│   ├── game-net/        # Wire protocol placeholder
+│   └── game-server/     # Native host placeholder
 ├── web/                 # Web frontend source (HTML, CSS, JS)
 │   └── dist/            # Sole ship tree (Vite build + cooked packs)
 ├── assets/
@@ -65,12 +65,6 @@ A WebGPU-powered shooter game built with Rust and Vite.
    ```bash
    npm run dev
    ```
-
-5. (Optional) Multiplayer authority host on a **separate port** (default `9090`; Vite is `3000`):
-   ```bash
-   cargo run -p game-server
-   ```
-   Override bind with `GAME_SERVER_BIND` (e.g. `0.0.0.0:9090`). Specs: [022](docs/features/022-mp-backbone.md)–[032](docs/features/032-mp-input-land.md). In the dev console (`` ` ``): `mp join` / `mp leave` / `mp status`. Two joined clients each see the other’s body at the server pose (walk / sprint / jump / stand); body inputs land on a shared delay (032); remote present delay adapts from measured RTT (029).
 
 Running `npm run dev` cooks art packs, compiles the Rust WASM module, then starts the Vite dev server with hot-reload. See [Development Workflow](#development-workflow) for details.
 
@@ -140,7 +134,6 @@ With `npm run dev`, press **`` ` ``** (backtick) for the in-game developer conso
 | **F9** / `screenshot` | Capture frame to `debug/shots/` |
 | **F8** / `flycam` / `remount` | Debug flycam (WASD + mouse look, Q/E up/down, Shift sprint); remount restores the look-mounted self view |
 | `lineup` / `draw.lineup` | Toggle blaster lineup (held Kenney row: scale, paint, grip, muzzle markers) |
-| `nethud` / `hud.net` | Top FPS / RTT / rdelay / land stall banner (on by default; [031](docs/features/031-mp-net-hud.md), [032](docs/features/032-mp-input-land.md)) |
 
 ## Contributing
 

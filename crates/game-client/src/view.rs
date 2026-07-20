@@ -134,6 +134,7 @@ impl ViewController {
     }
 
     /// World-space eye currently used for the mounted (FP) view.
+    #[cfg(feature = "debug-tools")]
     pub fn mounted_eye(&self) -> Vec3 {
         self.mounted_eye
     }

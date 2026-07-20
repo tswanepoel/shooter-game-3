@@ -7,6 +7,4 @@ members = [
 ]
 resolver = "2"
 
-# game-server is native-only (not built for wasm32).
 [workspace.metadata]
-# Bind: GAME_SERVER_BIND (default 0.0.0.0:9090). Vite serves the page on :3000.

@@ -19,7 +19,6 @@ wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3.67", features = [
   "console",
-  "BinaryType",
   "Document",
   "DomRect",
   "Element",
@@ -27,13 +26,10 @@ web-sys = { version = "0.3.67", features = [
   "HtmlCanvasElement",
   "HtmlElement",
   "KeyboardEvent",
-  "Location",
-  "MessageEvent",
   "MouseEvent",
   "Performance",
   "Request",
   "Response",
-  "WebSocket",
   "WheelEvent",
   "Window",
 ] }
@@ -41,7 +37,6 @@ console_error_panic_hook = "0.1"
 glam = "0.24"
 bytemuck = { version = "1", features = ["derive"] }
 game-sim = { path = "../game-sim" }
-game-net = { path = "../game-net" }
 egui = { version = "0.31", optional = true }
 egui-wgpu = { version = "0.31", optional = true }
 # Kit marks KHR_materials_unlit as required; enable so parse does not reject the GLBs.

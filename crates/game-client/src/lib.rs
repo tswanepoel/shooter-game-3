@@ -8,9 +8,7 @@ mod input;
 #[cfg(feature = "debug-tools")]
 mod lineup;
 mod mesh_unlit;
-mod mp;
 mod pack;
-mod remote_present;
 mod reticle;
 mod self_present;
 mod view;
@@ -33,7 +31,6 @@ use input::MoveInput;
 use input::{install_input_handlers, InputSession};
 #[cfg(feature = "debug-tools")]
 use lineup::{LineupGpu, LineupState};
-use remote_present::RemotePresent;
 use reticle::ReticleGpu;
 use self_present::{SelfGpu, SelfPresentState};
 #[cfg(feature = "debug-tools")]
@@ -334,7 +331,6 @@ impl Renderer {
         &mut self,
         draw_grid: bool,
         self_body: Option<&SelfGpu>,
-        remotes: Option<&RemotePresent>,
         #[cfg(feature = "debug-tools")] lineup: Option<&LineupGpu>,
         draw_reticle: bool,
     ) -> Result<wgpu::SurfaceTexture, JsValue> {
@@ -377,10 +373,6 @@ impl Renderer {
 
             if let Some(body) = self_body {
                 body.draw(&mut pass);
-            }
-
-            if let Some(remotes) = remotes {
-                remotes.draw_all(&mut pass);
             }
 
             #[cfg(feature = "debug-tools")]
@@ -532,14 +524,7 @@ pub(crate) struct ClientInner {
     pub(crate) session: InputSession,
     pub(crate) move_input: MoveInput,
     self_present: SelfPresentState,
-    /// Remote peer present bodies (024); driven by `mp.remotes`.
-    remote_present: RemotePresent,
     last_frame_secs: f64,
-    /// Smoothed FPS for the debug net HUD (031).
-    #[cfg(feature = "debug-tools")]
-    fps_ema: f32,
-    /// Multiplayer mode (022). Default solo; join is 023.
-    pub(crate) mp: mp::MpClient,
     #[cfg(feature = "debug-tools")]
     pub(crate) debug: DebugTools,
     #[cfg(feature = "debug-tools")]
@@ -552,41 +537,6 @@ impl ClientInner {
     #[cfg(feature = "debug-tools")]
     pub(crate) fn pixels_per_point(&self) -> f32 {
         self.pixels_per_point
-    }
-
-    #[cfg(feature = "debug-tools")]
-    fn drain_debug_host_requests(&mut self) {
-        use debug::DebugHostRequest;
-        let reqs = self.debug.take_host_requests();
-        for req in reqs {
-            match req {
-                DebugHostRequest::Screenshot => {
-                    // Flag already set in execute; capture runs later in the frame.
-                }
-                DebugHostRequest::MpJoin => match self.mp.begin_join_default() {
-                    Ok(()) => {
-                        let url = mp::default_ws_url().unwrap_or_else(|_| "ws://…".into());
-                        self.debug.shell.push_log(format!("mp: connecting {url}"));
-                    }
-                    Err(e) => {
-                        self.debug
-                            .shell
-                            .push_log(format!("mp: join failed ({e:?})"));
-                    }
-                },
-                DebugHostRequest::MpLeave => {
-                    self.mp.leave();
-                    self.remote_present.clear();
-                    self.debug.shell.push_log("mp: left (solo)");
-                }
-                DebugHostRequest::MpStatus => {
-                    self.debug.shell.push_log(self.mp.status_line());
-                }
-            }
-        }
-        if let Some(msg) = self.mp.take_reject_message() {
-            self.debug.shell.push_log(msg);
-        }
     }
 
     fn render_frame(&mut self) -> Result<(), JsValue> {
@@ -609,25 +559,8 @@ impl ClientInner {
         };
         self.last_frame_secs = now;
 
-        #[cfg(feature = "debug-tools")]
-        {
-            let inst = if dt > 1e-6 { 1.0 / dt } else { 0.0 };
-            if self.fps_ema <= 0.0 {
-                self.fps_ema = inst;
-            } else {
-                self.fps_ema += 0.12 * (inst - self.fps_ema);
-            }
-        }
-
-        self.mp.poll_transport();
-        self.mp.apply_authority_to_self(&mut self.self_state);
-
-        #[cfg(feature = "debug-tools")]
-        self.drain_debug_host_requests();
-
         let look = self.session.take_look_px();
         let session_ok = self.session.is_active();
-        let solo = !self.mp.joined();
 
         #[cfg(feature = "debug-tools")]
         let console_open = self.debug.is_open();
@@ -642,7 +575,6 @@ impl ClientInner {
         #[cfg(not(feature = "debug-tools"))]
         let was_fly = false;
 
-        // Solo: local sim owns self. Joined: eager Input + body land delay (032); look immediate.
         if session_ok && !console_open && !was_fly {
             self.self_state.apply_look(
                 dt,
@@ -654,64 +586,26 @@ impl ClientInner {
             let jump = self.move_input.take_jump();
             let weapon_steps = self.move_input.take_weapon_cycle();
             let wdir = weapon_steps.signum();
-            let weapon_cycle = if weapon_steps == 0 { 0i8 } else { wdir };
 
-            if solo {
-                self.self_state.wish_forward = fwd.clamp(-1.0, 1.0);
-                self.self_state.wish_strafe = strafe.clamp(-1.0, 1.0);
-                if jump {
-                    self.self_state.try_jump();
-                }
-                for _ in 0..weapon_steps.unsigned_abs() {
-                    self.self_state.cycle_weapon(wdir);
-                }
-                self.self_state.apply_move(dt, fwd, strafe, sprint_tap);
-            } else {
-                let intent = mp::InputIntent {
-                    wish_forward: fwd.clamp(-1.0, 1.0),
-                    wish_strafe: strafe.clamp(-1.0, 1.0),
-                    look_yaw: self.self_state.ocular_yaw,
-                    look_pitch: self.self_state.ocular_pitch,
-                    jump,
-                    sprint_tap,
-                    weapon_cycle,
-                };
-                self.mp.push_input_land(&mut self.self_state, &intent, dt);
+            self.self_state.wish_forward = fwd.clamp(-1.0, 1.0);
+            self.self_state.wish_strafe = strafe.clamp(-1.0, 1.0);
+            if jump {
+                self.self_state.try_jump();
             }
-        } else if solo {
+            for _ in 0..weapon_steps.unsigned_abs() {
+                self.self_state.cycle_weapon(wdir);
+            }
+            self.self_state.apply_move(dt, fwd, strafe, sprint_tap);
+        } else {
             if !session_ok || console_open || was_fly {
                 self.move_input.clear_keys();
             }
             self.self_state.apply_move(dt, 0.0, 0.0, false);
-        } else {
-            // Joined but no active input session: hold look, zero wish, still land-send.
-            if !session_ok || console_open || was_fly {
-                self.move_input.clear_keys();
-            }
-            let intent = mp::InputIntent::idle_look(
-                self.self_state.ocular_yaw,
-                self.self_state.ocular_pitch,
-            );
-            self.mp.push_input_land(&mut self.self_state, &intent, dt);
-        }
-
-        // Flush Input frames built this frame.
-        if self.mp.joined() {
-            self.mp.poll_transport();
         }
 
         if let SelfPresentState::Ready(gpu) = &mut self.self_present {
             gpu.apply_state(&self.renderer.queue, &self.self_state);
             self.view.set_mounted_eye(gpu.view.look_origin);
-        }
-
-        // Remote peers: frame-clock interp + adaptive delay (027 / 028 / 029).
-        if self.mp.joined() {
-            self.mp.remotes.advance(dt);
-            self.remote_present
-                .apply_all(&self.renderer.queue, &self.mp.remotes);
-        } else {
-            self.remote_present.clear();
         }
 
         #[cfg(feature = "debug-tools")]
@@ -763,16 +657,9 @@ impl ClientInner {
         if let SelfPresentState::Ready(gpu) = &self.self_present {
             gpu.write_view_proj(&self.renderer.queue, view_proj);
         }
-        self.remote_present
-            .write_view_proj_all(&self.renderer.queue, view_proj);
         let self_ref = match &self.self_present {
             SelfPresentState::Ready(gpu) => Some(gpu),
             _ => None,
-        };
-        let remotes_ref = if self.mp.joined() {
-            Some(&self.remote_present)
-        } else {
-            None
         };
 
         #[cfg(feature = "debug-tools")]
@@ -794,18 +681,13 @@ impl ClientInner {
                 LineupState::Ready(gpu) if want_lineup => Some(gpu),
                 _ => None,
             };
-            self.renderer.render_scene(
-                draw_grid,
-                self_ref,
-                remotes_ref,
-                lineup_ref,
-                draw_reticle,
-            )?
+            self.renderer
+                .render_scene(draw_grid, self_ref, lineup_ref, draw_reticle)?
         };
         #[cfg(not(feature = "debug-tools"))]
         let frame = self
             .renderer
-            .render_scene(draw_grid, self_ref, remotes_ref, draw_reticle)?;
+            .render_scene(draw_grid, self_ref, draw_reticle)?;
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -821,21 +703,10 @@ impl ClientInner {
             let screen_h = height as f32 / ppp;
             let raw = self.debug.take_raw_input(screen_w, screen_h, time);
 
-            let hud_line = if self.debug.net_hud() {
-                Some(format!(
-                    "fps {:.0}  {}",
-                    self.fps_ema,
-                    self.mp.net_hud_fields()
-                ))
-            } else {
-                None
-            };
-            let full = self.debug.shell.run_frame(raw, ppp, hud_line.as_deref());
+            let full = self.debug.shell.run_frame(raw, ppp);
             if let Some(cmd) = self.debug.shell.take_pending_command() {
                 let _ = self.debug.execute(&cmd);
             }
-            // mp join/leave/status after console execute
-            self.drain_debug_host_requests();
 
             if let Some(full) = full {
                 let mut encoder =
@@ -928,55 +799,6 @@ fn maybe_kick_self_load(inner: &Rc<RefCell<ClientInner>>) {
             }
         }
     });
-}
-
-fn maybe_kick_remote_loads(inner: &Rc<RefCell<ClientInner>>) {
-    let loads = {
-        let mut c = inner.borrow_mut();
-        if !c.mp.joined() {
-            if c.mp.remotes.count() == 0 {
-                c.remote_present.clear();
-            }
-            return;
-        }
-        let ids: Vec<_> = c.mp.remotes.ids().collect();
-        let poses = c.mp.remotes.latest_poses();
-        c.remote_present.plan_loads(&ids, &poses)
-    };
-    if loads.is_empty() {
-        return;
-    }
-
-    let (device, queue, format) = {
-        let c = inner.borrow();
-        (
-            c.renderer.device.clone(),
-            c.renderer.queue.clone(),
-            c.renderer.config.format,
-        )
-    };
-
-    for (id, state, kit) in loads {
-        let device = device.clone();
-        let queue = queue.clone();
-        let inner = inner.clone();
-        wasm_bindgen_futures::spawn_local(async move {
-            let result = SelfGpu::load(&device, &queue, format, MSAA_SAMPLE_COUNT, &state).await;
-            let mut c = inner.borrow_mut();
-            match &result {
-                Ok(_) => {
-                    web_sys::console::log_1(&format!("mp: remote id={id} present ready").into());
-                }
-                Err(err) => {
-                    let msg = err.as_string().unwrap_or_else(|| format!("{err:?}"));
-                    web_sys::console::error_1(&JsValue::from_str(&format!(
-                        "mp: remote id={id} load failed: {msg}"
-                    )));
-                }
-            }
-            c.remote_present.finish_load(id, kit, result);
-        });
-    }
 }
 
 #[cfg(feature = "debug-tools")]
@@ -1084,11 +906,7 @@ impl GameClient {
             session: InputSession::new(),
             move_input: MoveInput::default(),
             self_present: SelfPresentState::Idle,
-            remote_present: RemotePresent::new(),
             last_frame_secs: 0.0,
-            #[cfg(feature = "debug-tools")]
-            fps_ema: 0.0,
-            mp: mp::MpClient::new(),
             #[cfg(feature = "debug-tools")]
             debug,
             #[cfg(feature = "debug-tools")]
@@ -1125,7 +943,6 @@ impl GameClient {
 
         *frame_cb.borrow_mut() = Some(Closure::new(move || {
             maybe_kick_self_load(&client);
-            maybe_kick_remote_loads(&client);
             #[cfg(feature = "debug-tools")]
             maybe_kick_lineup_load(&client);
 
