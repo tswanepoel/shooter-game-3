@@ -6,38 +6,40 @@ Prefer **delete** over reinterpretation. Do not keep land schedules, adaptive pr
 
 ## Philosophy (product law)
 
-The server and every client run the **same simulation** under a **shared clock** synchronized across all participants. At any moment this clock is treated as a **single value** everywhere.
+There is a **shared clock** \(T\) synchronized across the server and every client. At any moment we treat \(T\) as a common reference. This is **non-negotiable** — it is the only reliable way to order claims and reason about causality.
 
-Treating time as universal is a deliberate choice. It could just as easily remain relative, but the universal treatment maps cleanly onto real-world intuition. That mapping is what gives the model its vocabulary and keeps it simple to reason about. Equivalent systems can be built without a global clock and still produce the same outcomes, but they become harder to hold in the mind, harder to evolve, and more prone to complexity and subtle bugs.
+Every client runs its **own simulation in its own present**. Inputs, movement, and especially outcomes (hits, kills) are **claims** stamped with a time on the shared clock. Because of transmission delay these claims always arrive late.
 
-Because of transmission delay, client input always arrives at the server as a **claim about the past**. The server **simulates that past moment** and **replicates the resulting historical state** downstream. By the time the state reaches the client it is already an **even more distant past**. The client continuously **corrects** against it.
+The server does **not** run the single authoritative simulation of the world. Its job is to **relay** claims and to **reject** those that are clearly impossible relative to the shared timeline and previously accepted state. **Clients are the primary authors of their local reality.**
 
-This is the **baseline**. **Accurate prediction** is required to keep these necessary corrections from degrading the experience. Every compensatory technique exists to make those predictions as accurate and reliable as possible — not to invent a different time model.
+When late information arrives, a client **may** correct, but the default posture is to **preserve local experience**. Accurate prediction remains necessary only to keep those corrections small. Every compensatory technique exists to protect the client’s claimed reality from being needlessly disrupted.
 
 ### Vocabulary this implies
 
 | Term | Meaning |
 | --- | --- |
-| **Shared clock** | One synchronized time base; the same *t* is what “now” and “then” mean for sim and net discussion. |
-| **Claim about the past** | An Input (or equivalent) stamped for a clock time earlier than server receive. |
-| **Historical state** | Sim outcome at a past clock time; Snapshots (or equivalent) are records of that past, not a live “present” authority that erases client time. |
-| **Correction** | Client reconciling local belief to received historical truth. |
-| **Prediction** | Advancing local belief ahead of last known history so play stays responsive; must match shared rules so corrections stay small. |
+| **Shared clock (\(T\))** | One synchronized time base; the same \(t\) is what “now” and “then” mean when ordering claims and discussing causality. |
+| **Local present** | Each client’s live sim and feel of play — advanced under shared rules, owned by that client until late claims force a choice. |
+| **Claim** | An input, movement sample, or outcome (hit, kill, …) stamped with a time on \(T\). Claims are assertions about a moment, not permission requests that wait for a central world step. |
+| **Relay** | Server forwards accepted claims to peers (and may echo) so others can integrate them into their local presents. |
+| **Reject** | Server drops claims that are clearly impossible given \(T\), prior accepted claims, and shared rules (e.g. speed, reach, timeline order). Reject is a coarse filter, not full world authorship. |
+| **Correction** | Optional client reconcile when late peer (or reject) information contradicts local belief. Not the default every packet. |
+| **Prediction** | Advancing or filling local belief so play stays responsive and so necessary corrections stay small — in service of protecting claimed local reality, not of chasing a server-owned present. |
 
-Anything that treats each peer’s uplink, RTT, or view lag as a **private timeline** instead of delay on a **shared** timeline is off this baseline.
+Anything that treats each peer’s uplink, RTT, or view lag as a **private timeline** instead of delay on a **shared** timeline is off this baseline. Anything that makes the server the **sole author** of world state (full authority sim + hard Snapshot overwrite of local self) is also off this baseline.
 
 ## Why 022–032 are banked, not fixed in place
 
-**022–032** explored join, authority, remotes, predict, remote interp, present clock, adaptive delay, high tick rate, net HUD, and input land time. Useful learning; wrong temporal story for this product.
+**022–032** explored join, authority, remotes, predict, remote interp, present clock, adaptive delay, high tick rate, net HUD, and input land time. Useful learning; wrong multiplayer story for this product.
 
 Notable divergences from the philosophy above (illustrative, not exhaustive):
 
 | Area (features) | Divergence |
 | --- | --- |
-| Remote present delay / adaptive RTT delay (**027–030**) | Draw remotes on a **personal** lag offset tuned from own RTT, not a single shared sim time. |
-| Input land delay (**032**) | Stall body channels to a published land schedule so “everyone commits together” via **per-peer uplink tax**, not by simulating stamped past claims on one clock. |
-| Joined predict + hard Snapshot overwrite (**026**, then **032**) | Partial step toward correct-against-history, but wired to tick/ack and land machinery rather than universal-clock history + prediction. |
-| Net HUD lag fields (**031** + **032** extensions) | Instrumentation for the discarded delay model. |
+| Server authority world + Snapshot `you` (**023–026**, **032**) | Server owns the sim step and overwrites local self; clients are not primary authors of local reality. |
+| Remote present delay / adaptive RTT delay (**027–030**) | Draw remotes on a **personal** lag offset tuned from own RTT, not integration of claims on one shared \(T\). |
+| Input land delay (**032**) | Stall body channels to a published land schedule so “everyone commits together” via **per-peer uplink tax**, not stamped claims on \(T\) with late arrival as the normal case. |
+| Net HUD lag fields (**031** + **032** extensions) | Instrumentation for the discarded delay / land model. |
 
 Docs for **022–032** stay as written. Implementation of that path is what **033** erases.
 
@@ -53,11 +55,12 @@ Docs for **022–032** stay as written. Implementation of that path is what **03
 
 ### Out
 
-- Implementing shared-clock sync, past-claim Input, historical replication, correction, or prediction (**later features**).
+- Implementing shared-clock sync details, claim wire formats, relay/reject policy, peer integration, correction, or prediction (**later features**).
 - Combat, hit registration, or new gameplay.
 - Rewriting or “clarifying” **022–032** feature docs.
 - Salvaging `land_delay`, `L_min`, `rdelay`, remote present clocks, or RTT→delay clamps under new names.
 - Keeping dead joined code paths “for reference” in the working tree (git history is the reference).
+- Building a server-side full-world sim “for validation” that quietly becomes the old authority model.
 
 ## Removal
 
@@ -73,7 +76,7 @@ Remove the joined multiplayer surface, including but not limited to:
 - Dev **net lag HUD** fields and wiring that exist only for RTT / rdelay / land / stall / Lmin / Lme / corr (**031**/**032**). A solo **FPS-only** strip may remain if it has no net dependency; otherwise remove the banner with the net fields.
 - Any non-`mp/` helpers whose sole consumer was remote interp or land (e.g. dedicated remote present helpers if nothing else uses them).
 
-Solo mount, flycam, lineup, screenshot, and other non-net debug tools stay.
+Solo mount, flycam, lineup, screenshot, and other non-net debug tools stay. Local solo sim remains the only self advancement path.
 
 ### Server (`game-server`)
 
@@ -90,11 +93,11 @@ but it must **not** still implement the discarded land/snapshot multiplayer. Pre
 
 Remove or gut DTOs and codec paths that only serve the discarded model: land fields on Snapshot, intent-stamp land path on Input, remote pose streams as currently shaped for **024–032**, and version constants documented solely for that stack.
 
-If `game-net` remains as a workspace crate, it should not export a protocol that implies the old session is still live. Empty or near-empty module layout is fine until a later feature defines shared-clock messages.
+If `game-net` remains as a workspace crate, it should not export a protocol that implies the old session is still live. Empty or near-empty module layout is fine until a later feature defines claim/relay messages on shared \(T\).
 
 ### Shared sim (`game-sim`)
 
-**Keep** pure movement / self / loadout rules used by solo. Do not add net clocks here in **033**. Remove only glue that exists solely for the discarded MP path (unlikely if sim stayed pure).
+**Keep** pure movement / self / loadout rules used by solo (and later by clients and by server reject checks). Do not add net clocks here in **033**. Remove only glue that exists solely for the discarded MP path (unlikely if sim stayed pure).
 
 ### Docs and product text
 
@@ -120,12 +123,14 @@ Do **not** edit **022–032** to say “superseded” in a way that rewrites the
 
 Later features reintroduce multiplayer **only** under this philosophy:
 
-1. Shared clock synchronized across participants.
-2. Same `game-sim` rules on server and clients.
-3. Input as past claims; server simulates that past; replicate history.
-4. Client corrects to history; predicts to hide correction.
+1. **Shared clock** \(T\) synchronized across participants (common reference for order and causality).
+2. **Each client** advances its own local present with shared `game-sim` rules.
+3. **Claims** (input, movement, outcomes) stamped with time on \(T\); they always arrive late.
+4. **Server** relays accepted claims and rejects clear impossibilities — it does **not** own a single authoritative world sim.
+5. **Peers** integrate late claims into local present; **default is preserve local experience**; correct only when needed.
+6. **Prediction** and other compensation exist to keep corrections small and protect claimed local reality — not to invent private timelines or reinstall full server authority.
 
-Compensatory techniques (interpolation, input timing, clock sync details, etc.) are justified **only** as tools for accurate prediction and faithful shared-time sim — not as alternate time models.
+Compensatory techniques (interpolation, clock sync details, soft reconcile, etc.) are justified **only** as tools for that posture — not as alternate time models and not as a return to Snapshot-as-truth for the local self.
 
 **033** does not specify those mechanisms. It only clears the slate and cements the law.
 
@@ -139,4 +144,4 @@ Compensatory techniques (interpolation, input timing, clock sync details, etc.) 
 - README (and live product pointers) no longer claim **022–032** multiplayer behaviour as current.
 - Debug net-lag HUD fields for the discarded model are gone; release builds still omit debug-only tools as today.
 - Workspace builds and tests pass; prefer deleting unused code over leaving commented or dead joined paths.
-- No new prediction, clock sync, or historical-replication feature is required for **033** to be complete — only the philosophy text plus the wipe.
+- No new prediction, clock sync, claim relay, or reject policy is required for **033** to be complete — only the philosophy text plus the wipe.

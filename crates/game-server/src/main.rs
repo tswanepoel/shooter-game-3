@@ -143,7 +143,7 @@ async fn handle_session(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let request = incoming.await?;
     info!(
-        authority = %request.authority(),
+        wt_host = %request.authority(),
         path = %request.path(),
         "session request"
     );

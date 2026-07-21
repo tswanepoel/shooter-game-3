@@ -1,6 +1,6 @@
 # Feature 034 - Shared tick
 
-The server runs a single simulation clock at **30 ticks per second** and is the source of truth for that clock. While a client is joined, it keeps a local estimate of the server’s current tick so both sides can talk about the same moment in time even though messages take time to cross the network. Solo play is unchanged. This follows the shared-clock baseline in **033**.
+The server runs a shared clock at **30 ticks per second**. While a client is joined, it keeps a local estimate of the server’s current tick so both sides can talk about the same moment in time even though messages take time to cross the network. Solo play is unchanged. Depends on the multiplayer baseline in **033**.
 
 ## Layout
 
@@ -10,7 +10,7 @@ The server runs a single simulation clock at **30 ticks per second** and is the 
 | `game-net` | Wire DTOs, postcard codec, protocol version. No sim apply, no GPU. |
 | `game-server` | Native host: WebTransport, fixed tick, session accept, clock replies. |
 | `game-client` | WASM. Solo self as today. |
-| `game-client` **`mp/`** | Client multiplayer mode: transport, join, clock estimate. |
+| `game-client` **`mp/`** | Transport, join, clock estimate. |
 
 Sim and client input structs stay off the wire; each side maps to net DTOs at the boundary.
 

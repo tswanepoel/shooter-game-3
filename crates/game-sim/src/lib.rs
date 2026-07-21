@@ -1,6 +1,6 @@
 //! Game simulation logic crate.
 //!
-//! Shared ground-truth world data and (later) authoritative sim state.
+//! Shared ground-truth world data and pure sim rules.
 //! World space: 1 unit = 1 metre, Y-up, XZ ground plane.
 
 mod config;
