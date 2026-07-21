@@ -2,11 +2,11 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const TICK_HZ: u32 = 30;
+pub const TICK_HZ: u32 = 180;
 
 pub const TICK_DURATION_SECS: f64 = 1.0 / TICK_HZ as f64;
 
-pub const PROTOCOL_VERSION: u16 = 2;
+pub const PROTOCOL_VERSION: u16 = 3;
 
 pub type PlayerId = u32;
 
@@ -245,7 +245,7 @@ mod tests {
 
     #[test]
     fn estimated_tick_basic() {
-        assert_eq!(estimated_tick(1.0, 0.0), 30);
+        assert_eq!(estimated_tick(1.0, 0.0), 180);
     }
 
     #[test]

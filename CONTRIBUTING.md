@@ -42,10 +42,10 @@ npm run dev
 
 ### `game-net` crate
 - Directional postcard wire: `ClientToServer` / `ServerToClient` (Hello, Welcome, Reject, clock probe/reply, drive sample, peer drive/presence)
-- `PlayerId` (`u32`), `PROTOCOL_VERSION`, shared `TICK_HZ` (30); length-prefixed S2C frames on the reliable stream after Welcome
+- `PlayerId` (`u32`), `PROTOCOL_VERSION`, shared `TICK_HZ`; length-prefixed S2C frames on the reliable stream after Welcome
 
 ### `game-server` crate
-- WebTransport host; fixed 30 Hz tick; roster relay of drive samples and peer join/leave
+- WebTransport host; fixed tick; roster relay of drive samples and peer join/leave
 - Writes `debug/wt-identity.json` for browser cert hashes
 - Run: `cargo run -p game-server` (default `0.0.0.0:4433`, override with `GAME_SERVER_BIND`)
 
