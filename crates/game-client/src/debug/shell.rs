@@ -66,14 +66,15 @@ impl DebugShell {
         }
     }
 
-    /// Run egui for the console; returns paint data for the renderer.
+    /// Run egui for the console and optional top HUD banner.
     /// Submitted lines land in [`take_pending_command`] for the host to run.
     pub fn run_frame(
         &mut self,
         raw_input: egui::RawInput,
         pixels_per_point: f32,
+        hud_line: Option<&str>,
     ) -> Option<egui::FullOutput> {
-        if !self.open {
+        if !self.open && hud_line.is_none() {
             return None;
         }
 
@@ -87,10 +88,29 @@ impl DebugShell {
         let focus_input = self.focus_input;
         let log = self.log.clone();
         let mut input = std::mem::take(&mut self.input);
+        let hud = hud_line.map(|s| s.to_string());
 
         let full = self.egui_ctx.run(raw_input, |ctx| {
             if console_open && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
                 close = true;
+            }
+
+            if let Some(ref line) = hud {
+                egui::TopBottomPanel::top("net_hud")
+                    .exact_height(22.0)
+                    .frame(
+                        egui::Frame::NONE
+                            .fill(egui::Color32::from_rgba_unmultiplied(8, 10, 14, 200))
+                            .inner_margin(egui::Margin::symmetric(8, 3)),
+                    )
+                    .show(ctx, |ui| {
+                        ui.label(
+                            egui::RichText::new(line)
+                                .monospace()
+                                .size(12.0)
+                                .color(egui::Color32::from_rgb(180, 220, 160)),
+                        );
+                    });
             }
 
             if !console_open {

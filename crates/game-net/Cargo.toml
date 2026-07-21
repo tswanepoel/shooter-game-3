@@ -3,3 +3,7 @@ name = "game-net"
 version = "0.1.0"
 edition = "2021"
 description = "Multiplayer wire protocol and codec"
+
+[dependencies]
+postcard = { version = "1", features = ["alloc"] }
+serde = { version = "1", features = ["derive"] }

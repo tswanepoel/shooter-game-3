@@ -8,6 +8,7 @@ mod input;
 #[cfg(feature = "debug-tools")]
 mod lineup;
 mod mesh_unlit;
+mod mp;
 mod pack;
 mod reticle;
 mod self_present;
@@ -526,6 +527,9 @@ pub(crate) struct ClientInner {
     self_present: SelfPresentState,
     last_frame_secs: f64,
     #[cfg(feature = "debug-tools")]
+    fps_ema: f32,
+    pub(crate) mp: mp::MpClient,
+    #[cfg(feature = "debug-tools")]
     pub(crate) debug: DebugTools,
     #[cfg(feature = "debug-tools")]
     pub(crate) fly_input: FlyInput,
@@ -537,6 +541,30 @@ impl ClientInner {
     #[cfg(feature = "debug-tools")]
     pub(crate) fn pixels_per_point(&self) -> f32 {
         self.pixels_per_point
+    }
+
+    #[cfg(feature = "debug-tools")]
+    fn drain_debug_host_requests(&mut self) {
+        use debug::DebugHostRequest;
+        for req in self.debug.take_host_requests() {
+            match req {
+                DebugHostRequest::Screenshot => {}
+                DebugHostRequest::MpJoin => {
+                    self.mp.begin_join();
+                    self.debug.shell.push_log("mp: joining…");
+                }
+                DebugHostRequest::MpLeave => {
+                    self.mp.leave();
+                    self.debug.shell.push_log("mp: left (solo)");
+                }
+                DebugHostRequest::MpStatus => {
+                    self.debug.shell.push_log(self.mp.status_line());
+                }
+            }
+        }
+        if let Some(err) = self.mp.take_error() {
+            self.debug.shell.push_log(err);
+        }
     }
 
     fn render_frame(&mut self) -> Result<(), JsValue> {
@@ -558,6 +586,19 @@ impl ClientInner {
             1.0 / 60.0
         };
         self.last_frame_secs = now;
+
+        #[cfg(feature = "debug-tools")]
+        {
+            let inst = if dt > 1e-6 { 1.0 / dt } else { 0.0 };
+            if self.fps_ema <= 0.0 {
+                self.fps_ema = inst;
+            } else {
+                self.fps_ema += 0.12 * (inst - self.fps_ema);
+            }
+            self.drain_debug_host_requests();
+        }
+
+        self.mp.on_frame(dt);
 
         let look = self.session.take_look_px();
         let session_ok = self.session.is_active();
@@ -703,10 +744,21 @@ impl ClientInner {
             let screen_h = height as f32 / ppp;
             let raw = self.debug.take_raw_input(screen_w, screen_h, time);
 
-            let full = self.debug.shell.run_frame(raw, ppp);
+            let hud_line = if self.debug.net_hud() {
+                let mut line = format!("fps {:.0}", self.fps_ema);
+                if let Some(tick) = self.mp.hud_tick_field() {
+                    line.push_str("  ");
+                    line.push_str(&tick);
+                }
+                Some(line)
+            } else {
+                None
+            };
+            let full = self.debug.shell.run_frame(raw, ppp, hud_line.as_deref());
             if let Some(cmd) = self.debug.shell.take_pending_command() {
                 let _ = self.debug.execute(&cmd);
             }
+            self.drain_debug_host_requests();
 
             if let Some(full) = full {
                 let mut encoder =
@@ -907,6 +959,9 @@ impl GameClient {
             move_input: MoveInput::default(),
             self_present: SelfPresentState::Idle,
             last_frame_secs: 0.0,
+            #[cfg(feature = "debug-tools")]
+            fps_ema: 0.0,
+            mp: mp::MpClient::new(),
             #[cfg(feature = "debug-tools")]
             debug,
             #[cfg(feature = "debug-tools")]

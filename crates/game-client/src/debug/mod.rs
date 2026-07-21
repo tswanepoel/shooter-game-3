@@ -11,6 +11,15 @@ pub use host::DebugHost;
 pub use registry::DebugRegistry;
 pub use shell::{DebugShell, OverlayGpu};
 
+/// Side effects that need `ClientInner`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DebugHostRequest {
+    Screenshot,
+    MpJoin,
+    MpLeave,
+    MpStatus,
+}
+
 /// Full debug stack owned by the client when `debug-tools` is enabled.
 pub struct DebugTools {
     pub registry: DebugRegistry,
@@ -19,6 +28,7 @@ pub struct DebugTools {
     modifiers: egui::Modifiers,
     toggle_requested: bool,
     screenshot_requested: bool,
+    host_requests: Vec<DebugHostRequest>,
 }
 
 impl DebugTools {
@@ -32,6 +42,7 @@ impl DebugTools {
             modifiers: egui::Modifiers::default(),
             toggle_requested: false,
             screenshot_requested: false,
+            host_requests: Vec::new(),
         }
     }
 
@@ -39,8 +50,21 @@ impl DebugTools {
         let out = self.registry.execute(line);
         let msg = match out.as_str() {
             "__REQUEST_SCREENSHOT__" => {
+                self.host_requests.push(DebugHostRequest::Screenshot);
                 self.request_screenshot();
                 "screenshot queued".to_string()
+            }
+            "__REQUEST_MP_JOIN__" => {
+                self.host_requests.push(DebugHostRequest::MpJoin);
+                "mp: join requested".to_string()
+            }
+            "__REQUEST_MP_LEAVE__" => {
+                self.host_requests.push(DebugHostRequest::MpLeave);
+                "mp: leave requested".to_string()
+            }
+            "__REQUEST_MP_STATUS__" => {
+                self.host_requests.push(DebugHostRequest::MpStatus);
+                String::new()
             }
             other if !other.is_empty() => other.to_string(),
             _ => String::new(),
@@ -49,6 +73,10 @@ impl DebugTools {
             self.shell.push_log(msg.clone());
         }
         msg
+    }
+
+    pub fn take_host_requests(&mut self) -> Vec<DebugHostRequest> {
+        std::mem::take(&mut self.host_requests)
     }
 
     pub fn request_screenshot(&mut self) {
@@ -69,7 +97,10 @@ impl DebugTools {
         self.registry.get_bool("draw.lineup").unwrap_or(false)
     }
 
-    /// Whether the registry wants flycam (view syncs this each frame).
+    pub fn net_hud(&self) -> bool {
+        self.registry.get_bool("hud.net").unwrap_or(true)
+    }
+
     pub fn flycam_wanted(&self) -> bool {
         self.registry.get_bool("cam.fly").unwrap_or(false)
     }
@@ -104,7 +135,6 @@ impl DebugTools {
         self.modifiers
     }
 
-    /// Apply backtick toggle, then build egui raw input for this frame.
     pub fn take_raw_input(&mut self, screen_w: f32, screen_h: f32, time: f64) -> egui::RawInput {
         if self.take_toggle() {
             self.shell.open = !self.shell.open;

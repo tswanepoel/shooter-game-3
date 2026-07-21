@@ -19,9 +19,9 @@ Thanks for your interest in contributing! This guide covers everything you need 
 The shooter game is structured as a Rust workspace:
 
 - **`game-sim`** — pure simulation rules
-- **`game-net`** — multiplayer wire protocol placeholder
-- **`game-server`** — native multiplayer host placeholder
-- **`game-client`** — WebGPU client (solo)
+- **`game-net`** — multiplayer wire protocol
+- **`game-server`** — native multiplayer host
+- **`game-client`** — WebGPU client
 
 ## Environment Setup
 
@@ -41,15 +41,18 @@ npm run dev
 - Ground-truth world constants (metres, Y-up, camera/grid quantities) live here; client consumes them
 
 ### `game-net` crate
-- Placeholder for multiplayer wire types and codec
+- Directional postcard wire: `ClientToServer` / `ServerToClient` (Hello, Welcome, Reject, clock probe/reply)
+- `PlayerId` (`u32`), `PROTOCOL_VERSION`, shared `TICK_HZ` (30)
 
 ### `game-server` crate
-- Placeholder native multiplayer host binary
+- WebTransport host; fixed 30 Hz tick; writes `debug/wt-identity.json` for browser cert hashes
+- Run: `cargo run -p game-server` (default `0.0.0.0:4433`, override with `GAME_SERVER_BIND`)
 
 ### `game-client` crate
 - WebGPU rendering logic via [`wgpu`](https://crates.io/crates/wgpu)
 - JavaScript interop via [`wasm-bindgen`](https://crates.io/crates/wasm-bindgen)
-- Depends on `game-sim`
+- Depends on `game-sim` and `game-net`
+- Multiplayer session under `src/mp/` (join + shared tick estimate)
 - Client-only debug visuals (e.g. floor grid) must not invent world quantities already defined in `game-sim`
 
 ### Web assets (`web/`)

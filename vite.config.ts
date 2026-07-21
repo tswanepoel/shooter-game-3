@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
 const shotsDir = path.join(repoRoot, 'debug', 'shots');
+const wtIdentityPath = path.join(repoRoot, 'debug', 'wt-identity.json');
 
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -18,13 +19,38 @@ function readBody(req: IncomingMessage): Promise<string> {
   });
 }
 
-/** Dev-only: POST /__debug/shot { dataUrl } → debug/shots/latest.png + timestamped copy. */
+/** Dev-only: debug shot sink + WebTransport identity for `mp join`. */
 function debugShotsPlugin(): Plugin {
   return {
     name: 'debug-shots',
     configureServer(server) {
       server.middlewares.use(async (req: IncomingMessage, res: ServerResponse, next) => {
         const url = req.url?.split('?')[0];
+
+        if (url === '/__debug/wt-identity' && req.method === 'GET') {
+          try {
+            if (!fs.existsSync(wtIdentityPath)) {
+              res.statusCode = 404;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(
+                JSON.stringify({
+                  error: 'wt-identity missing; run cargo run -p game-server',
+                }),
+              );
+              return;
+            }
+            const body = fs.readFileSync(wtIdentityPath, 'utf8');
+            res.statusCode = 200;
+            res.setHeader('Content-Type', 'application/json');
+            res.end(body);
+          } catch (err) {
+            res.statusCode = 500;
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ error: String(err) }));
+          }
+          return;
+        }
+
         if (url !== '/__debug/shot' || req.method !== 'POST') {
           next();
           return;

@@ -18,10 +18,10 @@ A WebGPU-powered shooter game built with Rust and Vite.
 ```
 .
 ├── crates/
-│   ├── game-client/     # WebGPU frontend (solo)
+│   ├── game-client/     # WebGPU frontend
 │   ├── game-sim/        # Pure sim rules
-│   ├── game-net/        # Wire protocol placeholder
-│   └── game-server/     # Native host placeholder
+│   ├── game-net/        # Multiplayer wire protocol
+│   └── game-server/     # Native multiplayer host
 ├── web/                 # Web frontend source (HTML, CSS, JS)
 │   └── dist/            # Sole ship tree (Vite build + cooked packs)
 ├── assets/
@@ -65,6 +65,12 @@ A WebGPU-powered shooter game built with Rust and Vite.
    ```bash
    npm run dev
    ```
+
+5. (Optional) Shared-tick multiplayer host (WebTransport, default `0.0.0.0:4433`):
+   ```bash
+   cargo run -p game-server
+   ```
+   Override bind with `GAME_SERVER_BIND`. Spec: [034](docs/features/034-mp-shared-tick.md). In the dev console (`` ` ``): `mp join` / `mp leave` / `mp status`. The top banner shows **fps** and, while joined, the estimated server **tick**.
 
 Running `npm run dev` cooks art packs, compiles the Rust WASM module, then starts the Vite dev server with hot-reload. See [Development Workflow](#development-workflow) for details.
 
@@ -134,6 +140,8 @@ With `npm run dev`, press **`` ` ``** (backtick) for the in-game developer conso
 | **F9** / `screenshot` | Capture frame to `debug/shots/` |
 | **F8** / `flycam` / `remount` | Debug flycam (WASD + mouse look, Q/E up/down, Shift sprint); remount restores the look-mounted self view |
 | `lineup` / `draw.lineup` | Toggle blaster lineup (held Kenney row: scale, paint, grip, muzzle markers) |
+| `nethud` / `hud.net` | Top FPS / tick banner (on by default; [034](docs/features/034-mp-shared-tick.md)) |
+| `mp join` / `mp leave` / `mp status` | WebTransport session; shared server tick on the HUD while joined |
 
 ## Contributing
 
