@@ -108,7 +108,7 @@ impl DebugRegistry {
             "  nethud [on|off|toggle]  top FPS / tick banner".into(),
             "  remount           leave flycam, restore self view".into(),
             "  screenshot|shot   capture frame (F9)".into(),
-            "  mp join|leave|status  WebTransport shared tick".into(),
+            "  mp join|leave|status  WebTransport shared tick + remotes".into(),
             "cvars (get: name · set: name <value>):".into(),
         ];
         for (name, cvar) in &self.cvars {

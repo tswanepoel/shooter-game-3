@@ -41,18 +41,20 @@ npm run dev
 - Ground-truth world constants (metres, Y-up, camera/grid quantities) live here; client consumes them
 
 ### `game-net` crate
-- Directional postcard wire: `ClientToServer` / `ServerToClient` (Hello, Welcome, Reject, clock probe/reply)
-- `PlayerId` (`u32`), `PROTOCOL_VERSION`, shared `TICK_HZ` (30)
+- Directional postcard wire: `ClientToServer` / `ServerToClient` (Hello, Welcome, Reject, clock probe/reply, drive sample, peer drive/presence)
+- `PlayerId` (`u32`), `PROTOCOL_VERSION`, shared `TICK_HZ` (30); length-prefixed S2C frames on the reliable stream after Welcome
 
 ### `game-server` crate
-- WebTransport host; fixed 30 Hz tick; writes `debug/wt-identity.json` for browser cert hashes
+- WebTransport host; fixed 30 Hz tick; roster relay of drive samples and peer join/leave
+- Writes `debug/wt-identity.json` for browser cert hashes
 - Run: `cargo run -p game-server` (default `0.0.0.0:4433`, override with `GAME_SERVER_BIND`)
 
 ### `game-client` crate
 - WebGPU rendering logic via [`wgpu`](https://crates.io/crates/wgpu)
 - JavaScript interop via [`wasm-bindgen`](https://crates.io/crates/wasm-bindgen)
 - Depends on `game-sim` and `game-net`
-- Multiplayer session under `src/mp/` (join + shared tick estimate)
+- Multiplayer session under `src/mp/` (join, shared tick estimate, drive publish, remote table)
+- Remote present bodies via `remote_present` (latest-sample MVP)
 - Client-only debug visuals (e.g. floor grid) must not invent world quantities already defined in `game-sim`
 
 ### Web assets (`web/`)
@@ -91,6 +93,7 @@ npm run dev
 - All Rust code must be formatted with `cargo fmt --all` before committing.
 - All Rust code must pass `cargo clippy --all-targets --all-features -- -D warnings` with no warnings.
 - Keep changes focused: each pull request should represent a single, coherent unit of work.
+- Comments should explain non-obvious intent, not restate the code. Prefer clear names over comments that only rename types or fields, cite feature numbers, or describe what the next line already shows.
 
 ## Commit Message Conventions
 

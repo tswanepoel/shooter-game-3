@@ -174,8 +174,7 @@ impl SelfGpu {
         Ok(s)
     }
 
-    /// Present pose only: body + active blaster (walk/sprint/jump/stand).
-    /// Used for local self body and remote peers (024).
+    /// Body + active blaster from drive (walk/sprint/jump/stand).
     pub fn apply_present(&mut self, queue: &wgpu::Queue, self_state: &SelfState) {
         let k2w = mesh_unlit::kit_to_world(self_state.placement_matrix(), self.min_y);
 

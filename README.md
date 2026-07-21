@@ -66,11 +66,11 @@ A WebGPU-powered shooter game built with Rust and Vite.
    npm run dev
    ```
 
-5. (Optional) Shared-tick multiplayer host (WebTransport, default `0.0.0.0:4433`):
+5. (Optional) Multiplayer host (WebTransport, default `0.0.0.0:4433`):
    ```bash
    cargo run -p game-server
    ```
-   Override bind with `GAME_SERVER_BIND`. Spec: [034](docs/features/034-mp-shared-tick.md). In the dev console (`` ` ``): `mp join` / `mp leave` / `mp status`. The top banner shows **fps** and, while joined, the estimated server **tick**.
+   Override bind with `GAME_SERVER_BIND`. In the dev console (`` ` ``): `mp join` / `mp leave` / `mp status`. Specs: [034](docs/features/034-mp-shared-tick.md), [035](docs/features/035-mp-remotes.md).
 
 Running `npm run dev` cooks art packs, compiles the Rust WASM module, then starts the Vite dev server with hot-reload. See [Development Workflow](#development-workflow) for details.
 

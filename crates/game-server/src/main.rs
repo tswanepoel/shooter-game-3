@@ -1,5 +1,6 @@
-//! Native multiplayer host.
+//! Native multiplayer host (WebTransport).
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -7,12 +8,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use game_net::{
-    decode_c2s, encode_s2c, ClientToServer, PlayerId, ServerToClient, PROTOCOL_VERSION,
-    TICK_DURATION_SECS, TICK_HZ,
+    decode_c2s, encode_s2c, encode_s2c_frame, ClientToServer, PlayerId, ServerToClient,
+    PROTOCOL_VERSION, TICK_DURATION_SECS, TICK_HZ,
 };
+use tokio::sync::{mpsc, Mutex};
 use tracing::{info, warn};
 use wtransport::tls::Sha256DigestFmt;
-use wtransport::{Endpoint, Identity, ServerConfig};
+use wtransport::{Connection, Endpoint, Identity, ServerConfig};
 
 const DEFAULT_BIND: &str = "0.0.0.0:4433";
 
@@ -58,6 +60,59 @@ impl IdAllocator {
     }
 }
 
+struct PeerEntry {
+    connection: Connection,
+    reliable_tx: mpsc::UnboundedSender<Vec<u8>>,
+}
+
+struct Roster {
+    peers: HashMap<PlayerId, PeerEntry>,
+}
+
+impl Roster {
+    fn new() -> Self {
+        Self {
+            peers: HashMap::new(),
+        }
+    }
+
+    fn ids(&self) -> Vec<PlayerId> {
+        self.peers.keys().copied().collect()
+    }
+
+    fn insert(&mut self, id: PlayerId, entry: PeerEntry) {
+        self.peers.insert(id, entry);
+    }
+
+    fn remove(&mut self, id: PlayerId) -> bool {
+        self.peers.remove(&id).is_some()
+    }
+
+    fn contains(&self, id: PlayerId) -> bool {
+        self.peers.contains_key(&id)
+    }
+
+    fn broadcast_reliable(&self, except: Option<PlayerId>, bytes: &[u8]) {
+        for (&id, peer) in &self.peers {
+            if Some(id) == except {
+                continue;
+            }
+            let _ = peer.reliable_tx.send(bytes.to_vec());
+        }
+    }
+
+    fn relay_datagram(&self, except: PlayerId, bytes: &[u8]) {
+        for (&id, peer) in &self.peers {
+            if id == except {
+                continue;
+            }
+            if let Err(e) = peer.connection.send_datagram(bytes) {
+                warn!(peer = id, "send_datagram: {e}");
+            }
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
@@ -88,6 +143,7 @@ async fn main() {
     let server = Endpoint::server(config).expect("WebTransport endpoint");
     let clock = Arc::new(SharedClock::new());
     let ids = Arc::new(IdAllocator::new());
+    let roster = Arc::new(Mutex::new(Roster::new()));
 
     {
         let clock = Arc::clone(&clock);
@@ -105,6 +161,7 @@ async fn main() {
     info!(
         %bind,
         tick_hz = TICK_HZ,
+        protocol = PROTOCOL_VERSION,
         cert = %cert_hash.fmt(Sha256DigestFmt::DottedHex),
         "game-server listening (WebTransport)"
     );
@@ -113,8 +170,9 @@ async fn main() {
         let incoming = server.accept().await;
         let clock = Arc::clone(&clock);
         let ids = Arc::clone(&ids);
+        let roster = Arc::clone(&roster);
         tokio::spawn(async move {
-            if let Err(e) = handle_session(incoming, clock, ids).await {
+            if let Err(e) = handle_session(incoming, clock, ids, roster).await {
                 warn!("session ended: {e}");
             }
         });
@@ -140,6 +198,7 @@ async fn handle_session(
     incoming: wtransport::endpoint::IncomingSession,
     clock: Arc<SharedClock>,
     ids: Arc<IdAllocator>,
+    roster: Arc<Mutex<Roster>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let request = incoming.await?;
     info!(
@@ -193,6 +252,49 @@ async fn handle_session(
     send.write_all(&welcome).await?;
     info!(player_id, "welcomed");
 
+    let (reliable_tx, mut reliable_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+
+    {
+        let mut send = send;
+        tokio::spawn(async move {
+            while let Some(bytes) = reliable_rx.recv().await {
+                if send.write_all(&bytes).await.is_err() {
+                    break;
+                }
+            }
+        });
+    }
+
+    {
+        let mut guard = roster.lock().await;
+        let existing: Vec<PlayerId> = guard.ids();
+        let join_tick = clock.tick();
+        let join_msg = encode_s2c_frame(&ServerToClient::PeerJoined {
+            tick: join_tick,
+            id: player_id,
+        })?;
+        guard.broadcast_reliable(None, &join_msg);
+
+        for other_id in existing {
+            let msg = encode_s2c_frame(&ServerToClient::PeerJoined {
+                tick: join_tick,
+                id: other_id,
+            })?;
+            let _ = reliable_tx.send(msg);
+        }
+
+        guard.insert(
+            player_id,
+            PeerEntry {
+                connection: connection.clone(),
+                reliable_tx: reliable_tx.clone(),
+            },
+        );
+    }
+
+    // Keep a sender clone so the reliable writer stays open until leave.
+    let _reliable_tx = reliable_tx;
+
     loop {
         tokio::select! {
             err = connection.closed() => {
@@ -217,7 +319,23 @@ async fn handle_session(
                                     break;
                                 }
                             }
-                            Ok(_) => {}
+                            Ok(ClientToServer::DriveSample { tick, drive }) => {
+                                let joined = {
+                                    let guard = roster.lock().await;
+                                    guard.contains(player_id)
+                                };
+                                if !joined {
+                                    continue;
+                                }
+                                let relay = encode_s2c(&ServerToClient::PeerDrive {
+                                    tick,
+                                    id: player_id,
+                                    drive,
+                                })?;
+                                let guard = roster.lock().await;
+                                guard.relay_datagram(player_id, &relay);
+                            }
+                            Ok(ClientToServer::Hello { .. }) => {}
                             Err(_) => {}
                         }
                     }
@@ -227,6 +345,19 @@ async fn handle_session(
                     }
                 }
             }
+        }
+    }
+
+    {
+        let mut guard = roster.lock().await;
+        if guard.remove(player_id) {
+            if let Ok(msg) = encode_s2c_frame(&ServerToClient::PeerLeft {
+                tick: clock.tick(),
+                id: player_id,
+            }) {
+                guard.broadcast_reliable(None, &msg);
+            }
+            info!(player_id, "peer left, roster notified");
         }
     }
 

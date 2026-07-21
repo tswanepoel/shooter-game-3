@@ -1,13 +1,20 @@
 //! WebTransport multiplayer session.
 
 mod clock;
+mod drive;
+mod remotes;
+
+pub use drive::{drive_to_state, state_to_drive};
+pub use remotes::{RemoteKitKey, RemoteTable};
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use game_net::{
-    decode_s2c, encode_c2s, ClientToServer, PlayerId, ServerToClient, PROTOCOL_VERSION,
+    decode_s2c, drain_s2c_frames, encode_c2s, ClientToServer, PlayerId, ServerToClient,
+    PROTOCOL_VERSION, TICK_HZ,
 };
+use game_sim::SelfState;
 use js_sys::{Array, Object, Reflect, Uint8Array};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
@@ -33,7 +40,9 @@ struct Shared {
     transport: Option<JsValue>,
     last_error: Option<String>,
     probe_accum: f32,
+    drive_accum: f32,
     join_secs: f32,
+    remotes: RemoteTable,
 }
 
 impl Shared {
@@ -46,8 +55,22 @@ impl Shared {
             transport: None,
             last_error: None,
             probe_accum: 0.0,
+            drive_accum: 0.0,
             join_secs: 0.0,
+            remotes: RemoteTable::new(),
         }
+    }
+
+    fn reset_session(&mut self) {
+        self.phase = MpPhase::Solo;
+        self.clock.clear();
+        self.player_id = None;
+        self.dgram_writer = None;
+        self.transport = None;
+        self.probe_accum = 0.0;
+        self.drive_accum = 0.0;
+        self.join_secs = 0.0;
+        self.remotes.clear();
     }
 }
 
@@ -60,6 +83,14 @@ impl MpClient {
         Self {
             shared: Rc::new(RefCell::new(Shared::new())),
         }
+    }
+
+    pub fn joined(&self) -> bool {
+        self.shared.borrow().phase == MpPhase::Joined
+    }
+
+    pub fn remotes(&self) -> std::cell::Ref<'_, RemoteTable> {
+        std::cell::Ref::map(self.shared.borrow(), |s| &s.remotes)
     }
 
     pub fn status_line(&self) -> String {
@@ -88,7 +119,8 @@ impl MpClient {
                     .map(|d| format!("{:.1}ms", d * 1000.0))
                     .unwrap_or_else(|| "—".into());
                 format!(
-                    "mp: joined id={id} tick={tick} offset={off} delay={delay} samples={}",
+                    "mp: joined id={id} tick={tick} remotes={} offset={off} delay={delay} samples={}",
+                    s.remotes.count(),
                     s.clock.sample_count()
                 )
             }
@@ -120,6 +152,7 @@ impl MpClient {
         s.phase = MpPhase::Connecting;
         s.clock.clear();
         s.player_id = None;
+        s.remotes.clear();
         s.last_error = None;
         drop(s);
 
@@ -128,11 +161,7 @@ impl MpClient {
             if let Err(e) = join_session(Rc::clone(&shared)).await {
                 let msg = js_error_string(&e);
                 let mut s = shared.borrow_mut();
-                s.phase = MpPhase::Solo;
-                s.clock.clear();
-                s.player_id = None;
-                s.dgram_writer = None;
-                s.transport = None;
+                s.reset_session();
                 s.last_error = Some(format!("mp: join failed: {msg}"));
             }
         });
@@ -147,44 +176,85 @@ impl MpClient {
                 }
             }
         }
-        s.dgram_writer = None;
-        s.phase = MpPhase::Solo;
-        s.clock.clear();
-        s.player_id = None;
-        s.probe_accum = 0.0;
-        s.join_secs = 0.0;
+        s.reset_session();
     }
 
-    pub fn on_frame(&mut self, dt: f32) {
+    pub fn on_frame(&mut self, dt: f32, self_state: &SelfState) {
         let mut s = self.shared.borrow_mut();
         if s.phase != MpPhase::Joined {
             return;
         }
         s.join_secs += dt;
         s.probe_accum += dt;
-        let interval = if s.join_secs < 1.0 { 0.05 } else { 0.2 };
-        if s.probe_accum < interval {
-            return;
-        }
-        s.probe_accum = 0.0;
+        s.drive_accum += dt;
+
         let writer = match s.dgram_writer.as_ref() {
             Some(w) => w.clone(),
             None => return,
         };
+
+        let probe_interval = if s.join_secs < 1.0 { 0.05 } else { 0.2 };
+        let send_probe = s.probe_accum >= probe_interval;
+        if send_probe {
+            s.probe_accum = 0.0;
+        }
+
+        let drive_interval = 1.0 / TICK_HZ as f32;
+        let send_drive = s.drive_accum >= drive_interval;
+        let drive_payload = if send_drive {
+            s.drive_accum = 0.0;
+            let tick = s.clock.estimated_tick(client_now_secs()).unwrap_or(0);
+            let drive = state_to_drive(self_state);
+            encode_c2s(&ClientToServer::DriveSample { tick, drive }).ok()
+        } else {
+            None
+        };
         drop(s);
 
-        let t1 = client_now_secs();
-        let Ok(payload) = encode_c2s(&ClientToServer::ClockProbe { t1 }) else {
-            return;
-        };
-        let arr = Uint8Array::from(payload.as_slice());
-        let _ = writer.write_with_chunk(&arr);
+        if send_probe {
+            let t1 = client_now_secs();
+            if let Ok(payload) = encode_c2s(&ClientToServer::ClockProbe { t1 }) {
+                let arr = Uint8Array::from(payload.as_slice());
+                let _ = writer.write_with_chunk(&arr);
+            }
+        }
+
+        if let Some(payload) = drive_payload {
+            let arr = Uint8Array::from(payload.as_slice());
+            let _ = writer.write_with_chunk(&arr);
+        }
     }
 }
 
 impl Default for MpClient {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+fn handle_s2c(shared: &Rc<RefCell<Shared>>, msg: ServerToClient, t4: f64) {
+    match msg {
+        ServerToClient::ClockReply { t1, t2, t3, tick } => {
+            shared.borrow_mut().clock.on_sample(t1, t2, t3, t4, tick);
+        }
+        ServerToClient::PeerJoined { id, .. } => {
+            let mut s = shared.borrow_mut();
+            if s.player_id == Some(id) {
+                return;
+            }
+            s.remotes.note_joined(id);
+        }
+        ServerToClient::PeerLeft { id, .. } => {
+            shared.borrow_mut().remotes.remove(id);
+        }
+        ServerToClient::PeerDrive { tick, id, drive } => {
+            let mut s = shared.borrow_mut();
+            if s.player_id == Some(id) {
+                return;
+            }
+            s.remotes.upsert_drive(id, tick, drive);
+        }
+        ServerToClient::Welcome { .. } | ServerToClient::Reject { .. } => {}
     }
 }
 
@@ -234,7 +304,7 @@ async fn join_session(shared: Rc<RefCell<Shared>>) -> Result<(), JsValue> {
             }
             (player_id, tick, server_time_secs)
         }
-        ServerToClient::ClockReply { .. } => {
+        _ => {
             return Err(JsValue::from_str("expected Welcome"));
         }
     };
@@ -260,9 +330,38 @@ async fn join_session(shared: Rc<RefCell<Shared>>) -> Result<(), JsValue> {
         s.phase = MpPhase::Joined;
         s.join_secs = 0.0;
         s.probe_accum = 0.0;
+        s.drive_accum = 0.0;
+        s.remotes.clear();
     }
 
-    let shared_read = Rc::clone(&shared);
+    let shared_bi = Rc::clone(&shared);
+    wasm_bindgen_futures::spawn_local(async move {
+        let mut frame_buf: Vec<u8> = Vec::new();
+        loop {
+            let read = match JsFuture::from(reader.read()).await {
+                Ok(v) => v,
+                Err(_) => break,
+            };
+            let done = Reflect::get(&read, &"done".into())
+                .ok()
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            if done {
+                break;
+            }
+            let value = match Reflect::get(&read, &"value".into()) {
+                Ok(v) => v,
+                Err(_) => break,
+            };
+            frame_buf.extend_from_slice(&Uint8Array::new(&value).to_vec());
+            let t = client_now_secs();
+            for msg in drain_s2c_frames(&mut frame_buf) {
+                handle_s2c(&shared_bi, msg, t);
+            }
+        }
+    });
+
+    let shared_dgram = Rc::clone(&shared);
     wasm_bindgen_futures::spawn_local(async move {
         loop {
             let read = match JsFuture::from(dgram_reader.read()).await {
@@ -282,20 +381,13 @@ async fn join_session(shared: Rc<RefCell<Shared>>) -> Result<(), JsValue> {
             };
             let bytes = Uint8Array::new(&value).to_vec();
             let t4 = client_now_secs();
-            if let Ok(ServerToClient::ClockReply { t1, t2, t3, tick }) = decode_s2c(&bytes) {
-                shared_read
-                    .borrow_mut()
-                    .clock
-                    .on_sample(t1, t2, t3, t4, tick);
+            if let Ok(msg) = decode_s2c(&bytes) {
+                handle_s2c(&shared_dgram, msg, t4);
             }
         }
-        let mut s = shared_read.borrow_mut();
+        let mut s = shared_dgram.borrow_mut();
         if s.phase == MpPhase::Joined {
-            s.phase = MpPhase::Solo;
-            s.dgram_writer = None;
-            s.transport = None;
-            s.player_id = None;
-            s.clock.clear();
+            s.reset_session();
         }
     });
 
