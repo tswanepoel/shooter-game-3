@@ -1,4 +1,9 @@
 //! WebTransport multiplayer session.
+//!
+//! Join/leave is driven by the debug shell today. Release builds (`--no-default-features`)
+//! still compile session frame hooks (drive, claims, remotes) but have no join UI, so the
+//! join path is unused without `debug-tools`.
+#![cfg_attr(not(feature = "debug-tools"), allow(dead_code))]
 
 mod clock;
 mod drive;

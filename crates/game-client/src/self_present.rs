@@ -288,6 +288,7 @@ impl SelfGpu {
     }
 
     /// Whether both loadout letters are already GPU-resident (dev equip).
+    #[cfg(feature = "debug-tools")]
     pub fn has_blaster_letter(&self, letter: u8) -> bool {
         self.blasters.iter().any(|b| b.letter == letter)
     }

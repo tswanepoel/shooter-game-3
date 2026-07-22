@@ -19,10 +19,11 @@ mod view;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+#[cfg(feature = "debug-tools")]
+use game_sim::equip_blaster_letter;
 use game_sim::{
-    aim_from_self, equip_blaster_letter, weapon_def, FireState, ProjectileWorld, SelfState,
-    CAMERA_FAR_M, CAMERA_NEAR_M, CAMERA_VERTICAL_FOV_RAD, DEBUG_GRID_HALF_EXTENT_M,
-    GRID_MAJOR_EVERY, GRID_MINOR_SPACING_M,
+    aim_from_self, weapon_def, FireState, ProjectileWorld, SelfState, CAMERA_FAR_M, CAMERA_NEAR_M,
+    CAMERA_VERTICAL_FOV_RAD, DEBUG_GRID_HALF_EXTENT_M, GRID_MAJOR_EVERY, GRID_MINOR_SPACING_M,
 };
 use glam::Mat4;
 use wasm_bindgen::prelude::*;
