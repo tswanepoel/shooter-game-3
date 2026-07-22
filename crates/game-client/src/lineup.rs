@@ -1,12 +1,13 @@
 //! Debug blaster lineup (features 011 + 012): each blaster held by a Kenney character,
 //! with magenta balls at every muzzle point.
+//! Held attach and muzzle world: feature 037 (`held_blaster · muzzle_local`).
 //! Kit facts: `assets/source/characters/README.md`, `assets/source/blasters/README.md`.
 //! Loads via cook pack `kenney-core` (feature 010), not source paths.
 
 use glam::{Mat4, Vec3};
 use wasm_bindgen::JsValue;
 
-use crate::mesh_unlit::{self, UnlitMeshGpu, UnlitMeshLayout, BLASTER_MUZZLE_POINTS};
+use crate::mesh_unlit::{self, UnlitMeshGpu, UnlitMeshLayout};
 
 const LETTERS: &[u8] = b"abcdefghijklmnopqr";
 
@@ -42,16 +43,14 @@ impl LineupGpu {
             let x = (i as f32 - (n as f32 - 1.0) * 0.5) * LINEUP_SPACING_M;
             let placement = Mat4::from_translation(Vec3::new(x, 0.0, LINEUP_Z_M));
 
-            let (char_batch, blaster_batch, k2w, arm_right_kit) =
+            let (char_batch, blaster_batch, held_blaster) =
                 mesh_unlit::upload_held_pair(&gpu, &pack, letter, letter, placement, "lineup")
                     .map_err(|e| JsValue::from_str(&format!("lineup {}: {e}", letter as char)))?;
             batches.push(char_batch);
             batches.push(blaster_batch);
 
-            // Magenta balls at every muzzle (feature 012): arm-attachment frame like grip.
-            for &muzzle_offset in BLASTER_MUZZLE_POINTS[i] {
-                let muzzle_kit = arm_right_kit.transform_point3(Vec3::from_array(muzzle_offset));
-                let muzzle_world = k2w.transform_point3(muzzle_kit);
+            // Magenta balls at every muzzle (012): blaster-local under held root (037).
+            for muzzle_world in mesh_unlit::muzzle_world_points(held_blaster, i) {
                 let marker_root = Mat4::from_translation(muzzle_world)
                     * Mat4::from_scale(Vec3::splat(MUZZLE_MARKER_RADIUS_M));
                 let marker_batch = mesh_unlit::upload_solid_batch(

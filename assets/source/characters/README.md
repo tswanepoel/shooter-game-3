@@ -159,4 +159,4 @@ Hold, shoot, and locomotion clips are separate so a consumer may layer them. Roo
 
 The `holding-right` clip sets **`arm-right` rotation** to a static hold (approximately **−90° about local X**), so the right limb’s hand direction aligns with character **+Z**. Other body nodes remain at bind pose under that clip alone.
 
-Armed lineup and grip attachment use this hold for the **body silhouette** and as the frame that defines the right-hand **grip point**. Blaster model facts and grip offsets: `assets/source/blasters/README.md`.
+Armed lineup and self present use this hold for the **body silhouette**. The right-hand **hand socket** is a presentation logic node parented to **`arm-right`** (not a GLB bone): under hold it cancels this clip’s arm rotation and yaws so a held weapon sits level with muzzle character-forward. Feature **037** owns the socket → weapon grip composition; blaster grip `G` and muzzle tables: `assets/source/blasters/README.md`.

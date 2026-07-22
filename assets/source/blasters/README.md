@@ -28,7 +28,7 @@ Project world axes (shared with the character kit):
 
 Blaster length is on the order of **~0.8** authored units at **×1**.
 
-When a blaster is placed through a chain that already applies the character **×1/1.5** scale to positions, the blaster mesh uses an additional uniform scale of **1.5** relative to that chain so its authored size remains **×1** in metres. Grip **positions** stay in character-kit units and take the character scale with the body.
+When a blaster is placed through a chain that already applies the character **×1/1.5** scale to positions, the blaster mesh uses an additional uniform scale of **1.5** relative to that chain so its authored size remains **×1** in metres. Hand-socket placement rides the character scale chain; grip **G** and muzzles are blaster-local under `held_blaster` (feature 037).
 
 ## Materials and textures
 
@@ -56,82 +56,90 @@ Authored blaster local frame:
 
 ## Held presentation with a character
 
-Held presentation combines three independent facts: **where the hand is**, **how the gun is oriented in character space**, and **each kit’s scale into metres**.
+Feature **037** owns the arm → hand → blaster contract. Two named frames and one composition path:
 
-### Grip point (from the character)
-
-With the character in the **`holding-right`** pose, the grip point is the image of a per-blaster **offset** under the **`arm-right`** node matrix (character kit space). Offsets are listed below. That hierarchy supplies **position** for the weapon origin.
+| Frame | Owner | Space | Role |
+|-------|--------|--------|------|
+| **Hand socket** `H` | character / `arm-right` | arm-local | Where the fist is and how the palm faces (shared by all weapons). |
+| **Weapon grip** `G` | blaster letter | blaster-local | Where the handle / mesh origin sits relative to that hand. |
 
 Character hold and limb layout: `assets/source/characters/README.md`.
 
-### Weapon orientation (character space)
+### Hand socket `H_hold`
 
-In character / world axes (face +Z, up +Y), a single yaw aligns the authored mesh to the held aim:
+Logic node on **`arm-right`** (not a GLB bone). Under armed hold and aim:
 
-**180° about Y** maps mesh **−Z (muzzle) → character +Z (forward)** and keeps mesh **+Y** as world **+Y** (top up).
+- **Rotation:** cancel kit clip **`holding-right`** (**+90° about local X**) then **180° about Y** so mesh **−Z (muzzle) → character +Z** with mesh **+Y** up.
+- **Translation:** identity on `H` for this kit; fist placement is carried by per-letter **`G`** (mesh origin on the socket). A later **`H_loco`** socket is optional if in-hand angle under sprint needs its own authoring.
 
 ### Scale
 
 Character body: **×1/1.5** from kit units to metres.  
 Blaster mesh: **×1** from authored units to metres.  
-Relative factor on the mesh when positions already follow the character scale: **1.5**.
+Relative factor **`S_blaster`** when positions already follow the character scale: **1.5** (`BLASTER_UNITS_TO_M / CHAR_UNITS_TO_M`).
 
-### Composition
+### Composition (authoritative)
 
 ```
 kit_to_world     = placement · (character scale 1/1.5) · feet on y = 0
-grip_in_kit      = arm_right (holding-right) · grip_offset
-held_blaster     = kit_to_world · translate(grip_in_kit) · rotate_y(180°) · (blaster scale relative to character chain)
+hand_kit         = arm_right_kit · H_hold
+held_blaster     = kit_to_world · hand_kit · inv(G) · S_blaster
+muzzle_world     = held_blaster · muzzle_local
 ```
 
-### Grip offsets
+- **`arm_right_kit`:** posed `arm-right` after bind / hold / aim / loco (same matrix that draws the arm mesh).
+- **`H_hold`:** shared hand socket (above).
+- **`G`:** per-letter weapon grip (table below).
+- Self present, debug lineup held pair, muzzle markers, and present muzzle FX all use this path.
 
-Offsets are in **`arm-right` local space after `holding-right`** (character kit units).
+### Weapon grip `G`
 
-| Blaster | Offset (x, y, z) |
-|---------|------------------|
-| `blaster-a` | `(0, -1.14, 0.34)` |
-| `blaster-b` | `(0, -1.00, 0.30)` |
-| `blaster-c` | `(0, -1.11, 0.20)` |
-| `blaster-d` | `(0, -1.11, 0.18)` |
-| `blaster-e` | `(0, -2.34, 0.22)` |
-| `blaster-f` | `(0, -1.39, 0.19)` |
-| `blaster-g` | `(0, -1.27, 0.22)` |
-| `blaster-h` | `(0, -1.25, 0.24)` |
-| `blaster-i` | `(0, -0.93, 0.22)` |
-| `blaster-j` | `(0, -1.20, 0.15)` |
-| `blaster-k` | `(0, -1.09, 0.20)` |
-| `blaster-l` | `(0, -1.16, 0.20)` |
-| `blaster-m` | `(0, -1.18, 0.26)` |
-| `blaster-n` | `(0, -0.99, 0.22)` |
-| `blaster-o` | `(0, -1.06, 0.19)` |
-| `blaster-p` | `(0, -1.21, 0.14)` |
-| `blaster-q` | `(0, -1.28, 0.19)` |
-| `blaster-r` | `(0, -1.18, 0.10)` |
+Per-letter translation of the mesh origin relative to the hand socket, in **blaster-local** units (pre `S_blaster`). Identity `G` would put the blaster origin on the socket with axes already matching after `H`. Values preserve the historical hold look (migrated from the former arm-attachment grip table).
+
+| Blaster | Grip `G` translation (x, y, z) |
+|---------|--------------------------------|
+| `blaster-a` | `(0, -0.34, 1.14)` |
+| `blaster-b` | `(0, -0.30, 1.00)` |
+| `blaster-c` | `(0, -0.20, 1.11)` |
+| `blaster-d` | `(0, -0.18, 1.11)` |
+| `blaster-e` | `(0, -0.22, 2.34)` |
+| `blaster-f` | `(0, -0.19, 1.39)` |
+| `blaster-g` | `(0, -0.22, 1.27)` |
+| `blaster-h` | `(0, -0.24, 1.25)` |
+| `blaster-i` | `(0, -0.22, 0.93)` |
+| `blaster-j` | `(0, -0.15, 1.20)` |
+| `blaster-k` | `(0, -0.20, 1.09)` |
+| `blaster-l` | `(0, -0.20, 1.16)` |
+| `blaster-m` | `(0, -0.26, 1.18)` |
+| `blaster-n` | `(0, -0.22, 0.99)` |
+| `blaster-o` | `(0, -0.19, 1.06)` |
+| `blaster-p` | `(0, -0.14, 1.21)` |
+| `blaster-q` | `(0, -0.19, 1.28)` |
+| `blaster-r` | `(0, -0.10, 1.18)` |
 
 ### Muzzle points
 
-Barrel exits for each blaster (one or more). Offsets use the **same space as grip offsets** — **arm-attachment frame**: **`arm-right` local after `holding-right`**, character-kit / recipe units (not world metres). Values match the Kenney blaster glTF recipe and the historical `muzzlePoints` list per weapon.
+Barrel exits in **blaster-local** units. World position is always `held_blaster · muzzle_local`. Values preserve the historical lineup markers (migrated from the former arm-attachment muzzle table).
 
 Debug lineup draws a magenta ball at **each** listed point (feature 012).
 
 | Blaster | Muzzle points (x, y, z) |
 |---------|-------------------------|
-| `blaster-a` | `(0, -1.7, 0.42)` |
-| `blaster-b` | `(0, -1.39, 0.32)` |
-| `blaster-c` | `(0, -1.47, 0.23)` |
-| `blaster-d` | `(0, -1.795, 0.265)` |
-| `blaster-e` | `(0.07, -2.34, 0.26)` |
-| `blaster-f` | `(0, -2.37, 0.26)` |
-| `blaster-g` | `(0, -1.8, 0.34)` |
-| `blaster-h` | `(0, -1.73, 0.28)` |
-| `blaster-i` | `(0, -1.32, 0.26)`, `(0, -1.32, 0.15)` |
-| `blaster-j` | `(-0.045, -1.655, 0.29)`, `(0.045, -1.655, 0.29)` |
-| `blaster-k` | `(0, -1.44, 0.18)` |
-| `blaster-l` | `(-0.1, -1.58, 0.26)`, `(0.1, -1.58, 0.26)` |
-| `blaster-m` | `(0, -1.65, 0.37)` |
-| `blaster-n` | `(0, -1.47, 0.32)` |
-| `blaster-o` | `(-0.05, -1.35, 0.25)`, `(0.05, -1.35, 0.25)`, `(-0.05, -1.35, 0.15)`, `(0.05, -1.35, 0.15)` |
-| `blaster-p` | `(0, -1.855, 0.235)`, `(0, -1.855, 0.14)` |
-| `blaster-q` | `(0, -1.82, 0.28)`, `(0, -1.82, 0.06)` |
-| `blaster-r` | `(0, -1.81, 0.23)` |
+| `blaster-a` | `(0, 0.053333, -0.373333)` |
+| `blaster-b` | `(0, 0.013333, -0.26)` |
+| `blaster-c` | `(0, 0.02, -0.24)` |
+| `blaster-d` | `(0, 0.056667, -0.456667)` |
+| `blaster-e` | `(-0.046667, 0.026667, 0)` |
+| `blaster-f` | `(0, 0.046667, -0.653333)` |
+| `blaster-g` | `(0, 0.08, -0.353333)` |
+| `blaster-h` | `(0, 0.026667, -0.32)` |
+| `blaster-i` | `(0, 0.026667, -0.26)`, `(0, -0.046667, -0.26)` |
+| `blaster-j` | `(0.03, 0.093333, -0.303333)`, `(-0.03, 0.093333, -0.303333)` |
+| `blaster-k` | `(0, -0.013333, -0.233333)` |
+| `blaster-l` | `(0.066667, 0.04, -0.28)`, `(-0.066667, 0.04, -0.28)` |
+| `blaster-m` | `(0, 0.073333, -0.313333)` |
+| `blaster-n` | `(0, 0.066667, -0.32)` |
+| `blaster-o` | `(0.033333, 0.04, -0.193333)`, `(-0.033333, 0.04, -0.193333)`, `(0.033333, -0.026667, -0.193333)`, `(-0.033333, -0.026667, -0.193333)` |
+| `blaster-p` | `(0, 0.063333, -0.43)`, `(0, 0, -0.43)` |
+| `blaster-q` | `(0, 0.06, -0.36)`, `(0, -0.086667, -0.36)` |
+| `blaster-r` | `(0, 0.086667, -0.42)` |
