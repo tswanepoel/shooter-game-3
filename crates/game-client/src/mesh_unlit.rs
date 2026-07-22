@@ -457,17 +457,18 @@ pub fn kit_to_world(placement: Mat4, min_y_kit: f32) -> Mat4 {
         * Mat4::from_translation(Vec3::new(0.0, -min_y_kit, 0.0))
 }
 
-/// Grip from arm; `aim_pitch` positive = look up (presentation elevation). Lineup passes 0.
-pub fn held_blaster_root(
-    kit_to_world: Mat4,
-    arm_right_kit: Mat4,
-    letter_index: usize,
-    aim_pitch: f32,
-) -> Mat4 {
-    let grip_kit = arm_right_kit.transform_point3(grip_offset(letter_index));
+/// Blaster root parented to `arm-right` at the grip.
+///
+/// Local attach cancels `holding-right` (−90° X) then yaws 180° so that in the
+/// armed hold pose the gun stays level in kit space (blasters README). When the
+/// arm swings under the sprint clip, the same attach makes the gun follow the hand
+/// instead of floating world-level at the moving grip point.
+pub fn held_blaster_root(kit_to_world: Mat4, arm_right_kit: Mat4, letter_index: usize) -> Mat4 {
+    // inv(HOLDING_RIGHT_ROT) = +90° X.
     kit_to_world
-        * Mat4::from_translation(grip_kit)
-        * Mat4::from_rotation_x(-aim_pitch)
+        * arm_right_kit
+        * Mat4::from_translation(grip_offset(letter_index))
+        * Mat4::from_rotation_x(std::f32::consts::FRAC_PI_2)
         * Mat4::from_rotation_y(std::f32::consts::PI)
         * Mat4::from_scale(Vec3::splat(BLASTER_UNITS_TO_M / CHAR_UNITS_TO_M))
 }
@@ -510,7 +511,7 @@ pub fn upload_held_pair(
         k2w,
         &format!("{label}-character"),
     )?;
-    let blaster_root = held_blaster_root(k2w, arm_right_kit, bi, 0.0);
+    let blaster_root = held_blaster_root(k2w, arm_right_kit, bi);
     let blaster_prims = extract_primitives(blaster_glb)?;
     let blaster_batch = upload_batch(
         gpu,

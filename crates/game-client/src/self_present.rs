@@ -118,13 +118,8 @@ impl SelfGpu {
                 mesh_unlit::extract_primitives(blaster_glb).map_err(|e| JsValue::from_str(&e))?;
 
             let show = self_state.active_blaster() == Some(letter);
-            let aim_pitch = if show && !self_state.locomotion.is_sprint() {
-                self_state.torso_pitch + self_state.shoulder_pitch
-            } else {
-                0.0
-            };
             let root = if show {
-                mesh_unlit::held_blaster_root(k2w, arm_kit, bi, aim_pitch)
+                mesh_unlit::held_blaster_root(k2w, arm_kit, bi)
             } else {
                 Mat4::from_scale(Vec3::ZERO)
             };
@@ -199,14 +194,10 @@ impl SelfGpu {
         }
 
         let active = self_state.active_blaster();
-        let aim_pitch = if self_state.is_armed() && !self_state.locomotion.is_sprint() {
-            self_state.torso_pitch + self_state.shoulder_pitch
-        } else {
-            0.0
-        };
         for b in &self.blasters {
             let root = if active == Some(b.letter) {
-                mesh_unlit::held_blaster_root(k2w, arm_kit, b.letter_index, aim_pitch)
+                // Parent to present-pose arm (hold + aim, or sprint swing).
+                mesh_unlit::held_blaster_root(k2w, arm_kit, b.letter_index)
             } else {
                 Mat4::from_scale(Vec3::ZERO)
             };
