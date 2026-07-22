@@ -103,6 +103,22 @@ impl RemotePresent {
         }
     }
 
+    /// Present-pose muzzle world point under jolt (038 flash rebind).
+    pub fn flash_muzzle_world(
+        &self,
+        id: PlayerId,
+        state: &SelfState,
+        jolt: JoltPose,
+        muzzle_index: u8,
+    ) -> Option<glam::Vec3> {
+        let Slot::Ready { gpu, .. } = self.slots.get(&id)? else {
+            return None;
+        };
+        gpu.flash_muzzle_worlds(state, jolt, &[muzzle_index])
+            .into_iter()
+            .next()
+    }
+
     pub fn draw_all<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
         for slot in self.slots.values() {
             if let Slot::Ready { gpu, .. } = slot {

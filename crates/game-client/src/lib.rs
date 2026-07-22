@@ -735,18 +735,21 @@ impl ClientInner {
                 } else {
                     -1.0
                 };
-                // Preview jolt for flash placement, then apply kick + flashes once.
+                // Seed flash worlds under kick preview; rebind each frame to present pose.
                 let mut jolt_preview = self.renderer.fire_fx.self_jolt;
                 jolt_preview.add_kick(def, yaw_sign);
-                let flash_pts = match &self.self_present {
+                let seed_pts = match &self.self_present {
                     SelfPresentState::Ready(gpu) => {
                         gpu.flash_muzzle_worlds(&self.self_state, jolt_preview, &d.fired_muzzles)
                     }
                     _ => d.projectiles.iter().map(|p| p.origin).collect(),
                 };
-                self.renderer
-                    .fire_fx
-                    .note_self_discharge(def, &flash_pts, yaw_sign);
+                self.renderer.fire_fx.note_self_discharge(
+                    def,
+                    &d.fired_muzzles,
+                    &seed_pts,
+                    yaw_sign,
+                );
             }
         }
 
@@ -756,19 +759,26 @@ impl ClientInner {
 
         // Accept peer projectiles (claim-and-relay).
         for batch in self.mp.take_peer_projectiles() {
-            let mut origins = Vec::new();
+            let mut muzzle_indices = Vec::new();
+            let mut seed_pts = Vec::new();
             let mut weapon = b'p';
             for n in &batch.projectiles {
                 if let Some(p) = mp::net_spawn_to_projectile(batch.id, n) {
                     weapon = p.weapon;
-                    origins.push(p.origin);
+                    if !muzzle_indices.contains(&p.muzzle_index) {
+                        muzzle_indices.push(p.muzzle_index);
+                        seed_pts.push(p.origin);
+                    }
                     self.projectiles.spawn(p);
                 }
             }
-            if !origins.is_empty() {
-                self.renderer
-                    .fire_fx
-                    .note_peer_projectiles(batch.id, weapon, &origins);
+            if !muzzle_indices.is_empty() {
+                self.renderer.fire_fx.note_peer_projectiles(
+                    batch.id,
+                    weapon,
+                    &muzzle_indices,
+                    &seed_pts,
+                );
             }
         }
 
@@ -850,6 +860,41 @@ impl ClientInner {
             cam_fwd,
             height as f32,
         );
+
+        // Flash balls track present-pose muzzles (self + remotes), not frozen world seeds.
+        {
+            let self_jolt = self.renderer.fire_fx.self_jolt;
+            let remote_states: std::collections::HashMap<_, _> = self
+                .mp
+                .remotes()
+                .samples()
+                .map(|(id, s)| (id, mp::drive_to_state(&s.drive)))
+                .collect();
+            let remote_jolts: std::collections::HashMap<_, _> = remote_states
+                .keys()
+                .map(|&id| (id, self.renderer.fire_fx.remote_jolt(id)))
+                .collect();
+            let self_state = &self.self_state;
+            let self_present = &self.self_present;
+            let remote_present = &self.remote_present;
+            self.renderer
+                .fire_fx
+                .rebind_positions(|owner, mi| match owner {
+                    None => match self_present {
+                        SelfPresentState::Ready(gpu) => gpu
+                            .flash_muzzle_worlds(self_state, self_jolt, &[mi])
+                            .into_iter()
+                            .next(),
+                        _ => None,
+                    },
+                    Some(id) => {
+                        let state = remote_states.get(&id)?;
+                        let jolt = remote_jolts.get(&id).copied().unwrap_or_default();
+                        remote_present.flash_muzzle_world(id, state, jolt, mi)
+                    }
+                });
+        }
+
         self.renderer.fire_fx.update_draw(
             &self.renderer.queue,
             view_proj,

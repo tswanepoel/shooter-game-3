@@ -67,8 +67,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
 #[derive(Clone, Copy)]
 struct Flash {
-    pos: Vec3,
+    /// `None` = local self; `Some(id)` = remote peer.
+    owner: Option<PlayerId>,
+    /// Kit muzzle index (037 table); rebound each frame to present pose.
+    muzzle_index: u8,
     age: f32,
+    /// Live world centre (seeded at discharge, overwritten by rebind).
+    pos: Vec3,
 }
 
 /// Client present for fire FX (self + remotes).
@@ -208,9 +213,22 @@ impl FireFx {
         }
     }
 
-    pub fn note_self_discharge(&mut self, def: &WeaponDef, flash_worlds: &[Vec3], yaw_sign: f32) {
-        for &p in flash_worlds {
-            self.flashes.push(Flash { pos: p, age: 0.0 });
+    /// Note self discharge: one flash per fired muzzle (seed world pos; rebind later).
+    pub fn note_self_discharge(
+        &mut self,
+        def: &WeaponDef,
+        muzzle_indices: &[u8],
+        seed_worlds: &[Vec3],
+        yaw_sign: f32,
+    ) {
+        for (i, &mi) in muzzle_indices.iter().enumerate() {
+            let pos = seed_worlds.get(i).copied().unwrap_or(Vec3::ZERO);
+            self.flashes.push(Flash {
+                owner: None,
+                muzzle_index: mi,
+                age: 0.0,
+                pos,
+            });
         }
         self.self_jolt.add_kick(def, yaw_sign);
         self.self_settle_s = def.jolt.settle_s.max(1e-4);
@@ -220,11 +238,18 @@ impl FireFx {
         &mut self,
         id: PlayerId,
         def: &WeaponDef,
-        flash_worlds: &[Vec3],
+        muzzle_indices: &[u8],
+        seed_worlds: &[Vec3],
         yaw_sign: f32,
     ) {
-        for &p in flash_worlds {
-            self.flashes.push(Flash { pos: p, age: 0.0 });
+        for (i, &mi) in muzzle_indices.iter().enumerate() {
+            let pos = seed_worlds.get(i).copied().unwrap_or(Vec3::ZERO);
+            self.flashes.push(Flash {
+                owner: Some(id),
+                muzzle_index: mi,
+                age: 0.0,
+                pos,
+            });
         }
         let entry = self
             .remote_jolts
@@ -234,8 +259,14 @@ impl FireFx {
         entry.1 = def.jolt.settle_s.max(1e-4);
     }
 
-    /// Flash + jolt for accepted peer projectiles (origins already world).
-    pub fn note_peer_projectiles(&mut self, id: PlayerId, weapon: u8, origins: &[Vec3]) {
+    /// Flash + jolt for accepted peer projectiles (unique muzzles; origin seeds).
+    pub fn note_peer_projectiles(
+        &mut self,
+        id: PlayerId,
+        weapon: u8,
+        muzzle_indices: &[u8],
+        seed_worlds: &[Vec3],
+    ) {
         let Some(def) = weapon_def(weapon) else {
             return;
         };
@@ -244,7 +275,7 @@ impl FireFx {
         } else {
             -1.0
         };
-        self.note_remote_discharge(id, def, origins, yaw);
+        self.note_remote_discharge(id, def, muzzle_indices, seed_worlds, yaw);
     }
 
     pub fn remote_jolt(&self, id: PlayerId) -> JoltPose {
@@ -252,6 +283,18 @@ impl FireFx {
             .get(&id)
             .map(|(j, _)| *j)
             .unwrap_or_default()
+    }
+
+    /// Stick each flash to its present-pose muzzle (self / remote). Keeps seed if resolve fails.
+    pub fn rebind_positions(
+        &mut self,
+        mut resolve: impl FnMut(Option<PlayerId>, u8) -> Option<Vec3>,
+    ) {
+        for f in &mut self.flashes {
+            if let Some(p) = resolve(f.owner, f.muzzle_index) {
+                f.pos = p;
+            }
+        }
     }
 
     pub fn tick(&mut self, dt: f32) {

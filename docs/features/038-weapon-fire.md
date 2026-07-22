@@ -128,7 +128,7 @@ Bump **`protocol`** when the wire changes. Align claim send/apply with the joine
 
 Flash and jolt follow **discharge**, self and remote alike.
 
-- **Muzzle flash:** solid sphere (~0.03 m, warm colour, ~0.05 s draft) at each muzzle that fired, in **present pose**: world points from **037** (`held_blaster · muzzle_local`), same chain as the drawn blaster (optional slight bore offset). Present placement — not a free sim/aim fudge.
+- **Muzzle flash:** solid sphere (~0.03 m, warm colour, ~0.05 s draft) at each muzzle that fired, in **present pose**: world points from **037** (`held_blaster · muzzle_local`), same chain as the drawn blaster (optional slight bore offset). Present placement — not a free sim/aim fudge. **Rebind each frame** to the live muzzle while the flash lives (no frozen world crumbs under move).
 - **Weapon jolt:** mild present-pose kick on the held blaster — pitch/yaw and a short push back along the bore — then settle toward rest. **Pivot is the hand / weapon grip `G` (037)** (`held · T(G) · J · inv(T(G))`), not the blaster mesh origin. Camera and reticle stay put. Flash tracks the same pose.
 - Optional dev-gated debug tracer for projectiles while tuning.
 
@@ -161,6 +161,6 @@ One baked weapon table in **`game-sim`** (shared with present as needed): mode, 
 - Each discharge spawns projectile(s) from look aim and muzzle points, with letter muzzle velocity, gravity, and max-range despawn; ammo is unlimited.
 - Multi-muzzle and shotgun spread follow the letter policy and tune table.
 - Shooter claims spawns; server relays; remotes show flash and jolt (and optional debug tracers) from those claims.
-- Flash spheres sit on the present-pose **037** muzzles that fired (self and remotes); jolt is present-pose on the held blaster, pivoting on grip / hand socket.
+- Flash spheres sit on the present-pose **037** muzzles that fired (self and remotes) and **rebind each frame** for their lifetime; jolt is present-pose on the held blaster, pivoting on grip / hand socket.
 - Dev text command equips any letter, flipping slots when **021** requires it.
 - Tables are real units (s, m, m/s, °), calibratable without changing the model.
