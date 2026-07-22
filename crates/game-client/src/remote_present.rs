@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use game_net::{DriveView, PlayerId};
-use game_sim::SelfState;
+use game_sim::{JoltPose, SelfState};
 use wasm_bindgen::JsValue;
 
 use crate::mp::{drive_to_state, RemoteKitKey};
@@ -81,6 +81,7 @@ impl RemotePresent {
         &mut self,
         queue: &wgpu::Queue,
         samples: impl Iterator<Item = (PlayerId, DriveView)>,
+        jolt_for: impl Fn(PlayerId) -> JoltPose,
     ) {
         for (id, drive) in samples {
             let Some(Slot::Ready { gpu, kit }) = self.slots.get_mut(&id) else {
@@ -90,7 +91,7 @@ impl RemotePresent {
                 continue;
             }
             let state = drive_to_state(&drive);
-            gpu.apply_present(queue, &state);
+            gpu.apply_present(queue, &state, jolt_for(id));
         }
     }
 

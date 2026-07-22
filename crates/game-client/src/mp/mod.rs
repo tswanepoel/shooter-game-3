@@ -11,10 +11,10 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use game_net::{
-    decode_s2c, drain_s2c_frames, encode_c2s, ClientToServer, PlayerId, ServerToClient,
-    PROTOCOL_VERSION, TICK_HZ,
+    decode_s2c, drain_s2c_frames, encode_c2s, ClientToServer, NetProjectileSpawn, PlayerId,
+    ServerToClient, PROTOCOL_VERSION, TICK_HZ,
 };
-use game_sim::SelfState;
+use game_sim::{weapon_def, Projectile, SelfState};
 use js_sys::{Array, Object, Reflect, Uint8Array};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
@@ -32,6 +32,13 @@ pub enum MpPhase {
     Joined,
 }
 
+/// Peer projectile batch accepted from the server (038).
+#[derive(Debug, Clone)]
+pub struct PeerProjectileBatch {
+    pub id: PlayerId,
+    pub projectiles: Vec<NetProjectileSpawn>,
+}
+
 struct Shared {
     phase: MpPhase,
     clock: ClockSync,
@@ -43,6 +50,8 @@ struct Shared {
     drive_accum: f32,
     join_secs: f32,
     remotes: RemoteTable,
+    /// Inbound peer projectile claims to apply on the main frame.
+    pending_projectiles: Vec<PeerProjectileBatch>,
 }
 
 impl Shared {
@@ -58,6 +67,7 @@ impl Shared {
             drive_accum: 0.0,
             join_secs: 0.0,
             remotes: RemoteTable::new(),
+            pending_projectiles: Vec::new(),
         }
     }
 
@@ -71,6 +81,7 @@ impl Shared {
         self.drive_accum = 0.0;
         self.join_secs = 0.0;
         self.remotes.clear();
+        self.pending_projectiles.clear();
     }
 }
 
@@ -142,6 +153,48 @@ impl MpClient {
 
     pub fn take_error(&mut self) -> Option<String> {
         self.shared.borrow_mut().last_error.take()
+    }
+
+    pub fn player_id(&self) -> Option<PlayerId> {
+        self.shared.borrow().player_id
+    }
+
+    /// Drain accepted peer projectile claims (038).
+    pub fn take_peer_projectiles(&mut self) -> Vec<PeerProjectileBatch> {
+        std::mem::take(&mut self.shared.borrow_mut().pending_projectiles)
+    }
+
+    /// Claim local projectile spawns to the server (joined only).
+    pub fn claim_projectiles(&self, projectiles: &[Projectile]) {
+        if projectiles.is_empty() {
+            return;
+        }
+        let s = self.shared.borrow();
+        if s.phase != MpPhase::Joined {
+            return;
+        }
+        let Some(writer) = s.dgram_writer.as_ref() else {
+            return;
+        };
+        let tick = s.clock.estimated_tick(client_now_secs()).unwrap_or(0);
+        let spawns: Vec<NetProjectileSpawn> = projectiles
+            .iter()
+            .map(|p| NetProjectileSpawn {
+                id: p.id,
+                weapon: p.weapon,
+                origin: game_net::NetVec3::new(p.origin.x, p.origin.y, p.origin.z),
+                velocity: game_net::NetVec3::new(p.velocity.x, p.velocity.y, p.velocity.z),
+                muzzle_index: p.muzzle_index,
+            })
+            .collect();
+        let Ok(payload) = encode_c2s(&ClientToServer::ProjectileSpawn {
+            tick,
+            projectiles: spawns,
+        }) else {
+            return;
+        };
+        let arr = Uint8Array::from(payload.as_slice());
+        let _ = writer.write_with_chunk(&arr);
     }
 
     pub fn begin_join(&self) {
@@ -254,8 +307,36 @@ fn handle_s2c(shared: &Rc<RefCell<Shared>>, msg: ServerToClient, t4: f64) {
             }
             s.remotes.upsert_drive(id, tick, drive);
         }
+        ServerToClient::PeerProjectileSpawn {
+            id, projectiles, ..
+        } => {
+            let mut s = shared.borrow_mut();
+            if s.player_id == Some(id) || projectiles.is_empty() {
+                return;
+            }
+            s.pending_projectiles
+                .push(PeerProjectileBatch { id, projectiles });
+        }
         ServerToClient::Welcome { .. } | ServerToClient::Reject { .. } => {}
     }
+}
+
+/// Convert a net spawn into a sim projectile (max range from weapon table).
+pub fn net_spawn_to_projectile(owner: PlayerId, n: &NetProjectileSpawn) -> Option<Projectile> {
+    let def = weapon_def(n.weapon)?;
+    let origin = glam::Vec3::new(n.origin.x, n.origin.y, n.origin.z);
+    let velocity = glam::Vec3::new(n.velocity.x, n.velocity.y, n.velocity.z);
+    Some(Projectile {
+        id: n.id,
+        owner,
+        weapon: n.weapon,
+        origin,
+        position: origin,
+        velocity,
+        traveled: 0.0,
+        max_range: def.max_range,
+        muzzle_index: n.muzzle_index,
+    })
 }
 
 async fn join_session(shared: Rc<RefCell<Shared>>) -> Result<(), JsValue> {

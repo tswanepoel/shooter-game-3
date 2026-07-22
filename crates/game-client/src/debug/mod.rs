@@ -18,6 +18,8 @@ pub enum DebugHostRequest {
     MpJoin,
     MpLeave,
     MpStatus,
+    /// Dev equip letter `a`…`r` (038).
+    Blaster(u8),
 }
 
 /// Full debug stack owned by the client when `debug-tools` is enabled.
@@ -66,6 +68,19 @@ impl DebugTools {
                 self.host_requests.push(DebugHostRequest::MpStatus);
                 String::new()
             }
+            other if other.starts_with("__REQUEST_BLASTER_") => {
+                let letter = other
+                    .strip_prefix("__REQUEST_BLASTER_")
+                    .and_then(|s| s.chars().next())
+                    .map(|c| c as u8)
+                    .unwrap_or(0);
+                if (b'a'..=b'r').contains(&letter) {
+                    self.host_requests.push(DebugHostRequest::Blaster(letter));
+                    String::new()
+                } else {
+                    "usage: blaster <a-r>".into()
+                }
+            }
             other if !other.is_empty() => other.to_string(),
             _ => String::new(),
         };
@@ -99,6 +114,10 @@ impl DebugTools {
 
     pub fn net_hud(&self) -> bool {
         self.registry.get_bool("hud.net").unwrap_or(true)
+    }
+
+    pub fn draw_tracers(&self) -> bool {
+        self.registry.get_bool("draw.tracers").unwrap_or(false)
     }
 
     pub fn flycam_wanted(&self) -> bool {

@@ -6,7 +6,7 @@ pub const TICK_HZ: u32 = 180;
 
 pub const TICK_DURATION_SECS: f64 = 1.0 / TICK_HZ as f64;
 
-pub const PROTOCOL_VERSION: u16 = 3;
+pub const PROTOCOL_VERSION: u16 = 4;
 
 pub type PlayerId = u32;
 
@@ -53,11 +53,34 @@ pub struct DriveView {
     pub velocity_y: f32,
 }
 
+/// One claimed projectile spawn (038). Server relays; peers present motion + FX.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NetProjectileSpawn {
+    pub id: u64,
+    pub weapon: u8,
+    pub origin: NetVec3,
+    pub velocity: NetVec3,
+    /// Kit muzzle index (flash).
+    pub muzzle_index: u8,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ClientToServer {
-    Hello { protocol: u16 },
-    ClockProbe { t1: f64 },
-    DriveSample { tick: u64, drive: DriveView },
+    Hello {
+        protocol: u16,
+    },
+    ClockProbe {
+        t1: f64,
+    },
+    DriveSample {
+        tick: u64,
+        drive: DriveView,
+    },
+    /// Shooter-claimed projectile batch (038).
+    ProjectileSpawn {
+        tick: u64,
+        projectiles: Vec<NetProjectileSpawn>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -89,6 +112,12 @@ pub enum ServerToClient {
         tick: u64,
         id: PlayerId,
         drive: DriveView,
+    },
+    /// Relayed peer projectile spawns (038).
+    PeerProjectileSpawn {
+        tick: u64,
+        id: PlayerId,
+        projectiles: Vec<NetProjectileSpawn>,
     },
 }
 
@@ -241,6 +270,31 @@ mod tests {
         let left = ServerToClient::PeerLeft { tick: 11, id: 2 };
         let b = encode_s2c(&left).unwrap();
         assert_eq!(decode_s2c(&b).unwrap(), left);
+    }
+
+    #[test]
+    fn projectile_spawn_roundtrip() {
+        let spawns = vec![NetProjectileSpawn {
+            id: 9,
+            weapon: b'p',
+            origin: NetVec3::new(0.0, 1.4, 0.5),
+            velocity: NetVec3::new(0.0, 0.0, 400.0),
+            muzzle_index: 0,
+        }];
+        let c2s = ClientToServer::ProjectileSpawn {
+            tick: 12,
+            projectiles: spawns.clone(),
+        };
+        let b = encode_c2s(&c2s).unwrap();
+        assert_eq!(decode_c2s(&b).unwrap(), c2s);
+
+        let s2c = ServerToClient::PeerProjectileSpawn {
+            tick: 12,
+            id: 3,
+            projectiles: spawns,
+        };
+        let b = encode_s2c(&s2c).unwrap();
+        assert_eq!(decode_s2c(&b).unwrap(), s2c);
     }
 
     #[test]

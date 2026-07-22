@@ -4,6 +4,7 @@
 
 #[cfg(feature = "debug-tools")]
 mod debug;
+mod fire_fx;
 mod input;
 #[cfg(feature = "debug-tools")]
 mod lineup;
@@ -19,7 +20,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use game_sim::{
-    SelfState, CAMERA_FAR_M, CAMERA_NEAR_M, CAMERA_VERTICAL_FOV_RAD, DEBUG_GRID_HALF_EXTENT_M,
+    aim_from_self, equip_blaster_letter, weapon_def, FireState, ProjectileWorld, SelfState,
+    CAMERA_FAR_M, CAMERA_NEAR_M, CAMERA_VERTICAL_FOV_RAD, DEBUG_GRID_HALF_EXTENT_M,
     GRID_MAJOR_EVERY, GRID_MINOR_SPACING_M,
 };
 use glam::Mat4;
@@ -29,6 +31,7 @@ use web_sys::HtmlCanvasElement;
 
 #[cfg(feature = "debug-tools")]
 use debug::{DebugHost, DebugTools};
+use fire_fx::FireFx;
 use input::MoveInput;
 use input::{install_input_handlers, InputSession};
 #[cfg(feature = "debug-tools")]
@@ -116,6 +119,7 @@ struct Renderer {
     vertex_buffer: wgpu::Buffer,
     vertex_count: u32,
     reticle: ReticleGpu,
+    fire_fx: FireFx,
 }
 
 impl Renderer {
@@ -279,6 +283,7 @@ impl Renderer {
         queue.write_buffer(&vertex_buffer, 0, bytemuck::cast_slice(&grid));
 
         let reticle = ReticleGpu::new(&device, config.format, MSAA_SAMPLE_COUNT);
+        let fire_fx = FireFx::new(&device, config.format, MSAA_SAMPLE_COUNT);
 
         Ok(Self {
             surface,
@@ -296,6 +301,7 @@ impl Renderer {
             vertex_buffer,
             vertex_count,
             reticle,
+            fire_fx,
         })
     }
 
@@ -398,6 +404,8 @@ impl Renderer {
             if draw_reticle {
                 self.reticle.draw(&mut pass);
             }
+
+            self.fire_fx.draw(&mut pass);
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
@@ -533,6 +541,8 @@ pub(crate) struct ClientInner {
     pub(crate) move_input: MoveInput,
     self_present: SelfPresentState,
     remote_present: RemotePresent,
+    fire: FireState,
+    projectiles: ProjectileWorld,
     last_frame_secs: f64,
     #[cfg(feature = "debug-tools")]
     fps_ema: f32,
@@ -569,10 +579,41 @@ impl ClientInner {
                 DebugHostRequest::MpStatus => {
                     self.debug.shell.push_log(self.mp.status_line());
                 }
+                DebugHostRequest::Blaster(letter) => {
+                    let msg = self.equip_blaster_cmd(letter);
+                    self.debug.shell.push_log(msg);
+                }
             }
         }
         if let Some(err) = self.mp.take_error() {
             self.debug.shell.push_log(err);
+        }
+        // Optional debug tracers (038).
+        self.renderer.fire_fx.show_tracers = self.debug.draw_tracers();
+    }
+
+    #[cfg(feature = "debug-tools")]
+    fn equip_blaster_cmd(&mut self, letter: u8) -> String {
+        if self.fire.blocks_weapon_side() {
+            return "blaster: wait for burst to finish".into();
+        }
+        match equip_blaster_letter(&mut self.self_state, letter) {
+            Ok(_) => {
+                self.fire.pay_ready(letter);
+                let need_reload = match &self.self_present {
+                    SelfPresentState::Ready(gpu) => !gpu.has_blaster_letter(letter),
+                    _ => true,
+                };
+                if need_reload {
+                    self.self_present = SelfPresentState::Idle;
+                }
+                format!(
+                    "blaster {} (active={:?})",
+                    letter as char,
+                    self.self_state.active_blaster().map(|l| l as char)
+                )
+            }
+            Err(e) => format!("blaster: {e}"),
         }
     }
 
@@ -623,6 +664,8 @@ impl ClientInner {
         #[cfg(not(feature = "debug-tools"))]
         let was_fly = false;
 
+        let fire_held = session_ok && !console_open && !was_fly && self.move_input.fire_held();
+
         if session_ok && !console_open && !was_fly {
             self.self_state.apply_look(
                 dt,
@@ -630,31 +673,115 @@ impl ClientInner {
                 -look.y * LOOK_SENS_RAD_PER_PX,
             );
             let (fwd, strafe) = self.move_input.axes();
-            let sprint_tap = self.move_input.take_sprint();
+            let mut sprint_tap = self.move_input.take_sprint();
             let jump = self.move_input.take_jump();
             let weapon_steps = self.move_input.take_weapon_cycle();
             let wdir = weapon_steps.signum();
+
+            // Burst holds weapon-side actions (sprint, wheel) — 038.
+            if self.fire.blocks_weapon_side() {
+                sprint_tap = false;
+            }
 
             self.self_state.wish_forward = fwd.clamp(-1.0, 1.0);
             self.self_state.wish_strafe = strafe.clamp(-1.0, 1.0);
             if jump {
                 self.self_state.try_jump();
             }
-            for _ in 0..weapon_steps.unsigned_abs() {
-                self.self_state.cycle_weapon(wdir);
+            if !self.fire.blocks_weapon_side() {
+                for _ in 0..weapon_steps.unsigned_abs() {
+                    self.self_state.cycle_weapon(wdir);
+                    if let Some(letter) = self.self_state.active_blaster() {
+                        self.fire.pay_ready(letter);
+                    } else {
+                        self.fire.sync_active_letter(None);
+                    }
+                }
             }
             self.self_state.apply_move(dt, fwd, strafe, sprint_tap);
         } else {
             if !session_ok || console_open || was_fly {
                 self.move_input.clear_keys();
+                self.move_input.set_fire_held(false);
             }
             self.self_state.apply_move(dt, 0.0, 0.0, false);
         }
 
+        // Fire gates + spawn (038). Muzzle worlds from present 037 chain when mesh ready.
+        let owner = self.mp.player_id().unwrap_or(0);
+        let aim = aim_from_self(&self.self_state);
+        let muzzle_worlds = match &self.self_present {
+            SelfPresentState::Ready(gpu) => gpu.fire_muzzle_worlds(&self.self_state),
+            _ => Vec::new(),
+        };
+        let discharges = self.fire.tick(
+            dt,
+            &mut self.self_state,
+            fire_held,
+            owner,
+            aim,
+            &muzzle_worlds,
+        );
+        let mut claimed: Vec<game_sim::Projectile> = Vec::new();
+        for d in &discharges {
+            for p in &d.projectiles {
+                claimed.push(p.clone());
+                self.projectiles.spawn(p.clone());
+            }
+            if let Some(def) = weapon_def(d.weapon) {
+                let yaw_sign = if d.projectiles.first().map(|p| p.id & 1).unwrap_or(0) == 0 {
+                    1.0
+                } else {
+                    -1.0
+                };
+                // Preview jolt for flash placement, then apply kick + flashes once.
+                let mut jolt_preview = self.renderer.fire_fx.self_jolt;
+                jolt_preview.add_kick(def, yaw_sign);
+                let flash_pts = match &self.self_present {
+                    SelfPresentState::Ready(gpu) => {
+                        gpu.flash_muzzle_worlds(&self.self_state, jolt_preview, &d.fired_muzzles)
+                    }
+                    _ => d.projectiles.iter().map(|p| p.origin).collect(),
+                };
+                self.renderer
+                    .fire_fx
+                    .note_self_discharge(def, &flash_pts, yaw_sign);
+            }
+        }
+
+        if !claimed.is_empty() {
+            self.mp.claim_projectiles(&claimed);
+        }
+
+        // Accept peer projectiles (claim-and-relay).
+        for batch in self.mp.take_peer_projectiles() {
+            let mut origins = Vec::new();
+            let mut weapon = b'p';
+            for n in &batch.projectiles {
+                if let Some(p) = mp::net_spawn_to_projectile(batch.id, n) {
+                    weapon = p.weapon;
+                    origins.push(p.origin);
+                    self.projectiles.spawn(p);
+                }
+            }
+            if !origins.is_empty() {
+                self.renderer
+                    .fire_fx
+                    .note_peer_projectiles(batch.id, weapon, &origins);
+            }
+        }
+
+        self.projectiles.tick(dt);
+        self.renderer.fire_fx.tick(dt);
+
         self.mp.on_frame(dt, &self.self_state);
 
         if let SelfPresentState::Ready(gpu) = &mut self.self_present {
-            gpu.apply_state(&self.renderer.queue, &self.self_state);
+            gpu.apply_state(
+                &self.renderer.queue,
+                &self.self_state,
+                self.renderer.fire_fx.self_jolt,
+            );
             self.view.set_mounted_eye(gpu.view.look_origin);
         }
 
@@ -665,8 +792,14 @@ impl ClientInner {
                 .samples()
                 .map(|(id, s)| (id, s.drive.clone()))
                 .collect();
+            let jolts: std::collections::HashMap<_, _> = samples
+                .iter()
+                .map(|(id, _)| (*id, self.renderer.fire_fx.remote_jolt(*id)))
+                .collect();
             self.remote_present
-                .apply_all(&self.renderer.queue, samples.into_iter());
+                .apply_all(&self.renderer.queue, samples.into_iter(), |id| {
+                    jolts.get(&id).copied().unwrap_or_default()
+                });
         } else {
             self.remote_present.clear();
         }
@@ -715,6 +848,13 @@ impl ClientInner {
             cam_eye,
             cam_fwd,
             height as f32,
+        );
+        self.renderer.fire_fx.update_draw(
+            &self.renderer.queue,
+            view_proj,
+            cam_eye,
+            cam_fwd,
+            &self.projectiles.projectiles,
         );
 
         if let SelfPresentState::Ready(gpu) = &self.self_present {
@@ -1048,6 +1188,8 @@ impl GameClient {
             move_input: MoveInput::default(),
             self_present: SelfPresentState::Idle,
             remote_present: RemotePresent::new(),
+            fire: FireState::new(),
+            projectiles: ProjectileWorld::new(),
             last_frame_secs: 0.0,
             #[cfg(feature = "debug-tools")]
             fps_ema: 0.0,

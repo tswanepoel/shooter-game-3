@@ -335,6 +335,23 @@ async fn handle_session(
                                 let guard = roster.lock().await;
                                 guard.relay_datagram(player_id, &relay);
                             }
+                            Ok(ClientToServer::ProjectileSpawn { tick, projectiles }) => {
+                                let joined = {
+                                    let guard = roster.lock().await;
+                                    guard.contains(player_id)
+                                };
+                                if !joined || projectiles.is_empty() {
+                                    continue;
+                                }
+                                // Claim-and-relay only; server does not own projectiles (038).
+                                let relay = encode_s2c(&ServerToClient::PeerProjectileSpawn {
+                                    tick,
+                                    id: player_id,
+                                    projectiles,
+                                })?;
+                                let guard = roster.lock().await;
+                                guard.relay_datagram(player_id, &relay);
+                            }
                             Ok(ClientToServer::Hello { .. }) => {}
                             Err(_) => {}
                         }

@@ -45,7 +45,7 @@ fn request_pointer_lock_raw(canvas: &HtmlCanvasElement) {
     }
 }
 
-/// Held WASD + Shift sprint edge + jump edge + weapon-cycle edge for mounted locomotion.
+/// Held WASD + Shift sprint edge + jump edge + weapon-cycle edge + LMB fire for mounted play.
 #[derive(Debug, Default, Clone)]
 pub struct MoveInput {
     pub forward: bool,
@@ -56,6 +56,8 @@ pub struct MoveInput {
     sprint_edge: bool,
     /// Accumulated wheel steps: +1 next weapon, −1 previous (021).
     weapon_cycle: i8,
+    /// Session LMB held (038 fire).
+    fire_held: bool,
 }
 
 impl MoveInput {
@@ -103,6 +105,14 @@ impl MoveInput {
         let c = self.weapon_cycle;
         self.weapon_cycle = 0;
         c
+    }
+
+    pub fn set_fire_held(&mut self, held: bool) {
+        self.fire_held = held;
+    }
+
+    pub fn fire_held(&self) -> bool {
+        self.fire_held
     }
 
     pub fn is_move_key(code: &str) -> bool {
@@ -179,6 +189,41 @@ pub fn install_input_handlers(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCanv
         on_click.forget();
     }
 
+    // Session LMB fire (038): held while pointer-locked; ignored when debug shell is open.
+    {
+        let inner = inner.clone();
+        let on_down = Closure::<dyn FnMut(MouseEvent)>::new(move |event: MouseEvent| {
+            if event.button() != 0 {
+                return;
+            }
+            let mut client = inner.borrow_mut();
+            #[cfg(feature = "debug-tools")]
+            if client.debug.is_open() {
+                return;
+            }
+            if client.session.is_active() {
+                client.move_input.set_fire_held(true);
+            }
+        });
+        window
+            .add_event_listener_with_callback("mousedown", on_down.as_ref().unchecked_ref())
+            .expect("fire mousedown");
+        on_down.forget();
+    }
+    {
+        let inner = inner.clone();
+        let on_up = Closure::<dyn FnMut(MouseEvent)>::new(move |event: MouseEvent| {
+            if event.button() != 0 {
+                return;
+            }
+            inner.borrow_mut().move_input.set_fire_held(false);
+        });
+        window
+            .add_event_listener_with_callback("mouseup", on_up.as_ref().unchecked_ref())
+            .expect("fire mouseup");
+        on_up.forget();
+    }
+
     {
         let inner = inner.clone();
         let canvas_el = canvas.clone();
@@ -190,6 +235,7 @@ pub fn install_input_handlers(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCanv
             client.session.set_active(active);
             if was && !active {
                 client.move_input.clear_keys();
+                client.move_input.set_fire_held(false);
                 #[cfg(feature = "debug-tools")]
                 client.fly_input.clear_keys();
             }

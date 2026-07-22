@@ -53,6 +53,13 @@ impl DebugRegistry {
                 help: "client: top FPS / tick banner",
             },
         );
+        self.cvars.insert(
+            "draw.tracers",
+            CVar {
+                value: CVarValue::Bool(false),
+                help: "client: debug projectile tracers (038)",
+            },
+        );
     }
 
     pub fn get_bool(&self, name: &str) -> Option<bool> {
@@ -84,9 +91,21 @@ impl DebugRegistry {
             }
             "screenshot" | "shot" => "__REQUEST_SCREENSHOT__".into(),
             "mp" => self.cmd_mp(&args),
+            "blaster" => self.cmd_blaster(&args),
             name if self.cvars.contains_key(name) => self.cmd_cvar(name, &args),
             _ => format!("unknown: '{head}'. type 'help'."),
         }
+    }
+
+    fn cmd_blaster(&self, args: &[&str]) -> String {
+        let Some(raw) = args.first().copied() else {
+            return "usage: blaster <a-r>".into();
+        };
+        let letter = raw.as_bytes().first().copied().unwrap_or(0);
+        if raw.len() != 1 || !(b'a'..=b'r').contains(&letter) {
+            return format!("usage: blaster <a-r> (got '{raw}')");
+        }
+        format!("__REQUEST_BLASTER_{}", letter as char)
     }
 
     fn cmd_mp(&self, args: &[&str]) -> String {
@@ -109,6 +128,7 @@ impl DebugRegistry {
             "  remount           leave flycam, restore self view".into(),
             "  screenshot|shot   capture frame (F9)".into(),
             "  mp join|leave|status  WebTransport shared tick + remotes".into(),
+            "  blaster <a-r>     equip letter on active slot (038; flips if needed)".into(),
             "cvars (get: name · set: name <value>):".into(),
         ];
         for (name, cvar) in &self.cvars {

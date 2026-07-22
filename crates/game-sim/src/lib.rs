@@ -4,10 +4,14 @@
 //! World space: 1 unit = 1 metre, Y-up, XZ ground plane.
 
 mod config;
+mod fire;
 mod self_state;
+mod weapons;
 
 pub use config::*;
+pub use fire::*;
 pub use self_state::*;
+pub use weapons::*;
 
 use glam::Vec3;
 
