@@ -270,7 +270,7 @@ impl FireFx {
         let Some(def) = weapon_def(weapon) else {
             return;
         };
-        let yaw = if (id as u32).wrapping_mul(2654435761) & 1 == 0 {
+        let yaw = if id.wrapping_mul(2654435761) & 1 == 0 {
             1.0
         } else {
             -1.0
@@ -304,7 +304,7 @@ impl FireFx {
         }
         self.flashes.retain(|f| f.age < FLASH_LIFE_S);
         self.self_jolt.settle(dt, self.self_settle_s);
-        for (_, (jolt, settle)) in self.remote_jolts.iter_mut() {
+        for (jolt, settle) in self.remote_jolts.values_mut() {
             jolt.settle(dt, *settle);
         }
         self.remote_jolts

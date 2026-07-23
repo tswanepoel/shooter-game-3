@@ -211,10 +211,13 @@ impl FireState {
         self.fire_held = fire_held;
         self.prev_held = fire_held;
 
-        // Fire cancels sprint latch; pay sprint→fire tax once when clearing.
-        if (press_edge || (fire_held && def.mode == FireMode::FullAuto) || self.burst_active())
-            && self_state.sprint_latched
-        {
+        // Fire cancels emote (holster restore before muzzle spawn) and sprint (038/039).
+        let fire_intent =
+            press_edge || (fire_held && def.mode == FireMode::FullAuto) || self.burst_active();
+        if fire_intent && self_state.is_emoting() {
+            self_state.clear_emote();
+        }
+        if fire_intent && self_state.sprint_latched {
             self_state.sprint_latched = false;
             if self_state.locomotion.is_sprint() {
                 self_state.locomotion = crate::LocomotionMode::Walk;
@@ -373,6 +376,7 @@ fn scatter_direction(aim: Vec3, half_deg: f32, rand01: &mut dyn FnMut() -> f32) 
 /// on the next tick if letter changes.
 pub fn equip_blaster_letter(state: &mut SelfState, letter: u8) -> Result<bool, &'static str> {
     let class = WeaponClass::from_letter(letter).ok_or("unknown blaster letter")?;
+    state.clear_emote();
     let before = (
         state.primary,
         state.secondary,

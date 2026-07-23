@@ -907,8 +907,17 @@ struct NodeAnimSample {
 impl AnimClip {
     /// Sample sparse local TRS overrides at phase ∈ [0, 1).
     fn sample_overrides(&self, phase: f32) -> std::collections::HashMap<String, NodeAnimSample> {
-        use std::collections::HashMap;
         let t = phase.rem_euclid(1.0) * self.duration.max(1e-8);
+        self.sample_overrides_at(t)
+    }
+
+    /// Sample at absolute clip time (seconds), clamped to the clip range (one-shot emotes).
+    fn sample_overrides_at(
+        &self,
+        time_s: f32,
+    ) -> std::collections::HashMap<String, NodeAnimSample> {
+        use std::collections::HashMap;
+        let t = time_s.clamp(0.0, self.duration.max(0.0));
         let mut out: HashMap<String, NodeAnimSample> = HashMap::new();
 
         for ch in &self.channels {
@@ -1231,20 +1240,27 @@ pub enum KitPose {
 ///
 /// Locomotion clip applies for [`KitPose::Present`] while mode uses a loco clip
 /// (walk, sprint, or stop-settle). Pass the matching clip (walk or sprint).
+/// Emote (039): optional one-shot clip + age; holsters hold/blaster ownership.
 pub fn pose_character_kit(
     parts: &[CharPart],
     self_state: &game_sim::SelfState,
     loco_clip: Option<&AnimClip>,
+    emote_clip: Option<(&AnimClip, f32)>,
     pose: KitPose,
 ) -> (Vec<Mat4>, Mat4) {
-    let sprinting = self_state.locomotion.is_sprint();
-    let armed = self_state.is_armed();
-    // Hold + aim owns the right arm only while armed and not sprinting.
-    let hold_right = armed && !sprinting;
+    let emoting = pose == KitPose::Present && emote_clip.is_some() && self_state.is_emoting();
+    let sprinting = self_state.locomotion.is_sprint() && !emoting;
+    let armed = self_state.presents_armed();
+    // Hold + aim owns the right arm only while armed and not sprinting / emoting.
+    let hold_right = armed && !sprinting && !emoting;
     let loco_over = match (pose, loco_clip) {
-        (KitPose::Present, Some(clip)) if self_state.locomotion.uses_loco_clip() => {
+        (KitPose::Present, Some(clip)) if !emoting && self_state.locomotion.uses_loco_clip() => {
             Some(clip.sample_overrides(self_state.walk_phase))
         }
+        _ => None,
+    };
+    let emote_over = match (pose, emote_clip) {
+        (KitPose::Present, Some((clip, age))) if emoting => Some(clip.sample_overrides_at(age)),
         _ => None,
     };
 
@@ -1280,8 +1296,17 @@ pub fn pose_character_kit(
             }
         }
 
+        // Emote owns upper-body channels (holster: no hold layer).
+        if let Some(ref over) = emote_over {
+            if matches!(p.name.as_str(), "arm-left" | "arm-right" | "torso" | "head") {
+                if let Some(sample) = over.get(&p.name) {
+                    local = apply_anim_to_bind(p.bind_local, *sample);
+                }
+            }
+        }
+
         match p.name.as_str() {
-            "torso" if !sprinting => {
+            "torso" if !sprinting && !emoting => {
                 local *= Mat4::from_quat(Quat::from_rotation_x(-self_state.torso_pitch));
             }
             "arm-right" if hold_right => {
@@ -1296,7 +1321,7 @@ pub fn pose_character_kit(
                 local = Mat4::from_scale_rotation_translation(scale, HOLDING_RIGHT_ROT, t)
                     * Mat4::from_quat(Quat::from_rotation_x(-self_state.shoulder_pitch));
             }
-            "head" => {
+            "head" if !emoting => {
                 // Look owns head attitude (015); walk head channel is unused for local self.
                 let (_s, _r, t) = local.to_scale_rotation_translation();
                 let scale = {

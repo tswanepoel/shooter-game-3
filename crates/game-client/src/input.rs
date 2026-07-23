@@ -58,6 +58,12 @@ pub struct MoveInput {
     weapon_cycle: i8,
     /// Session LMB held (038 fire).
     fire_held: bool,
+    /// Session B held (039 emote wheel).
+    emote_held: bool,
+    /// Rising edge of B this frame window.
+    emote_press: bool,
+    /// Falling edge of B this frame window.
+    emote_release: bool,
 }
 
 impl MoveInput {
@@ -115,12 +121,42 @@ impl MoveInput {
         self.fire_held
     }
 
+    pub fn set_emote_held(&mut self, held: bool) {
+        if held && !self.emote_held {
+            self.emote_press = true;
+        }
+        if !held && self.emote_held {
+            self.emote_release = true;
+        }
+        self.emote_held = held;
+    }
+
+    pub fn emote_held(&self) -> bool {
+        self.emote_held
+    }
+
+    pub fn take_emote_press(&mut self) -> bool {
+        let v = self.emote_press;
+        self.emote_press = false;
+        v
+    }
+
+    pub fn take_emote_release(&mut self) -> bool {
+        let v = self.emote_release;
+        self.emote_release = false;
+        v
+    }
+
     pub fn is_move_key(code: &str) -> bool {
         matches!(code, "KeyW" | "KeyA" | "KeyS" | "KeyD")
     }
 
     pub fn is_sprint_key(code: &str) -> bool {
         matches!(code, "ShiftLeft" | "ShiftRight")
+    }
+
+    pub fn is_emote_key(code: &str) -> bool {
+        code == "KeyB"
     }
 
     pub fn clear_keys(&mut self) {
@@ -236,6 +272,7 @@ pub fn install_input_handlers(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCanv
             if was && !active {
                 client.move_input.clear_keys();
                 client.move_input.set_fire_held(false);
+                client.move_input.set_emote_held(false);
                 #[cfg(feature = "debug-tools")]
                 client.fly_input.clear_keys();
             }
@@ -440,6 +477,11 @@ fn on_session_key_down(inner: &Rc<RefCell<ClientInner>>, event: &KeyboardEvent) 
         if !event.repeat() {
             client.move_input.note_jump_press();
         }
+    } else if MoveInput::is_emote_key(&code) {
+        event.prevent_default();
+        if !event.repeat() {
+            client.move_input.set_emote_held(true);
+        }
     }
 }
 
@@ -481,6 +523,8 @@ fn on_session_key_up(inner: &Rc<RefCell<ClientInner>>, event: &KeyboardEvent) {
         client.fly_input.set_key(&code, false);
     } else if MoveInput::is_move_key(&code) {
         client.move_input.set_key(&code, false);
+    } else if MoveInput::is_emote_key(&code) {
+        client.move_input.set_emote_held(false);
     }
 }
 

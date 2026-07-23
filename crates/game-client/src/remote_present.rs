@@ -91,7 +91,7 @@ impl RemotePresent {
                 continue;
             }
             let state = drive_to_state(&drive);
-            gpu.apply_present(queue, &state, jolt_for(id));
+            gpu.apply_present(queue, &state, jolt_for(id), false);
         }
     }
 

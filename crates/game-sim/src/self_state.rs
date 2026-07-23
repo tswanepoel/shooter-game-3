@@ -168,6 +168,11 @@ pub struct SelfState {
     pub head_yaw: f32,
     /// Head relative pitch (cosmetic).
     pub head_pitch: f32,
+
+    /// Active emote wheel slot (`0`…`3`), if any (039).
+    pub emote: Option<u8>,
+    /// Seconds since emote commit (039). Cleared with [`Self::clear_emote`].
+    pub emote_age_s: f32,
 }
 
 impl Default for SelfState {
@@ -201,6 +206,8 @@ impl SelfState {
             shoulder_pitch: 0.0,
             head_yaw: 0.0,
             head_pitch: 0.0,
+            emote: None,
+            emote_age_s: 0.0,
         }
     }
 
@@ -215,6 +222,55 @@ impl SelfState {
     /// True when the active slot holds a blaster.
     pub fn is_armed(&self) -> bool {
         self.active_blaster().is_some()
+    }
+
+    /// True while an emote clip is playing (039).
+    pub fn is_emoting(&self) -> bool {
+        self.emote.is_some()
+    }
+
+    /// Holster present: emote owns arms; do not draw hold/blaster (039 policy A).
+    /// Loadout identity is unchanged.
+    pub fn emote_holster(&self) -> bool {
+        self.is_emoting()
+    }
+
+    /// Present-armed: active letter filled and not holstered for emote.
+    pub fn presents_armed(&self) -> bool {
+        self.is_armed() && !self.emote_holster()
+    }
+
+    /// Clear emote drive (natural end, cancel, replace prep).
+    pub fn clear_emote(&mut self) {
+        self.emote = None;
+        self.emote_age_s = 0.0;
+    }
+
+    /// Advance emote age; clear when the kit clip duration elapses.
+    pub fn tick_emote(&mut self, dt: f32) {
+        let Some(id) = self.emote else {
+            return;
+        };
+        self.emote_age_s += dt.max(0.0);
+        let dur = crate::emote_duration_s(id);
+        if dur <= 0.0 || self.emote_age_s >= dur {
+            self.clear_emote();
+        }
+    }
+
+    /// Commit a wheel slot. Requires grounded; `weapon_side_blocked` is burst (038).
+    /// Replaces an in-flight emote. Clears sprint latch.
+    pub fn try_commit_emote(&mut self, id: u8, weapon_side_blocked: bool) -> bool {
+        if weapon_side_blocked || !self.is_grounded() {
+            return false;
+        }
+        if crate::emote_def(id).is_none() {
+            return false;
+        }
+        self.sprint_latched = false;
+        self.emote = Some(id);
+        self.emote_age_s = 0.0;
+        true
     }
 
     /// Set primary (any class, or clear). Invalid letter rejected.
@@ -239,10 +295,12 @@ impl SelfState {
     }
 
     /// Toggle active slot: primary ↔ secondary. Empty slots stay in the cycle (unarmed).
+    /// Cancels emote (039) so the new hand is free immediately.
     pub fn cycle_weapon(&mut self, dir: i8) {
         if dir.signum() == 0 {
             return;
         }
+        self.clear_emote();
         self.active = match self.active {
             ActiveWeapon::Primary => ActiveWeapon::Secondary,
             ActiveWeapon::Secondary => ActiveWeapon::Primary,
@@ -266,6 +324,7 @@ impl SelfState {
         if !self.is_grounded() {
             return;
         }
+        self.clear_emote();
         let speed = self.ground_speed();
         let mut wish =
             self.look_forward_xz() * self.wish_forward + self.look_right_xz() * self.wish_strafe;
@@ -335,6 +394,12 @@ impl SelfState {
     pub fn apply_move(&mut self, dt: f32, forward: f32, strafe: f32, sprint_tap: bool) {
         self.wish_forward = forward.clamp(-1.0, 1.0);
         self.wish_strafe = strafe.clamp(-1.0, 1.0);
+
+        // Emote cancels on any walk wish or sprint engage (039).
+        let wish_moving = self.wish_forward.abs() > 1e-6 || self.wish_strafe.abs() > 1e-6;
+        if self.is_emoting() && (wish_moving || sprint_tap) {
+            self.clear_emote();
+        }
 
         // Shift tap only engages; never cancels (empty bar / stop / lose W clear the latch).
         if sprint_tap && !self.sprint_latched && self.stamina >= STAMINA_MIN_TO_START {
@@ -491,7 +556,7 @@ impl SelfState {
 
     /// World point for the screen-centre reticle billboard (along look from look origin).
     pub fn reticle_world(&self, look_origin: Vec3) -> Option<Vec3> {
-        if !(self.alive && self.is_armed()) {
+        if !(self.alive && self.presents_armed()) {
             return None;
         }
         let dir = self.ocular_forward();
@@ -985,5 +1050,54 @@ mod tests {
             s.sprint_latched,
             s.stamina
         );
+    }
+
+    #[test]
+    fn emote_commit_requires_ground_and_clears_sprint() {
+        let mut s = SelfState::default_loadout();
+        s.apply_move(0.05, 1.0, 0.0, true);
+        assert!(s.sprint_latched);
+        assert!(s.try_commit_emote(0, false));
+        assert_eq!(s.emote, Some(0));
+        assert!(!s.sprint_latched);
+        assert!(s.emote_holster());
+        assert!(!s.presents_armed());
+        assert!(s.is_armed());
+    }
+
+    #[test]
+    fn emote_blocked_in_air_and_by_weapon_side() {
+        let mut s = SelfState::default_loadout();
+        s.try_jump();
+        assert!(!s.try_commit_emote(0, false));
+        s = SelfState::default_loadout();
+        assert!(!s.try_commit_emote(0, true));
+    }
+
+    #[test]
+    fn emote_ends_after_duration_and_move_cancels() {
+        let mut s = SelfState::default_loadout();
+        assert!(s.try_commit_emote(3, false)); // bow 0.33s
+        s.tick_emote(0.2);
+        assert!(s.is_emoting());
+        s.tick_emote(0.2);
+        assert!(!s.is_emoting());
+
+        assert!(s.try_commit_emote(0, false));
+        s.apply_move(0.01, 1.0, 0.0, false);
+        assert!(!s.is_emoting());
+    }
+
+    #[test]
+    fn jump_and_cycle_cancel_emote() {
+        let mut s = SelfState::default_loadout();
+        assert!(s.try_commit_emote(1, false));
+        s.try_jump();
+        assert!(!s.is_emoting());
+
+        s = SelfState::default_loadout();
+        assert!(s.try_commit_emote(2, false));
+        s.cycle_weapon(1);
+        assert!(!s.is_emoting());
     }
 }

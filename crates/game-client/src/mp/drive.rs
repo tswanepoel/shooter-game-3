@@ -23,6 +23,8 @@ pub fn state_to_drive(state: &SelfState) -> DriveView {
         },
         walk_phase: state.walk_phase,
         velocity_y: state.velocity_y,
+        emote: state.emote,
+        emote_age_s: state.emote_age_s,
     }
 }
 
@@ -51,6 +53,8 @@ pub fn apply_drive(state: &mut SelfState, drive: &DriveView) {
     state.walk_phase = drive.walk_phase;
     state.velocity_y = drive.velocity_y;
     state.sprint_latched = matches!(drive.locomotion, NetLocomotion::Sprint);
+    state.emote = drive.emote;
+    state.emote_age_s = drive.emote_age_s;
     state.set_look(drive.ocular_yaw, drive.ocular_pitch);
 }
 
@@ -83,5 +87,14 @@ mod tests {
         assert_eq!(back.secondary, Some(b'a'));
         assert_eq!(back.active, ActiveWeapon::Secondary);
         assert!(back.sprint_latched);
+        assert_eq!(back.emote, None);
+        assert_eq!(back.emote_age_s, 0.0);
+
+        s.emote = Some(2);
+        s.emote_age_s = 0.2;
+        let d = state_to_drive(&s);
+        let back = drive_to_state(&d);
+        assert_eq!(back.emote, Some(2));
+        assert!((back.emote_age_s - 0.2).abs() < 1e-5);
     }
 }

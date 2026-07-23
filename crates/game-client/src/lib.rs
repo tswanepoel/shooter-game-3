@@ -4,6 +4,7 @@
 
 #[cfg(feature = "debug-tools")]
 mod debug;
+mod emote_wheel;
 mod fire_fx;
 mod input;
 #[cfg(feature = "debug-tools")]
@@ -32,6 +33,7 @@ use web_sys::HtmlCanvasElement;
 
 #[cfg(feature = "debug-tools")]
 use debug::{DebugHost, DebugTools};
+use emote_wheel::{EmoteWheel, EmoteWheelGpu};
 use fire_fx::FireFx;
 use input::MoveInput;
 use input::{install_input_handlers, InputSession};
@@ -120,6 +122,7 @@ struct Renderer {
     vertex_buffer: wgpu::Buffer,
     vertex_count: u32,
     reticle: ReticleGpu,
+    emote_wheel_gpu: EmoteWheelGpu,
     fire_fx: FireFx,
 }
 
@@ -284,6 +287,7 @@ impl Renderer {
         queue.write_buffer(&vertex_buffer, 0, bytemuck::cast_slice(&grid));
 
         let reticle = ReticleGpu::new(&device, config.format, MSAA_SAMPLE_COUNT);
+        let emote_wheel_gpu = EmoteWheelGpu::new(&device, config.format, MSAA_SAMPLE_COUNT);
         let fire_fx = FireFx::new(&device, config.format, MSAA_SAMPLE_COUNT);
 
         Ok(Self {
@@ -302,6 +306,7 @@ impl Renderer {
             vertex_buffer,
             vertex_count,
             reticle,
+            emote_wheel_gpu,
             fire_fx,
         })
     }
@@ -344,6 +349,7 @@ impl Renderer {
         remotes: Option<&RemotePresent>,
         #[cfg(feature = "debug-tools")] lineup: Option<&LineupGpu>,
         draw_reticle: bool,
+        draw_emote_wheel: bool,
     ) -> Result<wgpu::SurfaceTexture, JsValue> {
         let frame = self
             .surface
@@ -407,6 +413,10 @@ impl Renderer {
             }
 
             self.fire_fx.draw(&mut pass);
+
+            if draw_emote_wheel {
+                self.emote_wheel_gpu.draw(&mut pass);
+            }
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
@@ -540,6 +550,7 @@ pub(crate) struct ClientInner {
     pub(crate) view: ViewController,
     pub(crate) session: InputSession,
     pub(crate) move_input: MoveInput,
+    emote_wheel: EmoteWheel,
     self_present: SelfPresentState,
     remote_present: RemotePresent,
     fire: FireState,
@@ -665,31 +676,73 @@ impl ClientInner {
         #[cfg(not(feature = "debug-tools"))]
         let was_fly = false;
 
-        let fire_held = session_ok && !console_open && !was_fly && self.move_input.fire_held();
+        let mut fire_held = session_ok && !console_open && !was_fly && self.move_input.fire_held();
+        let emote_press = self.move_input.take_emote_press();
+        let emote_release = self.move_input.take_emote_release();
 
         if session_ok && !console_open && !was_fly {
-            self.self_state.apply_look(
-                dt,
-                -look.x * LOOK_SENS_RAD_PER_PX,
-                -look.y * LOOK_SENS_RAD_PER_PX,
-            );
+            // Emote wheel (039): B open / release commit; look freezes into select.
+            // Fire while open closes without commit (fire path may still run).
+            if fire_held && self.emote_wheel.is_open() {
+                self.emote_wheel.close();
+            }
+            if emote_press
+                && !self.emote_wheel.is_open()
+                && self.self_state.is_grounded()
+                && !self.fire.blocks_weapon_side()
+            {
+                self.emote_wheel.open();
+            }
+            if self.emote_wheel.is_open() {
+                self.emote_wheel.add_select_px(look.x, look.y);
+                if emote_release || !self.move_input.emote_held() {
+                    let slot = self.emote_wheel.highlighted_slot();
+                    self.emote_wheel.close();
+                    if let Some(id) = slot {
+                        let _ = self
+                            .self_state
+                            .try_commit_emote(id, self.fire.blocks_weapon_side());
+                    }
+                }
+            }
+
+            let wheel_open = self.emote_wheel.is_open();
+            // Don't fire while picking an emote (LMB already closed the wheel above).
+            if wheel_open {
+                fire_held = false;
+            }
+            if !wheel_open {
+                self.self_state.apply_look(
+                    dt,
+                    -look.x * LOOK_SENS_RAD_PER_PX,
+                    -look.y * LOOK_SENS_RAD_PER_PX,
+                );
+            }
             let (fwd, strafe) = self.move_input.axes();
             let mut sprint_tap = self.move_input.take_sprint();
             let jump = self.move_input.take_jump();
             let weapon_steps = self.move_input.take_weapon_cycle();
             let wdir = weapon_steps.signum();
 
-            // Burst holds weapon-side actions (sprint, wheel) — 038.
-            if self.fire.blocks_weapon_side() {
+            // Burst holds weapon-side actions (sprint, loadout wheel) — 038.
+            // Emote radial open also blocks move/sprint/swap commit paths lightly:
+            // freeze wish while open so a twitch does not cancel mid-pick.
+            if self.fire.blocks_weapon_side() || wheel_open {
                 sprint_tap = false;
             }
 
+            let (fwd, strafe) = if wheel_open {
+                (0.0, 0.0)
+            } else {
+                (fwd, strafe)
+            };
+
             self.self_state.wish_forward = fwd.clamp(-1.0, 1.0);
             self.self_state.wish_strafe = strafe.clamp(-1.0, 1.0);
-            if jump {
+            if jump && !wheel_open {
                 self.self_state.try_jump();
             }
-            if !self.fire.blocks_weapon_side() {
+            if !self.fire.blocks_weapon_side() && !wheel_open {
                 for _ in 0..weapon_steps.unsigned_abs() {
                     self.self_state.cycle_weapon(wdir);
                     if let Some(letter) = self.self_state.active_blaster() {
@@ -704,11 +757,19 @@ impl ClientInner {
             if !session_ok || console_open || was_fly {
                 self.move_input.clear_keys();
                 self.move_input.set_fire_held(false);
+                self.move_input.set_emote_held(false);
+                self.emote_wheel.close();
             }
             self.self_state.apply_move(dt, 0.0, 0.0, false);
         }
 
+        self.self_state.tick_emote(dt);
+
         // Fire gates + spawn (038). Muzzle worlds from present 037 chain when mesh ready.
+        // Holster restore before muzzle sample so 037 points exist on the fire frame (039).
+        if fire_held && self.self_state.is_emoting() {
+            self.self_state.clear_emote();
+        }
         let owner = self.mp.player_id().unwrap_or(0);
         let aim = aim_from_self(&self.self_state);
         let muzzle_worlds = match &self.self_present {
@@ -788,10 +849,16 @@ impl ClientInner {
         self.mp.on_frame(dt, &self.self_state);
 
         if let SelfPresentState::Ready(gpu) = &mut self.self_present {
+            // Mounted FP hides local head (eye sits inside the shell). Flycam shows full body.
+            #[cfg(feature = "debug-tools")]
+            let first_person = !self.view.is_flycam();
+            #[cfg(not(feature = "debug-tools"))]
+            let first_person = true;
             gpu.apply_state(
                 &self.renderer.queue,
                 &self.self_state,
                 self.renderer.fire_fx.self_jolt,
+                first_person,
             );
             self.view.set_mounted_eye(gpu.view.look_origin);
         }
@@ -926,6 +993,14 @@ impl ClientInner {
         let draw_grid = true;
 
         let draw_reticle = reticle_pos.is_some() && !flycam;
+        let draw_emote_wheel = self.emote_wheel.is_open() && !flycam;
+        let aspect = self.renderer.config.width as f32 / self.renderer.config.height.max(1) as f32;
+        self.renderer.emote_wheel_gpu.update(
+            &self.renderer.queue,
+            draw_emote_wheel,
+            self.emote_wheel.highlighted_slot(),
+            aspect,
+        );
 
         #[cfg(feature = "debug-tools")]
         let frame = {
@@ -945,12 +1020,17 @@ impl ClientInner {
                 remotes_ref,
                 lineup_ref,
                 draw_reticle,
+                draw_emote_wheel,
             )?
         };
         #[cfg(not(feature = "debug-tools"))]
-        let frame = self
-            .renderer
-            .render_scene(draw_grid, self_ref, remotes_ref, draw_reticle)?;
+        let frame = self.renderer.render_scene(
+            draw_grid,
+            self_ref,
+            remotes_ref,
+            draw_reticle,
+            draw_emote_wheel,
+        )?;
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -1224,6 +1304,7 @@ impl GameClient {
         let debug = DebugTools::new(&renderer.device, renderer.config.format);
 
         let ppp = canvas_buffer_size(&canvas, renderer.max_texture_dim).2;
+        let emote_wheel = EmoteWheel::new();
         let inner = Rc::new(RefCell::new(ClientInner {
             renderer,
             canvas,
@@ -1232,6 +1313,7 @@ impl GameClient {
             view,
             session: InputSession::new(),
             move_input: MoveInput::default(),
+            emote_wheel,
             self_present: SelfPresentState::Idle,
             remote_present: RemotePresent::new(),
             fire: FireState::new(),

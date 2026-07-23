@@ -1,9 +1,10 @@
-//! Self body + blaster presentation (013/015/016/017/021).
+//! Self body + blaster presentation (013/015/016/017/021/039).
 //!
 //! Present pose draws the body (walk included). Look pose mounts the view (017).
 //! Loadout may hold primary + secondary meshes; only the active letter is shown.
+//! Emote holsters the active blaster and plays kit gesture clips (039).
 
-use game_sim::{JoltPose, SelfState, FACE_OFFSET_HEAD_KIT};
+use game_sim::{emote_clip_name, JoltPose, SelfState, EMOTE_CATALOG, FACE_OFFSET_HEAD_KIT};
 use glam::{Mat4, Vec3};
 use wasm_bindgen::JsValue;
 
@@ -32,6 +33,8 @@ pub struct SelfGpu {
     walk_clip: AnimClip,
     /// Kenney `sprint` clip (phase from sim while sprinting).
     sprint_clip: AnimClip,
+    /// Wheel emote clips, index = slot id (039).
+    emote_clips: Vec<AnimClip>,
     /// part index → primitive index in character batch (0), if meshful.
     part_prim: Vec<Option<usize>>,
     blasters: Vec<EquippedBlaster>,
@@ -66,14 +69,21 @@ impl SelfGpu {
             mesh_unlit::extract_clip(char_glb, "walk").map_err(|e| JsValue::from_str(&e))?;
         let sprint_clip =
             mesh_unlit::extract_clip(char_glb, "sprint").map_err(|e| JsValue::from_str(&e))?;
+        let mut emote_clips = Vec::with_capacity(EMOTE_CATALOG.len());
+        for def in &EMOTE_CATALOG {
+            let clip =
+                mesh_unlit::extract_clip(char_glb, def.clip).map_err(|e| JsValue::from_str(&e))?;
+            emote_clips.push(clip);
+        }
 
         let loco = if self_state.locomotion.is_sprint() {
             &sprint_clip
         } else {
             &walk_clip
         };
+        let emote = emote_pair(self_state, &emote_clips);
         let (worlds, arm_kit) =
-            mesh_unlit::pose_character_kit(&parts, self_state, Some(loco), KitPose::Present);
+            mesh_unlit::pose_character_kit(&parts, self_state, Some(loco), emote, KitPose::Present);
         let k2w = mesh_unlit::kit_to_world(self_state.placement_matrix(), min_y);
 
         let mut char_cpu: Vec<(Vec<MeshVertex>, Vec<u32>, [f32; 4])> = Vec::new();
@@ -117,7 +127,7 @@ impl SelfGpu {
             let blaster_prims =
                 mesh_unlit::extract_primitives(blaster_glb).map_err(|e| JsValue::from_str(&e))?;
 
-            let show = self_state.active_blaster() == Some(letter);
+            let show = self_state.presents_armed() && self_state.active_blaster() == Some(letter);
             let root = if show {
                 mesh_unlit::held_blaster_root(k2w, arm_kit, bi)
             } else {
@@ -157,6 +167,7 @@ impl SelfGpu {
             parts,
             walk_clip,
             sprint_clip,
+            emote_clips,
             part_prim,
             blasters,
             min_y,
@@ -165,7 +176,8 @@ impl SelfGpu {
                 reticle_world: None,
             },
         };
-        s.apply_state(queue, self_state, JoltPose::default());
+        // Full body at load (remotes share this path); local FP hides head next apply.
+        s.apply_state(queue, self_state, JoltPose::default(), false);
         Ok(s)
     }
 
@@ -177,8 +189,14 @@ impl SelfGpu {
         } else {
             &self.walk_clip
         };
-        let (_, arm_kit) =
-            mesh_unlit::pose_character_kit(&self.parts, self_state, Some(loco), KitPose::Present);
+        let emote = emote_pair(self_state, &self.emote_clips);
+        let (_, arm_kit) = mesh_unlit::pose_character_kit(
+            &self.parts,
+            self_state,
+            Some(loco),
+            emote,
+            KitPose::Present,
+        );
         (k2w, arm_kit)
     }
 
@@ -222,8 +240,17 @@ impl SelfGpu {
             .collect()
     }
 
-    /// Body + active blaster from drive (walk/sprint/jump/stand).
-    pub fn apply_present(&mut self, queue: &wgpu::Queue, self_state: &SelfState, jolt: JoltPose) {
+    /// Body + active blaster from drive (walk/sprint/jump/stand/emote).
+    ///
+    /// `first_person`: hide the head shell so the mounted eye isn't inside it
+    /// (nod / look would otherwise show interior faces). Remotes pass `false`.
+    pub fn apply_present(
+        &mut self,
+        queue: &wgpu::Queue,
+        self_state: &SelfState,
+        jolt: JoltPose,
+        first_person: bool,
+    ) {
         let k2w = mesh_unlit::kit_to_world(self_state.placement_matrix(), self.min_y);
 
         let loco = if self_state.locomotion.is_sprint() {
@@ -231,14 +258,26 @@ impl SelfGpu {
         } else {
             &self.walk_clip
         };
-        let (present_worlds, arm_kit) =
-            mesh_unlit::pose_character_kit(&self.parts, self_state, Some(loco), KitPose::Present);
+        let emote = emote_pair(self_state, &self.emote_clips);
+        let (present_worlds, arm_kit) = mesh_unlit::pose_character_kit(
+            &self.parts,
+            self_state,
+            Some(loco),
+            emote,
+            KitPose::Present,
+        );
 
         for (i, part) in self.parts.iter().enumerate() {
             let Some(prim) = self.part_prim[i] else {
                 continue;
             };
-            let world = k2w * present_worlds[i];
+            // Near plane only drops geometry closer than CAMERA_NEAR_M; the head
+            // shell sits past that, so FP must not draw it at all.
+            let world = if first_person && part.name == "head" {
+                Mat4::from_scale(Vec3::ZERO)
+            } else {
+                k2w * present_worlds[i]
+            };
             let mut verts = part.local_verts.clone();
             for v in &mut verts {
                 mesh_unlit::transform_vertex(v, world);
@@ -246,9 +285,10 @@ impl SelfGpu {
             self.mesh.write_prim_verts(queue, 0, prim, &verts);
         }
 
+        let show_gun = self_state.presents_armed();
         let active = self_state.active_blaster();
         for b in &self.blasters {
-            let root = if active == Some(b.letter) {
+            let root = if show_gun && active == Some(b.letter) {
                 // Present arm hold + 038 jolt about grip G (hand), not mesh origin.
                 held_with_jolt(k2w, arm_kit, b.letter_index, jolt)
             } else {
@@ -271,6 +311,7 @@ impl SelfGpu {
             &self.parts,
             self_state,
             Some(&self.walk_clip),
+            None,
             KitPose::Look,
         );
         let look_origin = look_origin_world(&self.parts, &look_worlds, k2w);
@@ -282,8 +323,14 @@ impl SelfGpu {
         };
     }
 
-    pub fn apply_state(&mut self, queue: &wgpu::Queue, self_state: &SelfState, jolt: JoltPose) {
-        self.apply_present(queue, self_state, jolt);
+    pub fn apply_state(
+        &mut self,
+        queue: &wgpu::Queue,
+        self_state: &SelfState,
+        jolt: JoltPose,
+        first_person: bool,
+    ) {
+        self.apply_present(queue, self_state, jolt, first_person);
         self.apply_look_view(self_state);
     }
 
@@ -317,6 +364,13 @@ fn look_origin_world(parts: &[CharPart], worlds: &[Mat4], k2w: Mat4) -> Vec3 {
         .map(|i| worlds[i])
         .unwrap_or(Mat4::IDENTITY);
     k2w.transform_point3(head_kit.transform_point3(FACE_OFFSET_HEAD_KIT))
+}
+
+fn emote_pair<'a>(self_state: &SelfState, clips: &'a [AnimClip]) -> Option<(&'a AnimClip, f32)> {
+    let id = self_state.emote?;
+    let _ = emote_clip_name(id)?;
+    let clip = clips.get(id as usize)?;
+    Some((clip, self_state.emote_age_s))
 }
 
 #[derive(Default)]

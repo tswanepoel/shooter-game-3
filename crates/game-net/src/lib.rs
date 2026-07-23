@@ -6,7 +6,7 @@ pub const TICK_HZ: u32 = 180;
 
 pub const TICK_DURATION_SECS: f64 = 1.0 / TICK_HZ as f64;
 
-pub const PROTOCOL_VERSION: u16 = 4;
+pub const PROTOCOL_VERSION: u16 = 5;
 
 pub type PlayerId = u32;
 
@@ -51,6 +51,10 @@ pub struct DriveView {
     pub locomotion: NetLocomotion,
     pub walk_phase: f32,
     pub velocity_y: f32,
+    /// Emote wheel slot when active (039); `None` when idle.
+    pub emote: Option<u8>,
+    /// Seconds since emote commit (039).
+    pub emote_age_s: f32,
 }
 
 /// One claimed projectile spawn (038). Server relays; peers present motion + FX.
@@ -191,6 +195,8 @@ mod tests {
             locomotion: NetLocomotion::Walk,
             walk_phase: 0.25,
             velocity_y: 0.0,
+            emote: Some(2),
+            emote_age_s: 0.12,
         }
     }
 
