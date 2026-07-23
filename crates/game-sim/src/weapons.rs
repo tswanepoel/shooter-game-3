@@ -1,4 +1,4 @@
-//! Baked weapon fire table (038/040).
+//! Baked weapon fire table (038/040/041).
 
 use crate::WeaponClass;
 
@@ -30,6 +30,21 @@ pub struct WeaponKick {
     pub yaw_deg: f32,
     pub back_m: f32,
     pub settle_s: f32,
+}
+
+/// Resting aim-hold bands (041). Amplitudes in degrees; slight by design.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WeaponSway {
+    /// Slow vertical-dominant breath amplitude (deg).
+    pub breath_amp_deg: f32,
+    pub breath_hz: f32,
+    /// Tiny high-frequency tremor amplitude (deg).
+    pub tremor_amp_deg: f32,
+    pub tremor_hz: f32,
+    /// Mean-reverting drift scale (deg, stationary std-ish).
+    pub drift_amp_deg: f32,
+    /// Drift mean-reversion time constant (s).
+    pub drift_tau_s: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -108,6 +123,62 @@ fn kick_for(class: WeaponClass) -> WeaponKick {
             yaw_deg: 0.15,
             back_m: 0.020,
             settle_s: 0.08,
+        },
+    }
+}
+
+fn sway_for(class: WeaponClass) -> WeaponSway {
+    match class {
+        // Busier hold.
+        WeaponClass::Smg => WeaponSway {
+            breath_amp_deg: 0.14,
+            breath_hz: 0.17,
+            tremor_amp_deg: 0.006,
+            tremor_hz: 2.5,
+            drift_amp_deg: 0.09,
+            drift_tau_s: 6.0,
+        },
+        WeaponClass::Pistol => WeaponSway {
+            breath_amp_deg: 0.12,
+            breath_hz: 0.15,
+            tremor_amp_deg: 0.005,
+            tremor_hz: 2.3,
+            drift_amp_deg: 0.075,
+            drift_tau_s: 6.5,
+        },
+        WeaponClass::AssaultRifle => WeaponSway {
+            breath_amp_deg: 0.10,
+            breath_hz: 0.14,
+            tremor_amp_deg: 0.004,
+            tremor_hz: 2.1,
+            drift_amp_deg: 0.065,
+            drift_tau_s: 7.0,
+        },
+        // Near-frozen.
+        WeaponClass::SniperRifle => WeaponSway {
+            breath_amp_deg: 0.045,
+            breath_hz: 0.11,
+            tremor_amp_deg: 0.002,
+            tremor_hz: 1.9,
+            drift_amp_deg: 0.03,
+            drift_tau_s: 8.5,
+        },
+        // Heavier, slower.
+        WeaponClass::Shotgun => WeaponSway {
+            breath_amp_deg: 0.13,
+            breath_hz: 0.13,
+            tremor_amp_deg: 0.004,
+            tremor_hz: 2.0,
+            drift_amp_deg: 0.10,
+            drift_tau_s: 7.5,
+        },
+        WeaponClass::Launcher => WeaponSway {
+            breath_amp_deg: 0.15,
+            breath_hz: 0.12,
+            tremor_amp_deg: 0.0035,
+            tremor_hz: 1.8,
+            drift_amp_deg: 0.11,
+            drift_tau_s: 8.0,
         },
     }
 }
@@ -502,6 +573,10 @@ pub fn weapon_def(letter: u8) -> Option<&'static WeaponDef> {
 
 pub fn class_kick(class: WeaponClass) -> WeaponKick {
     kick_for(class)
+}
+
+pub fn class_sway(class: WeaponClass) -> WeaponSway {
+    sway_for(class)
 }
 
 /// Class-level ready time helper.

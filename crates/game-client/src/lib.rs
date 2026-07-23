@@ -784,9 +784,11 @@ impl ClientInner {
                 self.projectiles.spawn(p.clone());
             }
             let seed_pts = match &self.self_present {
-                SelfPresentState::Ready(gpu) => {
-                    gpu.flash_muzzle_worlds(&self.self_state, self.fire.kick(), &d.fired_muzzles)
-                }
+                SelfPresentState::Ready(gpu) => gpu.flash_muzzle_worlds(
+                    &self.self_state,
+                    self.fire.mesh_pose(),
+                    &d.fired_muzzles,
+                ),
                 _ => d.projectiles.iter().map(|p| p.origin).collect(),
             };
             self.renderer
@@ -837,7 +839,8 @@ impl ClientInner {
             gpu.apply_state(
                 &self.renderer.queue,
                 &self.self_state,
-                self.fire.kick(),
+                self.fire.mesh_pose(),
+                self.fire.aim_pose(),
                 first_person,
             );
             self.view.set_mounted_eye(gpu.view.look_origin);
@@ -909,7 +912,7 @@ impl ClientInner {
         );
 
         {
-            let self_kick = self.fire.kick();
+            let self_kick = self.fire.mesh_pose();
             let remote_states: std::collections::HashMap<_, _> = self
                 .mp
                 .remotes()

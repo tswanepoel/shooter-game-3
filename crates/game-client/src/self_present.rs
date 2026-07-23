@@ -177,7 +177,13 @@ impl SelfGpu {
             },
         };
         // Full body at load (remotes share this path); local FP hides head next apply.
-        s.apply_state(queue, self_state, KickPose::default(), false);
+        s.apply_state(
+            queue,
+            self_state,
+            KickPose::default(),
+            KickPose::default(),
+            false,
+        );
         Ok(s)
     }
 
@@ -321,15 +327,17 @@ impl SelfGpu {
         };
     }
 
+    /// `mesh` = held blaster offset; `aim` = reticle / look-pose aim sample.
     pub fn apply_state(
         &mut self,
         queue: &wgpu::Queue,
         self_state: &SelfState,
-        kick: KickPose,
+        mesh: KickPose,
+        aim: KickPose,
         first_person: bool,
     ) {
-        self.apply_present(queue, self_state, kick, first_person);
-        self.apply_look_view(self_state, kick);
+        self.apply_present(queue, self_state, mesh, first_person);
+        self.apply_look_view(self_state, aim);
     }
 
     /// Whether both loadout letters are already GPU-resident (dev equip).

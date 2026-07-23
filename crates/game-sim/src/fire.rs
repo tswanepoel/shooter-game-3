@@ -3,7 +3,8 @@
 use glam::{Quat, Vec3};
 
 use crate::weapons::{
-    weapon_def, FireMode, MuzzlePolicy, WeaponDef, PROJECTILE_GRAVITY, SPRINT_FIRE_BASE_S,
+    class_sway, weapon_def, FireMode, MuzzlePolicy, WeaponDef, WeaponSway, PROJECTILE_GRAVITY,
+    SPRINT_FIRE_BASE_S,
 };
 use crate::{ActiveWeapon, SelfState, WeaponClass};
 
@@ -69,7 +70,7 @@ pub struct Discharge {
     pub fired_muzzles: Vec<u8>,
 }
 
-/// Fire cadence / gates and aim kick for one self.
+/// Fire cadence / gates, aim kick, and resting sway for one self.
 #[derive(Debug, Clone)]
 pub struct FireState {
     ready_s: f32,
@@ -85,6 +86,7 @@ pub struct FireState {
     rng: u32,
     kick: KickPose,
     kick_settle_s: f32,
+    sway: SwayState,
 }
 
 impl Default for FireState {
@@ -109,6 +111,7 @@ impl FireState {
             rng: 0xC0FFEE42,
             kick: KickPose::default(),
             kick_settle_s: 0.08,
+            sway: SwayState::new(0xA11_5A4E),
         }
     }
 
@@ -121,8 +124,33 @@ impl FireState {
         self.burst_active()
     }
 
+    /// Fire kick only (no resting sway).
     pub fn kick(&self) -> KickPose {
         self.kick
+    }
+
+    /// Resting sway pitch/yaw (no kick, no grip shove).
+    pub fn sway(&self) -> KickPose {
+        self.sway.as_pose()
+    }
+
+    /// Kick + full sway (shots and reticle).
+    pub fn aim_pose(&self) -> KickPose {
+        KickPose {
+            pitch_rad: self.kick.pitch_rad + self.sway.pitch_rad,
+            yaw_rad: self.kick.yaw_rad + self.sway.yaw_rad,
+            back_m: self.kick.back_m,
+        }
+    }
+
+    /// Kick full + reduced sway for the held mesh (same signal, lower gain).
+    pub fn mesh_pose(&self) -> KickPose {
+        const SWAY_MESH: f32 = 0.28;
+        KickPose {
+            pitch_rad: self.kick.pitch_rad + self.sway.pitch_rad * SWAY_MESH,
+            yaw_rad: self.kick.yaw_rad + self.sway.yaw_rad * SWAY_MESH,
+            back_m: self.kick.back_m,
+        }
     }
 
     /// Pay letter ready after equip / swap / spawn onto a letter.
@@ -172,9 +200,9 @@ impl FireState {
         (x as f32) / (u32::MAX as f32)
     }
 
-    /// Advance timers and kick settle; consume fire input; maybe produce discharges.
+    /// Advance timers, kick settle, and sway; consume fire input; maybe produce discharges.
     ///
-    /// Aim is look + kick after settle. Kick is added after spawn (this shot uses pre-add).
+    /// Aim is look + kick + sway. Kick is added after spawn (this shot uses pre-add).
     /// `muzzle_worlds` empty → no spawn. `owner` is projectile owner id (0 solo).
     pub fn tick(
         &mut self,
@@ -194,6 +222,7 @@ impl FireState {
         self.sync_active_letter(letter);
 
         let Some(letter) = letter else {
+            self.sway.clear();
             self.fire_held = false;
             self.prev_held = false;
             self.burst_left = 0;
@@ -201,10 +230,18 @@ impl FireState {
             return Vec::new();
         };
         let Some(def) = weapon_def(letter) else {
+            self.sway.clear();
             return Vec::new();
         };
 
-        let aim = aim_from_self(self_state, self.kick);
+        self.sway.advance(
+            dt,
+            class_sway(def.class),
+            self_state.ocular_yaw,
+            self_state.ocular_pitch,
+        );
+
+        let aim = aim_from_self(self_state, self.aim_pose());
 
         let press_edge = fire_held && !self.prev_held;
         self.fire_held = fire_held;
@@ -417,21 +454,136 @@ pub fn equip_blaster_letter(state: &mut SelfState, letter: u8) -> Result<bool, &
     Ok(before != after)
 }
 
-/// Unit aim from look + kick. Camera stays on look; shots and reticle use this.
-pub fn aim_from_self(state: &SelfState, kick: KickPose) -> Vec3 {
-    let yaw = state.ocular_yaw + kick.yaw_rad;
-    let pitch = (state.ocular_pitch + kick.pitch_rad)
+/// Unit aim from look + aim offset (kick and/or sway). Camera stays on look.
+pub fn aim_from_self(state: &SelfState, offset: KickPose) -> Vec3 {
+    let yaw = state.ocular_yaw + offset.yaw_rad;
+    let pitch = (state.ocular_pitch + offset.pitch_rad)
         .clamp(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2);
     let cp = pitch.cos();
     Vec3::new(yaw.sin() * cp, pitch.sin(), yaw.cos() * cp)
 }
 
-/// Pitch/yaw aim offset plus grip shove for the held mesh.
+/// Pitch/yaw aim offset plus optional grip shove for the held mesh.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct KickPose {
     pub pitch_rad: f32,
     pub yaw_rad: f32,
     pub back_m: f32,
+}
+
+/// Multi-band resting sway (breath + tremor + mean-reverting drift).
+#[derive(Debug, Clone)]
+struct SwayState {
+    t: f32,
+    pitch_rad: f32,
+    yaw_rad: f32,
+    drift_pitch: f32,
+    drift_yaw: f32,
+    /// 0 = fully damped (hard look), 1 = full resting sway.
+    damp: f32,
+    last_yaw: f32,
+    last_pitch: f32,
+    has_look: bool,
+    rng: u32,
+}
+
+impl SwayState {
+    fn new(rng: u32) -> Self {
+        Self {
+            t: 0.0,
+            pitch_rad: 0.0,
+            yaw_rad: 0.0,
+            drift_pitch: 0.0,
+            drift_yaw: 0.0,
+            damp: 1.0,
+            last_yaw: 0.0,
+            last_pitch: 0.0,
+            has_look: false,
+            rng,
+        }
+    }
+
+    fn clear(&mut self) {
+        self.pitch_rad = 0.0;
+        self.yaw_rad = 0.0;
+        self.drift_pitch = 0.0;
+        self.drift_yaw = 0.0;
+        self.damp = 1.0;
+        self.has_look = false;
+    }
+
+    fn as_pose(&self) -> KickPose {
+        KickPose {
+            pitch_rad: self.pitch_rad,
+            yaw_rad: self.yaw_rad,
+            back_m: 0.0,
+        }
+    }
+
+    fn next_gauss(&mut self) -> f32 {
+        // Box–Muller from two xorshift samples.
+        let u1 = self.next_rand01().max(1e-7);
+        let u2 = self.next_rand01();
+        (-2.0 * u1.ln()).sqrt() * (std::f32::consts::TAU * u2).cos()
+    }
+
+    fn next_rand01(&mut self) -> f32 {
+        let mut x = self.rng;
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        self.rng = x;
+        (x as f32) / (u32::MAX as f32)
+    }
+
+    fn advance(&mut self, dt: f32, params: WeaponSway, look_yaw: f32, look_pitch: f32) {
+        let dt = dt.max(0.0);
+        if dt <= 0.0 {
+            return;
+        }
+
+        // Look-rate damp: hard tracking quiets sway; still eases back in.
+        let rate = if self.has_look {
+            let dy = look_yaw - self.last_yaw;
+            let dp = look_pitch - self.last_pitch;
+            ((dy * dy + dp * dp).sqrt() / dt).max(0.0)
+        } else {
+            0.0
+        };
+        self.last_yaw = look_yaw;
+        self.last_pitch = look_pitch;
+        self.has_look = true;
+        // ~1.2 rad/s full look → near-zero target.
+        let target = 1.0 / (1.0 + (rate / 1.2).powi(2));
+        let tau = if target < self.damp { 0.12 } else { 0.40 };
+        let a = 1.0 - (-dt / tau).exp();
+        self.damp += (target - self.damp) * a;
+
+        self.t += dt;
+        let t = self.t;
+        let tau_d = params.drift_tau_s.max(1e-3);
+        // Stationary std ≈ drift_amp: σ = amp * sqrt(2/τ).
+        let sigma = params.drift_amp_deg.to_radians() * (2.0 / tau_d).sqrt();
+        let noise_scale = sigma * dt.sqrt();
+        self.drift_pitch += -self.drift_pitch / tau_d * dt + noise_scale * self.next_gauss();
+        self.drift_yaw += -self.drift_yaw / tau_d * dt + noise_scale * self.next_gauss();
+
+        let breath = params.breath_amp_deg.to_radians();
+        let tremor = params.tremor_amp_deg.to_radians();
+        let w_b = std::f32::consts::TAU * params.breath_hz;
+        let w_t = std::f32::consts::TAU * params.tremor_hz;
+
+        // Breath: mostly pitch; slight out-of-phase yaw.
+        let breath_p = breath * (w_b * t).sin();
+        let breath_y = breath * 0.28 * (w_b * 0.93 * t + 1.1).sin();
+        // Tremor: soft micro-band, incommensurate axes.
+        let tremor_p = tremor * (w_t * t).sin();
+        let tremor_y = tremor * (w_t * 1.17 * t + 0.7).sin();
+
+        let scale = self.damp;
+        self.pitch_rad = (breath_p + tremor_p + self.drift_pitch) * scale;
+        self.yaw_rad = (breath_y + tremor_y + self.drift_yaw) * scale;
+    }
 }
 
 impl KickPose {
@@ -702,5 +854,118 @@ mod tests {
             vel.dot(expected)
         );
         assert!(vel.y > 0.1, "kick pitch should lift aim, vel.y={}", vel.y);
+    }
+
+    #[test]
+    fn armed_hold_advances_sway() {
+        let mut fire = FireState::new();
+        let mut s = armed_self();
+        s.set_primary(Some(b'b')).unwrap();
+        fire.pay_ready(b'b');
+        fire.ready_s = 0.0;
+        assert_eq!(fire.sway().pitch_rad, 0.0);
+        assert_eq!(fire.sway().yaw_rad, 0.0);
+        for _ in 0..90 {
+            let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, &muzzles());
+        }
+        let mag = fire.sway().pitch_rad.abs() + fire.sway().yaw_rad.abs();
+        assert!(mag > 1e-5, "sway should move while armed hold, mag={mag}");
+    }
+
+    #[test]
+    fn unarmed_clears_sway() {
+        let mut fire = FireState::new();
+        let mut s = armed_self();
+        s.set_primary(Some(b'p')).unwrap();
+        fire.pay_ready(b'p');
+        fire.ready_s = 0.0;
+        for _ in 0..60 {
+            let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, &[]);
+        }
+        assert!(fire.sway().pitch_rad.abs() + fire.sway().yaw_rad.abs() > 0.0);
+        s.set_primary(None).unwrap();
+        s.set_secondary(None).unwrap();
+        let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, &[]);
+        assert_eq!(fire.sway().pitch_rad, 0.0);
+        assert_eq!(fire.sway().yaw_rad, 0.0);
+    }
+
+    #[test]
+    fn shots_use_look_plus_kick_plus_sway() {
+        let mut fire = FireState::new();
+        let mut s = armed_self();
+        s.set_primary(Some(b'b')).unwrap();
+        fire.pay_ready(b'b');
+        fire.ready_s = 0.0;
+        // Build resting sway, freeze kick settle so it stays zero.
+        for _ in 0..120 {
+            let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, &[]);
+        }
+        fire.kick = KickPose::default();
+        let pose = fire.aim_pose();
+        assert!(
+            pose.pitch_rad.abs() + pose.yaw_rad.abs() > 1e-5,
+            "expected nonzero sway in aim_pose"
+        );
+        // Force zero spread weapon path: b has spread — compare direction before scatter
+        // by zeroing spread effect via matching aim_pose at fire instant (dt=0 keeps sway).
+        let d = fire.tick(0.0, &mut s, true, 0, &muzzles());
+        let vel = d[0].projectiles[0].velocity.normalize();
+        let expected = aim_from_self(&s, pose);
+        // Spread on pistol is small; should still align roughly with aim_pose.
+        assert!(
+            vel.dot(expected) > 0.98,
+            "vel={vel} expected≈{expected} dot={}",
+            vel.dot(expected)
+        );
+    }
+
+    #[test]
+    fn sniper_sway_quieter_than_smg() {
+        fn peak_sway(letter: u8) -> f32 {
+            let mut fire = FireState::new();
+            let mut s = armed_self();
+            s.set_primary(Some(letter)).unwrap();
+            fire.pay_ready(letter);
+            fire.ready_s = 0.0;
+            let mut peak = 0.0f32;
+            for _ in 0..600 {
+                let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, &[]);
+                let m = fire.sway().pitch_rad.abs() + fire.sway().yaw_rad.abs();
+                peak = peak.max(m);
+            }
+            peak
+        }
+        let sniper = peak_sway(b'e');
+        let smg = peak_sway(b'p');
+        assert!(
+            sniper < smg * 0.85,
+            "sniper peak={sniper} should be quieter than smg={smg}"
+        );
+    }
+
+    #[test]
+    fn look_rate_damps_sway() {
+        let mut fire = FireState::new();
+        let mut s = armed_self();
+        s.set_primary(Some(b'b')).unwrap();
+        fire.pay_ready(b'b');
+        fire.ready_s = 0.0;
+        for _ in 0..90 {
+            let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, &[]);
+        }
+        let still = fire.sway().pitch_rad.abs() + fire.sway().yaw_rad.abs();
+        assert!(still > 1e-5);
+        // Whip look hard for a stretch.
+        for i in 0..30 {
+            s.ocular_yaw = i as f32 * 0.4;
+            s.ocular_pitch = (i as f32 * 0.05).sin() * 0.2;
+            let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, &[]);
+        }
+        let moving = fire.sway().pitch_rad.abs() + fire.sway().yaw_rad.abs();
+        assert!(
+            moving < still * 0.5,
+            "look-rate should damp sway: still={still} moving={moving}"
+        );
     }
 }

@@ -554,11 +554,12 @@ impl SelfState {
             .clamp(-HEAD_PITCH_BUDGET_RAD, HEAD_PITCH_BUDGET_RAD);
     }
 
-    pub fn reticle_world(&self, look_origin: Vec3, kick: crate::KickPose) -> Option<Vec3> {
+    /// World point on the aim ray (look + aim offset: kick and/or sway).
+    pub fn reticle_world(&self, look_origin: Vec3, offset: crate::KickPose) -> Option<Vec3> {
         if !(self.alive && self.presents_armed()) {
             return None;
         }
-        let dir = crate::aim_from_self(self, kick);
+        let dir = crate::aim_from_self(self, offset);
         if dir.length_squared() < 1e-12 {
             return None;
         }
