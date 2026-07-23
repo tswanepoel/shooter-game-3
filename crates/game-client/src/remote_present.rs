@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use game_net::{DriveView, PlayerId};
-use game_sim::{JoltPose, SelfState};
+use game_sim::{KickPose, SelfState};
 use wasm_bindgen::JsValue;
 
 use crate::mp::{drive_to_state, RemoteKitKey};
@@ -81,7 +81,7 @@ impl RemotePresent {
         &mut self,
         queue: &wgpu::Queue,
         samples: impl Iterator<Item = (PlayerId, DriveView)>,
-        jolt_for: impl Fn(PlayerId) -> JoltPose,
+        kick_for: impl Fn(PlayerId) -> KickPose,
     ) {
         for (id, drive) in samples {
             let Some(Slot::Ready { gpu, kit }) = self.slots.get_mut(&id) else {
@@ -91,7 +91,7 @@ impl RemotePresent {
                 continue;
             }
             let state = drive_to_state(&drive);
-            gpu.apply_present(queue, &state, jolt_for(id), false);
+            gpu.apply_present(queue, &state, kick_for(id), false);
         }
     }
 
@@ -103,18 +103,17 @@ impl RemotePresent {
         }
     }
 
-    /// Present-pose muzzle world point under jolt (038 flash rebind).
     pub fn flash_muzzle_world(
         &self,
         id: PlayerId,
         state: &SelfState,
-        jolt: JoltPose,
+        kick: KickPose,
         muzzle_index: u8,
     ) -> Option<glam::Vec3> {
         let Slot::Ready { gpu, .. } = self.slots.get(&id)? else {
             return None;
         };
-        gpu.flash_muzzle_worlds(state, jolt, &[muzzle_index])
+        gpu.flash_muzzle_worlds(state, kick, &[muzzle_index])
             .into_iter()
             .next()
     }

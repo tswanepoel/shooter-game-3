@@ -23,8 +23,8 @@ use std::rc::Rc;
 #[cfg(feature = "debug-tools")]
 use game_sim::equip_blaster_letter;
 use game_sim::{
-    aim_from_self, weapon_def, FireState, ProjectileWorld, SelfState, CAMERA_FAR_M, CAMERA_NEAR_M,
-    CAMERA_VERTICAL_FOV_RAD, DEBUG_GRID_HALF_EXTENT_M, GRID_MAJOR_EVERY, GRID_MINOR_SPACING_M,
+    FireState, ProjectileWorld, SelfState, CAMERA_FAR_M, CAMERA_NEAR_M, CAMERA_VERTICAL_FOV_RAD,
+    DEBUG_GRID_HALF_EXTENT_M, GRID_MAJOR_EVERY, GRID_MINOR_SPACING_M,
 };
 use glam::Mat4;
 use wasm_bindgen::prelude::*;
@@ -765,53 +765,33 @@ impl ClientInner {
 
         self.self_state.tick_emote(dt);
 
-        // Fire gates + spawn (038). Muzzle worlds from present 037 chain when mesh ready.
         // Holster restore before muzzle sample so 037 points exist on the fire frame (039).
         if fire_held && self.self_state.is_emoting() {
             self.self_state.clear_emote();
         }
         let owner = self.mp.player_id().unwrap_or(0);
-        let aim = aim_from_self(&self.self_state);
         let muzzle_worlds = match &self.self_present {
             SelfPresentState::Ready(gpu) => gpu.fire_muzzle_worlds(&self.self_state),
             _ => Vec::new(),
         };
-        let discharges = self.fire.tick(
-            dt,
-            &mut self.self_state,
-            fire_held,
-            owner,
-            aim,
-            &muzzle_worlds,
-        );
+        let discharges = self
+            .fire
+            .tick(dt, &mut self.self_state, fire_held, owner, &muzzle_worlds);
         let mut claimed: Vec<game_sim::Projectile> = Vec::new();
         for d in &discharges {
             for p in &d.projectiles {
                 claimed.push(p.clone());
                 self.projectiles.spawn(p.clone());
             }
-            if let Some(def) = weapon_def(d.weapon) {
-                let yaw_sign = if d.projectiles.first().map(|p| p.id & 1).unwrap_or(0) == 0 {
-                    1.0
-                } else {
-                    -1.0
-                };
-                // Seed flash worlds under kick preview; rebind each frame to present pose.
-                let mut jolt_preview = self.renderer.fire_fx.self_jolt;
-                jolt_preview.add_kick(def, yaw_sign);
-                let seed_pts = match &self.self_present {
-                    SelfPresentState::Ready(gpu) => {
-                        gpu.flash_muzzle_worlds(&self.self_state, jolt_preview, &d.fired_muzzles)
-                    }
-                    _ => d.projectiles.iter().map(|p| p.origin).collect(),
-                };
-                self.renderer.fire_fx.note_self_discharge(
-                    def,
-                    &d.fired_muzzles,
-                    &seed_pts,
-                    yaw_sign,
-                );
-            }
+            let seed_pts = match &self.self_present {
+                SelfPresentState::Ready(gpu) => {
+                    gpu.flash_muzzle_worlds(&self.self_state, self.fire.kick(), &d.fired_muzzles)
+                }
+                _ => d.projectiles.iter().map(|p| p.origin).collect(),
+            };
+            self.renderer
+                .fire_fx
+                .note_self_discharge(&d.fired_muzzles, &seed_pts);
         }
 
         if !claimed.is_empty() {
@@ -857,7 +837,7 @@ impl ClientInner {
             gpu.apply_state(
                 &self.renderer.queue,
                 &self.self_state,
-                self.renderer.fire_fx.self_jolt,
+                self.fire.kick(),
                 first_person,
             );
             self.view.set_mounted_eye(gpu.view.look_origin);
@@ -870,13 +850,13 @@ impl ClientInner {
                 .samples()
                 .map(|(id, s)| (id, s.drive.clone()))
                 .collect();
-            let jolts: std::collections::HashMap<_, _> = samples
+            let kicks: std::collections::HashMap<_, _> = samples
                 .iter()
-                .map(|(id, _)| (*id, self.renderer.fire_fx.remote_jolt(*id)))
+                .map(|(id, _)| (*id, self.renderer.fire_fx.remote_kick(*id)))
                 .collect();
             self.remote_present
                 .apply_all(&self.renderer.queue, samples.into_iter(), |id| {
-                    jolts.get(&id).copied().unwrap_or_default()
+                    kicks.get(&id).copied().unwrap_or_default()
                 });
         } else {
             self.remote_present.clear();
@@ -928,18 +908,17 @@ impl ClientInner {
             height as f32,
         );
 
-        // Flash balls track present-pose muzzles (self + remotes), not frozen world seeds.
         {
-            let self_jolt = self.renderer.fire_fx.self_jolt;
+            let self_kick = self.fire.kick();
             let remote_states: std::collections::HashMap<_, _> = self
                 .mp
                 .remotes()
                 .samples()
                 .map(|(id, s)| (id, mp::drive_to_state(&s.drive)))
                 .collect();
-            let remote_jolts: std::collections::HashMap<_, _> = remote_states
+            let remote_kicks: std::collections::HashMap<_, _> = remote_states
                 .keys()
-                .map(|&id| (id, self.renderer.fire_fx.remote_jolt(id)))
+                .map(|&id| (id, self.renderer.fire_fx.remote_kick(id)))
                 .collect();
             let self_state = &self.self_state;
             let self_present = &self.self_present;
@@ -949,15 +928,15 @@ impl ClientInner {
                 .rebind_positions(|owner, mi| match owner {
                     None => match self_present {
                         SelfPresentState::Ready(gpu) => gpu
-                            .flash_muzzle_worlds(self_state, self_jolt, &[mi])
+                            .flash_muzzle_worlds(self_state, self_kick, &[mi])
                             .into_iter()
                             .next(),
                         _ => None,
                     },
                     Some(id) => {
                         let state = remote_states.get(&id)?;
-                        let jolt = remote_jolts.get(&id).copied().unwrap_or_default();
-                        remote_present.flash_muzzle_world(id, state, jolt, mi)
+                        let kick = remote_kicks.get(&id).copied().unwrap_or_default();
+                        remote_present.flash_muzzle_world(id, state, kick, mi)
                     }
                 });
         }

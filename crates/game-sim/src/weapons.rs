@@ -1,4 +1,4 @@
-//! Baked weapon fire table (038). Shared by sim spawn and present flash/jolt.
+//! Baked weapon fire table (038/040).
 
 use crate::WeaponClass;
 
@@ -24,16 +24,14 @@ pub enum MuzzlePolicy {
     Alternate,
 }
 
-/// Present-pose jolt draft (038) — pitch/yaw degrees, back metres, settle seconds.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct WeaponJolt {
+pub struct WeaponKick {
     pub pitch_deg: f32,
     pub yaw_deg: f32,
     pub back_m: f32,
     pub settle_s: f32,
 }
 
-/// Per-letter fire + ballistics + present jolt (038 draft).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct WeaponDef {
     pub letter: u8,
@@ -53,7 +51,7 @@ pub struct WeaponDef {
     pub pellets: u8,
     /// Burst string length (meaningful for [`FireMode::Burst`]).
     pub burst_count: u8,
-    pub jolt: WeaponJolt,
+    pub kick: WeaponKick,
 }
 
 impl WeaponDef {
@@ -73,39 +71,39 @@ pub const SPRINT_FIRE_BASE_S: f32 = 0.12;
 /// Projectile gravity (m/s²).
 pub const PROJECTILE_GRAVITY: glam::Vec3 = glam::Vec3::new(0.0, -9.81, 0.0);
 
-fn jolt(class: WeaponClass) -> WeaponJolt {
+fn kick_for(class: WeaponClass) -> WeaponKick {
     match class {
-        WeaponClass::Pistol => WeaponJolt {
+        WeaponClass::Pistol => WeaponKick {
             pitch_deg: 0.4,
             yaw_deg: 0.1,
             back_m: 0.008,
             settle_s: 0.04,
         },
-        WeaponClass::Smg => WeaponJolt {
+        WeaponClass::Smg => WeaponKick {
             pitch_deg: 0.25,
             yaw_deg: 0.08,
             back_m: 0.006,
             settle_s: 0.03,
         },
-        WeaponClass::AssaultRifle => WeaponJolt {
+        WeaponClass::AssaultRifle => WeaponKick {
             pitch_deg: 0.35,
             yaw_deg: 0.1,
             back_m: 0.010,
             settle_s: 0.045,
         },
-        WeaponClass::SniperRifle => WeaponJolt {
+        WeaponClass::SniperRifle => WeaponKick {
             pitch_deg: 0.7,
             yaw_deg: 0.12,
             back_m: 0.014,
             settle_s: 0.07,
         },
-        WeaponClass::Shotgun => WeaponJolt {
+        WeaponClass::Shotgun => WeaponKick {
             pitch_deg: 0.9,
             yaw_deg: 0.2,
             back_m: 0.018,
             settle_s: 0.06,
         },
-        WeaponClass::Launcher => WeaponJolt {
+        WeaponClass::Launcher => WeaponKick {
             pitch_deg: 1.1,
             yaw_deg: 0.15,
             back_m: 0.020,
@@ -133,7 +131,6 @@ fn mode_for(class: WeaponClass) -> FireMode {
     }
 }
 
-/// Letters a…r weapon table (038 draft).
 pub static WEAPON_TABLE: [WeaponDef; 18] = [
     // a launcher
     WeaponDef {
@@ -148,7 +145,7 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         muzzle_policy: MuzzlePolicy::Single,
         pellets: 1,
         burst_count: 0,
-        jolt: WeaponJolt {
+        kick: WeaponKick {
             pitch_deg: 1.1,
             yaw_deg: 0.15,
             back_m: 0.020,
@@ -168,7 +165,7 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         muzzle_policy: MuzzlePolicy::Single,
         pellets: 1,
         burst_count: 0,
-        jolt: WeaponJolt {
+        kick: WeaponKick {
             pitch_deg: 0.4,
             yaw_deg: 0.1,
             back_m: 0.008,
@@ -188,7 +185,7 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         muzzle_policy: MuzzlePolicy::Single,
         pellets: 1,
         burst_count: 0,
-        jolt: WeaponJolt {
+        kick: WeaponKick {
             pitch_deg: 0.25,
             yaw_deg: 0.08,
             back_m: 0.006,
@@ -208,7 +205,7 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         muzzle_policy: MuzzlePolicy::Single,
         pellets: 1,
         burst_count: 3,
-        jolt: WeaponJolt {
+        kick: WeaponKick {
             pitch_deg: 0.35,
             yaw_deg: 0.1,
             back_m: 0.010,
@@ -228,7 +225,7 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         muzzle_policy: MuzzlePolicy::Single,
         pellets: 1,
         burst_count: 0,
-        jolt: WeaponJolt {
+        kick: WeaponKick {
             pitch_deg: 0.7,
             yaw_deg: 0.12,
             back_m: 0.014,
@@ -248,7 +245,7 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         muzzle_policy: MuzzlePolicy::Single,
         pellets: 1,
         burst_count: 0,
-        jolt: WeaponJolt {
+        kick: WeaponKick {
             pitch_deg: 0.7,
             yaw_deg: 0.12,
             back_m: 0.014,
@@ -268,7 +265,7 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         muzzle_policy: MuzzlePolicy::Single,
         pellets: 1,
         burst_count: 0,
-        jolt: WeaponJolt {
+        kick: WeaponKick {
             pitch_deg: 0.25,
             yaw_deg: 0.08,
             back_m: 0.006,
@@ -288,7 +285,7 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         muzzle_policy: MuzzlePolicy::Single,
         pellets: 1,
         burst_count: 0,
-        jolt: WeaponJolt {
+        kick: WeaponKick {
             pitch_deg: 0.25,
             yaw_deg: 0.08,
             back_m: 0.006,
@@ -308,7 +305,7 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         muzzle_policy: MuzzlePolicy::Alternate,
         pellets: 1,
         burst_count: 0,
-        jolt: WeaponJolt {
+        kick: WeaponKick {
             pitch_deg: 0.4,
             yaw_deg: 0.1,
             back_m: 0.008,
@@ -328,7 +325,7 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         muzzle_policy: MuzzlePolicy::All,
         pellets: 3,
         burst_count: 0,
-        jolt: WeaponJolt {
+        kick: WeaponKick {
             pitch_deg: 0.9,
             yaw_deg: 0.2,
             back_m: 0.018,
@@ -348,7 +345,7 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         muzzle_policy: MuzzlePolicy::Single,
         pellets: 6,
         burst_count: 0,
-        jolt: WeaponJolt {
+        kick: WeaponKick {
             pitch_deg: 0.9,
             yaw_deg: 0.2,
             back_m: 0.018,
@@ -368,7 +365,7 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         muzzle_policy: MuzzlePolicy::Alternate,
         pellets: 1,
         burst_count: 0,
-        jolt: WeaponJolt {
+        kick: WeaponKick {
             pitch_deg: 0.25,
             yaw_deg: 0.08,
             back_m: 0.006,
@@ -388,7 +385,7 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         muzzle_policy: MuzzlePolicy::Single,
         pellets: 1,
         burst_count: 0,
-        jolt: WeaponJolt {
+        kick: WeaponKick {
             pitch_deg: 0.25,
             yaw_deg: 0.08,
             back_m: 0.006,
@@ -408,7 +405,7 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         muzzle_policy: MuzzlePolicy::Single,
         pellets: 1,
         burst_count: 3,
-        jolt: WeaponJolt {
+        kick: WeaponKick {
             pitch_deg: 0.35,
             yaw_deg: 0.1,
             back_m: 0.010,
@@ -428,7 +425,7 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         muzzle_policy: MuzzlePolicy::All,
         pellets: 2,
         burst_count: 0,
-        jolt: WeaponJolt {
+        kick: WeaponKick {
             pitch_deg: 0.9,
             yaw_deg: 0.2,
             back_m: 0.018,
@@ -448,7 +445,7 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         muzzle_policy: MuzzlePolicy::Alternate,
         pellets: 1,
         burst_count: 0,
-        jolt: WeaponJolt {
+        kick: WeaponKick {
             pitch_deg: 0.25,
             yaw_deg: 0.08,
             back_m: 0.006,
@@ -468,7 +465,7 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         muzzle_policy: MuzzlePolicy::Alternate,
         pellets: 1,
         burst_count: 3,
-        jolt: WeaponJolt {
+        kick: WeaponKick {
             pitch_deg: 0.35,
             yaw_deg: 0.1,
             back_m: 0.010,
@@ -488,7 +485,7 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         muzzle_policy: MuzzlePolicy::Single,
         pellets: 1,
         burst_count: 3,
-        jolt: WeaponJolt {
+        kick: WeaponKick {
             pitch_deg: 0.35,
             yaw_deg: 0.1,
             back_m: 0.010,
@@ -503,9 +500,8 @@ pub fn weapon_def(letter: u8) -> Option<&'static WeaponDef> {
     WEAPON_TABLE.get(i).filter(|d| d.letter == letter)
 }
 
-/// Class-level jolt helper (same values baked into the letter table).
-pub fn class_jolt(class: WeaponClass) -> WeaponJolt {
-    jolt(class)
+pub fn class_kick(class: WeaponClass) -> WeaponKick {
+    kick_for(class)
 }
 
 /// Class-level ready time helper.

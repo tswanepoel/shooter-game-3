@@ -4,7 +4,7 @@
 //! Loadout may hold primary + secondary meshes; only the active letter is shown.
 //! Emote holsters the active blaster and plays kit gesture clips (039).
 
-use game_sim::{emote_clip_name, JoltPose, SelfState, EMOTE_CATALOG, FACE_OFFSET_HEAD_KIT};
+use game_sim::{emote_clip_name, KickPose, SelfState, EMOTE_CATALOG, FACE_OFFSET_HEAD_KIT};
 use glam::{Mat4, Vec3};
 use wasm_bindgen::JsValue;
 
@@ -177,7 +177,7 @@ impl SelfGpu {
             },
         };
         // Full body at load (remotes share this path); local FP hides head next apply.
-        s.apply_state(queue, self_state, JoltPose::default(), false);
+        s.apply_state(queue, self_state, KickPose::default(), false);
         Ok(s)
     }
 
@@ -200,7 +200,7 @@ impl SelfGpu {
         (k2w, arm_kit)
     }
 
-    /// World muzzle points for the active blaster (037 held chain, no jolt — sim origin).
+    /// Active blaster muzzle worlds (held chain, no kick).
     pub fn fire_muzzle_worlds(&self, self_state: &SelfState) -> Vec<Vec3> {
         let Some(letter) = self_state.active_blaster() else {
             return Vec::new();
@@ -213,11 +213,10 @@ impl SelfGpu {
         mesh_unlit::muzzle_world_points(held, bi).collect()
     }
 
-    /// World points for muzzles that just fired, under jolt (flash tracks present pose).
     pub fn flash_muzzle_worlds(
         &self,
         self_state: &SelfState,
-        jolt: JoltPose,
+        kick: KickPose,
         muzzle_indices: &[u8],
     ) -> Vec<Vec3> {
         let Some(letter) = self_state.active_blaster() else {
@@ -227,7 +226,7 @@ impl SelfGpu {
             return Vec::new();
         };
         let (k2w, arm_kit) = self.present_arm(self_state);
-        let held = held_with_jolt(k2w, arm_kit, bi, jolt);
+        let held = held_with_kick(k2w, arm_kit, bi, kick);
         let locals = mesh_unlit::muzzle_locals(bi);
         muzzle_indices
             .iter()
@@ -248,7 +247,7 @@ impl SelfGpu {
         &mut self,
         queue: &wgpu::Queue,
         self_state: &SelfState,
-        jolt: JoltPose,
+        kick: KickPose,
         first_person: bool,
     ) {
         let k2w = mesh_unlit::kit_to_world(self_state.placement_matrix(), self.min_y);
@@ -289,8 +288,7 @@ impl SelfGpu {
         let active = self_state.active_blaster();
         for b in &self.blasters {
             let root = if show_gun && active == Some(b.letter) {
-                // Present arm hold + 038 jolt about grip G (hand), not mesh origin.
-                held_with_jolt(k2w, arm_kit, b.letter_index, jolt)
+                held_with_kick(k2w, arm_kit, b.letter_index, kick)
             } else {
                 Mat4::from_scale(Vec3::ZERO)
             };
@@ -305,7 +303,7 @@ impl SelfGpu {
     }
 
     /// Look pose: mount and aim (locomotion held at stand). Local self only.
-    pub fn apply_look_view(&mut self, self_state: &SelfState) {
+    pub fn apply_look_view(&mut self, self_state: &SelfState, kick: KickPose) {
         let k2w = mesh_unlit::kit_to_world(self_state.placement_matrix(), self.min_y);
         let (look_worlds, _) = mesh_unlit::pose_character_kit(
             &self.parts,
@@ -315,7 +313,7 @@ impl SelfGpu {
             KitPose::Look,
         );
         let look_origin = look_origin_world(&self.parts, &look_worlds, k2w);
-        let reticle_world = self_state.reticle_world(look_origin);
+        let reticle_world = self_state.reticle_world(look_origin, kick);
 
         self.view = MountedView {
             look_origin,
@@ -327,11 +325,11 @@ impl SelfGpu {
         &mut self,
         queue: &wgpu::Queue,
         self_state: &SelfState,
-        jolt: JoltPose,
+        kick: KickPose,
         first_person: bool,
     ) {
-        self.apply_present(queue, self_state, jolt, first_person);
-        self.apply_look_view(self_state);
+        self.apply_present(queue, self_state, kick, first_person);
+        self.apply_look_view(self_state, kick);
     }
 
     /// Whether both loadout letters are already GPU-resident (dev equip).
@@ -349,11 +347,10 @@ impl SelfGpu {
     }
 }
 
-/// `held_blaster · T(G) · J · inv(T(G))` — kick pivots on weapon grip / hand (037/038).
-fn held_with_jolt(k2w: Mat4, arm_kit: Mat4, letter_index: usize, jolt: JoltPose) -> Mat4 {
+fn held_with_kick(k2w: Mat4, arm_kit: Mat4, letter_index: usize, kick: KickPose) -> Mat4 {
     let held = mesh_unlit::held_blaster_root(k2w, arm_kit, letter_index);
     let grip = mesh_unlit::weapon_grip(letter_index).transform_point3(Vec3::ZERO);
-    held * jolt.matrix_about_grip(grip)
+    held * kick.matrix_about_grip(grip)
 }
 
 /// Face point on a kit pose in world space (look origin when pose is Look).

@@ -1,9 +1,9 @@
-//! Muzzle flash, weapon jolt present, optional projectile tracers (038).
+//! Muzzle flash and optional projectile tracers.
 
 use std::collections::HashMap;
 
 use game_net::PlayerId;
-use game_sim::{weapon_def, JoltPose, Projectile, WeaponDef};
+use game_sim::{weapon_def, KickPose, Projectile, WeaponDef};
 use glam::{Mat4, Vec3};
 
 /// Flash sphere radius (m).
@@ -76,13 +76,11 @@ struct Flash {
     pos: Vec3,
 }
 
-/// Client present for fire FX (self + remotes).
+/// Muzzle flash + peer mesh kick + optional tracers.
 pub struct FireFx {
     flashes: Vec<Flash>,
-    pub self_jolt: JoltPose,
-    self_settle_s: f32,
-    remote_jolts: HashMap<PlayerId, (JoltPose, f32)>,
-    /// Dev-gated projectile tracers.
+    /// Peer mesh kick (local self kick is sim state).
+    remote_kicks: HashMap<PlayerId, (KickPose, f32)>,
     pub show_tracers: bool,
     pipeline: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
@@ -199,9 +197,7 @@ impl FireFx {
 
         Self {
             flashes: Vec::new(),
-            self_jolt: JoltPose::default(),
-            self_settle_s: 0.08,
-            remote_jolts: HashMap::new(),
+            remote_kicks: HashMap::new(),
             show_tracers: false,
             pipeline,
             bind_group,
@@ -213,14 +209,7 @@ impl FireFx {
         }
     }
 
-    /// Note self discharge: one flash per fired muzzle (seed world pos; rebind later).
-    pub fn note_self_discharge(
-        &mut self,
-        def: &WeaponDef,
-        muzzle_indices: &[u8],
-        seed_worlds: &[Vec3],
-        yaw_sign: f32,
-    ) {
+    pub fn note_self_discharge(&mut self, muzzle_indices: &[u8], seed_worlds: &[Vec3]) {
         for (i, &mi) in muzzle_indices.iter().enumerate() {
             let pos = seed_worlds.get(i).copied().unwrap_or(Vec3::ZERO);
             self.flashes.push(Flash {
@@ -230,8 +219,6 @@ impl FireFx {
                 pos,
             });
         }
-        self.self_jolt.add_kick(def, yaw_sign);
-        self.self_settle_s = def.jolt.settle_s.max(1e-4);
     }
 
     pub fn note_remote_discharge(
@@ -252,14 +239,13 @@ impl FireFx {
             });
         }
         let entry = self
-            .remote_jolts
+            .remote_kicks
             .entry(id)
-            .or_insert((JoltPose::default(), def.jolt.settle_s));
+            .or_insert((KickPose::default(), def.kick.settle_s));
         entry.0.add_kick(def, yaw_sign);
-        entry.1 = def.jolt.settle_s.max(1e-4);
+        entry.1 = def.kick.settle_s.max(1e-4);
     }
 
-    /// Flash + jolt for accepted peer projectiles (unique muzzles; origin seeds).
     pub fn note_peer_projectiles(
         &mut self,
         id: PlayerId,
@@ -278,14 +264,13 @@ impl FireFx {
         self.note_remote_discharge(id, def, muzzle_indices, seed_worlds, yaw);
     }
 
-    pub fn remote_jolt(&self, id: PlayerId) -> JoltPose {
-        self.remote_jolts
+    pub fn remote_kick(&self, id: PlayerId) -> KickPose {
+        self.remote_kicks
             .get(&id)
-            .map(|(j, _)| *j)
+            .map(|(kick, _)| *kick)
             .unwrap_or_default()
     }
 
-    /// Stick each flash to its present-pose muzzle (self / remote). Keeps seed if resolve fails.
     pub fn rebind_positions(
         &mut self,
         mut resolve: impl FnMut(Option<PlayerId>, u8) -> Option<Vec3>,
@@ -303,12 +288,12 @@ impl FireFx {
             f.age += dt;
         }
         self.flashes.retain(|f| f.age < FLASH_LIFE_S);
-        self.self_jolt.settle(dt, self.self_settle_s);
-        for (jolt, settle) in self.remote_jolts.values_mut() {
-            jolt.settle(dt, *settle);
+        for (kick, settle) in self.remote_kicks.values_mut() {
+            kick.settle(dt, *settle);
         }
-        self.remote_jolts
-            .retain(|_, (j, _)| j.pitch_rad.abs() + j.yaw_rad.abs() + j.back_m.abs() > 1e-5);
+        self.remote_kicks.retain(|_, (kick, _)| {
+            kick.pitch_rad.abs() + kick.yaw_rad.abs() + kick.back_m.abs() > 1e-5
+        });
     }
 
     pub fn update_draw(

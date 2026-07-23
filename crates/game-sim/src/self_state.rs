@@ -554,12 +554,11 @@ impl SelfState {
             .clamp(-HEAD_PITCH_BUDGET_RAD, HEAD_PITCH_BUDGET_RAD);
     }
 
-    /// World point for the screen-centre reticle billboard (along look from look origin).
-    pub fn reticle_world(&self, look_origin: Vec3) -> Option<Vec3> {
+    pub fn reticle_world(&self, look_origin: Vec3, kick: crate::KickPose) -> Option<Vec3> {
         if !(self.alive && self.presents_armed()) {
             return None;
         }
-        let dir = self.ocular_forward();
+        let dir = crate::aim_from_self(self, kick);
         if dir.length_squared() < 1e-12 {
             return None;
         }
@@ -631,10 +630,28 @@ mod tests {
     fn reticle_lies_on_look_ray() {
         let s = SelfState::default_loadout();
         let eye = Vec3::new(0.0, 1.5, 0.0);
-        let r = s.reticle_world(eye).expect("armed");
+        let r = s
+            .reticle_world(eye, crate::KickPose::default())
+            .expect("armed");
         let along = (r - eye).normalize();
         assert!(along.dot(s.ocular_forward()) > 0.99);
         assert!(((r - eye).length() - RETICLE_DEPTH_M).abs() < 1e-5);
+    }
+
+    #[test]
+    fn reticle_follows_look_plus_kick() {
+        let s = SelfState::default_loadout();
+        let eye = Vec3::new(0.0, 1.5, 0.0);
+        let kick = crate::KickPose {
+            pitch_rad: 5f32.to_radians(),
+            yaw_rad: 0.0,
+            back_m: 0.0,
+        };
+        let r = s.reticle_world(eye, kick).expect("armed");
+        let along = (r - eye).normalize();
+        let aim = crate::aim_from_self(&s, kick);
+        assert!(along.dot(aim) > 0.99);
+        assert!(along.dot(s.ocular_forward()) < 0.999);
     }
 
     #[test]
@@ -1024,7 +1041,9 @@ mod tests {
         s.cycle_weapon(1);
         assert_eq!(s.active, ActiveWeapon::Secondary);
         assert!(!s.is_armed());
-        assert!(s.reticle_world(Vec3::new(0.0, 1.5, 0.0)).is_none());
+        assert!(s
+            .reticle_world(Vec3::new(0.0, 1.5, 0.0), crate::KickPose::default())
+            .is_none());
         s.cycle_weapon(-1);
         assert_eq!(s.active, ActiveWeapon::Primary);
         assert!(s.is_armed());
