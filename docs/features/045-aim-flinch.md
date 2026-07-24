@@ -6,11 +6,21 @@ Look is still where you point. Flinch is a short pitch/yaw spike that stacks wit
 
 ## Cause and strength
 
-A damaging hit (**043**) adds flinch. Strength scales with that hit’s impact (same idea as damage: speed at contact and ammo mass), within a sane cap so one pellet does not whip the view around. No damage, no flinch.
+Flinch is driven by the **same impact claim** that drops health (**043**): firer-claimed hit, applied once in this present when you are the target.
+
+**Strength uses the same inputs as the health drop** — not a parallel per-weapon table:
+
+- **Ammo mass** (**042**)
+- **Speed at contact** (stamped on the claim)
+
+Same shared impact rule as **043** (`impact_damage`: mass × speed). Flinch gain is a function of that damage (or the identical mass×speed product). If the claim applies **no damage** (already dead, zero impact), it adds **no flinch**.
+
+Scale within a sane cap so one pellet does not whip the view around. Stronger applied impact → stronger flinch, all else equal (within cap). Gravity / long flight that softens damage softens flinch the same way.
 
 ## Acceptance criteria
 
-- Damaging hits add flinch in sim; flinch settles over time.
+- Damaging hits on you add flinch in sim; flinch settles over time.
 - Reticle and shots use look + kick + sway + flinch.
-- Stronger impact → stronger flinch, all else equal (within cap).
-- No damage → no flinch from that event.
+- Flinch strength uses the same mass × contact-speed inputs as **043** health drop (shared impact rule).
+- Stronger applied impact → stronger flinch, all else equal (within cap).
+- No damage from that claim → no flinch from that event.

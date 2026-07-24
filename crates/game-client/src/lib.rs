@@ -555,6 +555,8 @@ fn build_debug_grid() -> Vec<Vertex> {
     vertices
 }
 
+/// Apply impact health in this present. Returns damage applied to **local** self
+/// (for flinch 045); remotes / no-ops return 0.
 fn apply_impact_in_present(
     target: PlayerId,
     ammo: game_sim::AmmoKind,
@@ -562,16 +564,24 @@ fn apply_impact_in_present(
     local_id: Option<PlayerId>,
     self_state: &mut SelfState,
     health_by_id: &mut HashMap<PlayerId, PlayerHealth>,
-) {
+) -> f32 {
     if local_id == Some(target) {
+        if !self_state.alive {
+            health_by_id.insert(target, PlayerHealth::read_from_self(self_state));
+            return 0.0;
+        }
         let dmg = impact_damage(ammo, speed);
-        self_state.apply_damage(dmg);
+        if dmg > 0.0 {
+            self_state.apply_damage(dmg);
+        }
         health_by_id.insert(target, PlayerHealth::read_from_self(self_state));
+        dmg
     } else {
         let entry = health_by_id
             .entry(target)
             .or_insert_with(PlayerHealth::full);
         entry.apply_impact(ammo, speed);
+        0.0
     }
 }
 
@@ -935,7 +945,7 @@ impl ClientInner {
             })
         };
         for h in &hits {
-            apply_impact_in_present(
+            let dmg = apply_impact_in_present(
                 h.target_id,
                 h.ammo,
                 h.speed,
@@ -943,6 +953,9 @@ impl ClientInner {
                 &mut self.self_state,
                 &mut self.health_by_id,
             );
+            if dmg > 0.0 {
+                self.fire.add_flinch(dmg);
+            }
         }
         if !hits.is_empty() {
             self.mp.claim_hits(&hits);
@@ -956,7 +969,7 @@ impl ClientInner {
             let Some(ammo) = mp::ammo_kind_from_wire(batch.hit.ammo) else {
                 continue;
             };
-            apply_impact_in_present(
+            let dmg = apply_impact_in_present(
                 batch.hit.target,
                 ammo,
                 batch.hit.speed,
@@ -964,6 +977,9 @@ impl ClientInner {
                 &mut self.self_state,
                 &mut self.health_by_id,
             );
+            if dmg > 0.0 {
+                self.fire.add_flinch(dmg);
+            }
         }
 
         self.self_state.tick_health(dt);

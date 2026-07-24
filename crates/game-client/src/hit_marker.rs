@@ -1,7 +1,7 @@
 //! Hit marker present flash (044): X on the **aim reticle** when you claim a hit.
 //!
-//! Same world point as reticle / shots (look + kick + sway). Not fixed geometric
-//! screen centre. Present-only — not sim / net.
+//! Same world point as reticle / shots (look + kick + sway + flinch). Not fixed
+//! geometric screen centre. Present-only — not sim / net.
 
 use game_sim::{CAMERA_VERTICAL_FOV_RAD, RETICLE_SIZE_PX};
 use glam::{Mat4, Vec3};

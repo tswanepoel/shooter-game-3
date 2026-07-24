@@ -74,7 +74,19 @@ pub struct Discharge {
     pub fired_muzzles: Vec<u8>,
 }
 
-/// Fire cadence / gates, aim kick, and resting sway for one self.
+/// Pitch degrees of flinch per unit of applied impact damage (043).
+/// ~0.6° on a typical light-foam hit (dmg ≈ 11); under a pistol kick.
+const FLINCH_PITCH_DEG_PER_DMG: f32 = 0.055;
+/// Yaw degrees of flinch per unit damage (random sign).
+const FLINCH_YAW_DEG_PER_DMG: f32 = 0.022;
+/// Cap stacked flinch pitch (degrees) so one heavy hit does not whip aim.
+const FLINCH_PITCH_CAP_DEG: f32 = 1.6;
+/// Cap stacked flinch yaw (degrees).
+const FLINCH_YAW_CAP_DEG: f32 = 0.65;
+/// Flinch settle time (seconds).
+const FLINCH_SETTLE_S: f32 = 0.12;
+
+/// Fire cadence / gates, aim kick, resting sway, and hit flinch for one self.
 #[derive(Debug, Clone)]
 pub struct FireState {
     ready_s: f32,
@@ -91,6 +103,8 @@ pub struct FireState {
     kick: KickPose,
     kick_settle_s: f32,
     sway: SwayState,
+    flinch: KickPose,
+    flinch_settle_s: f32,
 }
 
 impl Default for FireState {
@@ -116,6 +130,8 @@ impl FireState {
             kick: KickPose::default(),
             kick_settle_s: 0.08,
             sway: SwayState::new(0xA11_5A4E),
+            flinch: KickPose::default(),
+            flinch_settle_s: FLINCH_SETTLE_S,
         }
     }
 
@@ -128,33 +144,65 @@ impl FireState {
         self.burst_active()
     }
 
-    /// Fire kick only (no resting sway).
+    /// Fire kick only (no resting sway / flinch).
     pub fn kick(&self) -> KickPose {
         self.kick
     }
 
-    /// Resting sway pitch/yaw (no kick, no grip shove).
+    /// Resting sway pitch/yaw (no kick, no flinch, no grip shove).
     pub fn sway(&self) -> KickPose {
         self.sway.as_pose()
     }
 
-    /// Kick + full sway (shots and reticle).
+    /// Hit flinch only (no kick / sway).
+    pub fn flinch(&self) -> KickPose {
+        self.flinch
+    }
+
+    /// Kick + full sway + flinch (shots and reticle).
     pub fn aim_pose(&self) -> KickPose {
         KickPose {
-            pitch_rad: self.kick.pitch_rad + self.sway.pitch_rad,
-            yaw_rad: self.kick.yaw_rad + self.sway.yaw_rad,
+            pitch_rad: self.kick.pitch_rad + self.sway.pitch_rad + self.flinch.pitch_rad,
+            yaw_rad: self.kick.yaw_rad + self.sway.yaw_rad + self.flinch.yaw_rad,
             back_m: self.kick.back_m,
         }
     }
 
-    /// Kick full + reduced sway for the held mesh (same signal, lower gain).
+    /// Kick + flinch full + reduced sway for the held mesh.
     pub fn mesh_pose(&self) -> KickPose {
         const SWAY_MESH: f32 = 0.28;
         KickPose {
-            pitch_rad: self.kick.pitch_rad + self.sway.pitch_rad * SWAY_MESH,
-            yaw_rad: self.kick.yaw_rad + self.sway.yaw_rad * SWAY_MESH,
+            pitch_rad: self.kick.pitch_rad
+                + self.sway.pitch_rad * SWAY_MESH
+                + self.flinch.pitch_rad,
+            yaw_rad: self.kick.yaw_rad + self.sway.yaw_rad * SWAY_MESH + self.flinch.yaw_rad,
             back_m: self.kick.back_m,
         }
+    }
+
+    /// Add aim flinch from **applied** impact damage (043 shared rule).
+    ///
+    /// `damage` is the health drop amount (mass × speed × scale). Zero / negative
+    /// adds nothing. Pitch spikes up; yaw gets a random left/right kick within cap.
+    pub fn add_flinch(&mut self, damage: f32) {
+        if damage <= 0.0 {
+            return;
+        }
+        let yaw_sign = if self.next_rand01() < 0.5 { -1.0 } else { 1.0 };
+        let pitch = (damage * FLINCH_PITCH_DEG_PER_DMG)
+            .min(FLINCH_PITCH_CAP_DEG)
+            .to_radians();
+        let yaw = (damage * FLINCH_YAW_DEG_PER_DMG)
+            .min(FLINCH_YAW_CAP_DEG)
+            .to_radians()
+            * yaw_sign;
+        self.flinch.pitch_rad =
+            (self.flinch.pitch_rad + pitch).min(FLINCH_PITCH_CAP_DEG.to_radians());
+        self.flinch.yaw_rad = (self.flinch.yaw_rad + yaw).clamp(
+            -FLINCH_YAW_CAP_DEG.to_radians(),
+            FLINCH_YAW_CAP_DEG.to_radians(),
+        );
+        self.flinch_settle_s = FLINCH_SETTLE_S;
     }
 
     /// Pay letter ready after equip / swap / spawn onto a letter.
@@ -204,10 +252,10 @@ impl FireState {
         (x as f32) / (u32::MAX as f32)
     }
 
-    /// Advance timers / kick / sway; maybe discharge.
+    /// Advance timers / kick / sway / flinch; maybe discharge.
     ///
-    /// Projectiles spawn at `look_origin` along look + kick + sway (pre-kick for this
-    /// shot). `muzzle_worlds` select flash muzzles only; may be empty.
+    /// Projectiles spawn at `look_origin` along look + kick + sway + flinch
+    /// (pre-kick for this shot). `muzzle_worlds` select flash muzzles only; may be empty.
     pub fn tick(
         &mut self,
         dt: f32,
@@ -222,6 +270,7 @@ impl FireState {
         self.sprint_fire_s = (self.sprint_fire_s - dt).max(0.0);
         self.cooldown_s = (self.cooldown_s - dt).max(0.0);
         self.kick.settle(dt, self.kick_settle_s);
+        self.flinch.settle(dt, self.flinch_settle_s);
 
         if !self_state.alive {
             self.sway.clear();
@@ -476,7 +525,7 @@ pub fn equip_blaster_letter(state: &mut SelfState, letter: u8) -> Result<bool, &
     Ok(before != after)
 }
 
-/// Unit aim from look + aim offset (kick and/or sway). Camera stays on look.
+/// Unit aim from look + aim offset (kick / sway / flinch). Camera stays on look.
 pub fn aim_from_self(state: &SelfState, offset: KickPose) -> Vec3 {
     let yaw = state.ocular_yaw + offset.yaw_rad;
     let pitch = (state.ocular_pitch + offset.pitch_rad)
@@ -1051,6 +1100,72 @@ mod tests {
             "vel={vel} expected≈{expected} dot={}",
             vel.dot(expected)
         );
+    }
+
+    #[test]
+    fn flinch_from_damage_and_settles() {
+        let mut fire = FireState::new();
+        let mut s = armed_self();
+        s.set_primary(Some(b'b')).unwrap();
+        fire.pay_ready(b'b');
+        fire.ready_s = 0.0;
+        assert_eq!(fire.flinch().pitch_rad, 0.0);
+        let dmg = crate::impact_damage(AmmoKind::LightFoam, 400.0);
+        assert!(dmg > 0.0);
+        fire.add_flinch(dmg);
+        let pitch = fire.flinch().pitch_rad;
+        assert!(pitch > 0.0, "flinch pitch={pitch}");
+        // Stronger impact → stronger flinch (within cap).
+        let mut fire2 = FireState::new();
+        fire2.add_flinch(crate::impact_damage(AmmoKind::Grenade, 400.0));
+        assert!(fire2.flinch().pitch_rad > pitch);
+        // Zero damage: no flinch.
+        let mut fire0 = FireState::new();
+        fire0.add_flinch(0.0);
+        assert_eq!(fire0.flinch().pitch_rad, 0.0);
+        // Settles.
+        for _ in 0..120 {
+            let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, eye(), &muzzles());
+        }
+        assert!(
+            fire.flinch().pitch_rad < pitch * 0.05,
+            "flinch did not settle: {}",
+            fire.flinch().pitch_rad
+        );
+    }
+
+    #[test]
+    fn shots_use_look_plus_flinch() {
+        let mut fire = FireState::new();
+        let mut s = armed_self();
+        s.set_primary(Some(b'b')).unwrap();
+        fire.pay_ready(b'b');
+        fire.ready_s = 0.0;
+        fire.add_flinch(crate::impact_damage(AmmoKind::LightFoam, 400.0));
+        // Hold flinch; zero kick settle interference.
+        fire.kick = KickPose::default();
+        fire.kick_settle_s = 1000.0;
+        fire.flinch_settle_s = 1000.0;
+        let pose = fire.aim_pose();
+        assert!(pose.pitch_rad > 0.0);
+        let d = fire.tick(0.0, &mut s, true, 0, eye(), &muzzles());
+        let vel = d[0].projectiles[0].velocity.normalize();
+        // aim_pose before this shot includes pre-shot flinch; spawn also adds kick after.
+        // Compare to aim used at discharge: flinch only (kick added post-spawn for next shot).
+        let expected = aim_from_self(
+            &s,
+            KickPose {
+                pitch_rad: pose.pitch_rad,
+                yaw_rad: pose.yaw_rad,
+                back_m: 0.0,
+            },
+        );
+        assert!(
+            vel.dot(expected) > 0.98,
+            "vel={vel} expected≈{expected} dot={}",
+            vel.dot(expected)
+        );
+        assert!(vel.y > 0.0, "flinch pitch should lift aim, vel.y={}", vel.y);
     }
 
     #[test]
