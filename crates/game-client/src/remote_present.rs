@@ -4,8 +4,10 @@ use std::collections::HashMap;
 
 use game_net::{DriveView, PlayerId};
 use game_sim::{KickPose, SelfState};
+use glam::Vec3;
 use wasm_bindgen::JsValue;
 
+use crate::body_hit::PartHit;
 use crate::mp::{drive_to_state, RemoteKitKey};
 use crate::self_present::SelfGpu;
 
@@ -82,6 +84,7 @@ impl RemotePresent {
         queue: &wgpu::Queue,
         samples: impl Iterator<Item = (PlayerId, DriveView)>,
         kick_for: impl Fn(PlayerId) -> KickPose,
+        death_for: impl Fn(PlayerId) -> (bool, f32),
     ) {
         for (id, drive) in samples {
             let Some(Slot::Ready { gpu, kit }) = self.slots.get_mut(&id) else {
@@ -90,7 +93,18 @@ impl RemotePresent {
             if *kit != RemoteKitKey::from_drive(&drive) {
                 continue;
             }
-            let state = drive_to_state(&drive);
+            let mut state = drive_to_state(&drive);
+            let (alive, die_age_s) = death_for(id);
+            state.alive = alive;
+            state.die_age_s = die_age_s;
+            if !alive {
+                state.clear_emote();
+                state.sprint_latched = false;
+                if !state.locomotion.is_air() {
+                    state.locomotion = game_sim::LocomotionMode::Stand;
+                    state.walk_phase = 0.0;
+                }
+            }
             gpu.apply_present(queue, &state, kick_for(id), false);
         }
     }
@@ -116,6 +130,22 @@ impl RemotePresent {
         gpu.flash_muzzle_worlds(state, kick, &[muzzle_index])
             .into_iter()
             .next()
+    }
+
+    pub fn trace_segment(
+        &self,
+        id: PlayerId,
+        state: &SelfState,
+        from: Vec3,
+        to: Vec3,
+    ) -> Option<PartHit> {
+        let Slot::Ready { gpu, .. } = self.slots.get(&id)? else {
+            return None;
+        };
+        if !state.alive {
+            return None;
+        }
+        gpu.trace_segment(state, from, to)
     }
 
     pub fn draw_all<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {

@@ -41,7 +41,7 @@ Sprint: commit **cancels sprint latch** (same spirit as fire). Re-sprint needs a
 | Look | Live (after wheel closes) |
 | WASD | **Cancels** emote on non-zero wish (draft: any walk wish) |
 | Jump | **Cancels** |
-| LMB fire | **Cancels**, then fire path runs with holster restored first so **037** muzzles exist for the shot |
+| LMB fire | **Cancels**, then fire path runs with holster restored first so armed present / **037** muzzles exist for **flash** (combat aim stays look → crosshair, **038**) |
 | Shift sprint | **Cancels**, then sprint may latch if otherwise legal |
 | Weapon wheel / equip | **Cancels**, then swap/equip applies |
 | B again | Opens wheel; commit replaces |
@@ -69,7 +69,7 @@ While an emote is active (from commit until natural end or cancel):
 2. **Loadout identity unchanged:** primary / secondary letters and active slot stay as **021** sim state. Holster is presentation + temporary arm ownership, not an equip to empty.
 3. **Emote clip owns the upper body** for the nodes it channels (`arm-right`, `arm-left`, `torso`, `head` per kit). Legs: stand pose or last loco freeze at commit (draft: **stand bind legs**; no walk under emote because move cancels).
 4. **On end or cancel:** restore armed present immediately if the active slot is filled — re-apply hold/aim (**015** / **037**) and draw the active blaster. No draw animation in v1 (instant, like **021** swap).
-5. **Fire after cancel:** holster restore is ordered **before** discharge so muzzle world points exist on the same frame the shot claims.
+5. **Fire after cancel:** holster restore is ordered **before** discharge so present muzzle flash can bind the same frame (combat projectiles still use look origin, **038**).
 
 Sprint while emoting is not a state: move/sprint cancels first.
 
@@ -124,6 +124,6 @@ Bump **`protocol`** when `DriveView` gains emote fields.
 - Session-active **B** opens a four-slot radial; release on a segment commits `emote-yes`, `emote-no`, `interact-right`, or `pick-up`; centre/empty closes without play.
 - Emote starts only when grounded and not mid-burst; replaces an in-flight emote; cancels sprint latch on commit.
 - While emoting, the active blaster is **not** drawn and **`holding-right` is not applied**; loadout letters and active slot are unchanged. On natural end or cancel, armed present returns instantly if the active slot is filled.
-- WASD wish, jump, fire, sprint latch, and weapon swap/equip cancel the emote; fire restores holster before discharge so **037** muzzles are valid.
+- WASD wish, jump, fire, sprint latch, and weapon swap/equip cancel the emote; fire restores holster before discharge so **037** muzzles are valid for flash FX.
 - Clip plays once at 1× for kit duration on self present pose; remotes show the same clip and holster via claim-and-relay (and cancel clear if wired).
 - No root-translating combat clips on the wheel; no change to loadout rules beyond temporary present holster.

@@ -16,10 +16,10 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use game_net::{
-    decode_s2c, drain_s2c_frames, encode_c2s, ClientToServer, NetProjectileSpawn, PlayerId,
-    ServerToClient, PROTOCOL_VERSION, TICK_HZ,
+    decode_s2c, drain_s2c_frames, encode_c2s, ClientToServer, NetImpactHit, NetProjectileSpawn,
+    PlayerId, ServerToClient, PROTOCOL_VERSION, TICK_HZ,
 };
-use game_sim::{weapon_def, Projectile, SelfState};
+use game_sim::{weapon_def, AmmoKind, ImpactHit, Projectile, SelfState};
 use js_sys::{Array, Object, Reflect, Uint8Array};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
@@ -44,6 +44,13 @@ pub struct PeerProjectileBatch {
     pub projectiles: Vec<NetProjectileSpawn>,
 }
 
+#[derive(Debug, Clone)]
+pub struct PeerImpactHitBatch {
+    #[allow(dead_code)]
+    pub firer: PlayerId,
+    pub hit: NetImpactHit,
+}
+
 struct Shared {
     phase: MpPhase,
     clock: ClockSync,
@@ -55,8 +62,8 @@ struct Shared {
     drive_accum: f32,
     join_secs: f32,
     remotes: RemoteTable,
-    /// Inbound peer projectile claims to apply on the main frame.
     pending_projectiles: Vec<PeerProjectileBatch>,
+    pending_hits: Vec<PeerImpactHitBatch>,
 }
 
 impl Shared {
@@ -73,6 +80,7 @@ impl Shared {
             join_secs: 0.0,
             remotes: RemoteTable::new(),
             pending_projectiles: Vec::new(),
+            pending_hits: Vec::new(),
         }
     }
 
@@ -87,6 +95,7 @@ impl Shared {
         self.join_secs = 0.0;
         self.remotes.clear();
         self.pending_projectiles.clear();
+        self.pending_hits.clear();
     }
 }
 
@@ -169,6 +178,10 @@ impl MpClient {
         std::mem::take(&mut self.shared.borrow_mut().pending_projectiles)
     }
 
+    pub fn take_peer_hits(&mut self) -> Vec<PeerImpactHitBatch> {
+        std::mem::take(&mut self.shared.borrow_mut().pending_hits)
+    }
+
     /// Claim local projectile spawns to the server (joined only).
     pub fn claim_projectiles(&self, projectiles: &[Projectile]) {
         if projectiles.is_empty() {
@@ -200,6 +213,36 @@ impl MpClient {
         };
         let arr = Uint8Array::from(payload.as_slice());
         let _ = writer.write_with_chunk(&arr);
+    }
+
+    pub fn claim_hits(&self, hits: &[ImpactHit]) {
+        if hits.is_empty() {
+            return;
+        }
+        let s = self.shared.borrow();
+        if s.phase != MpPhase::Joined {
+            return;
+        }
+        let Some(writer) = s.dgram_writer.as_ref() else {
+            return;
+        };
+        let tick = s.clock.estimated_tick(client_now_secs()).unwrap_or(0);
+        for h in hits {
+            let Some(ammo) = ammo_kind_to_wire(h.ammo) else {
+                continue;
+            };
+            let hit = NetImpactHit {
+                projectile_id: h.projectile_id,
+                target: h.target_id,
+                ammo,
+                speed: h.speed,
+            };
+            let Ok(payload) = encode_c2s(&ClientToServer::ImpactHit { tick, hit }) else {
+                continue;
+            };
+            let arr = Uint8Array::from(payload.as_slice());
+            let _ = writer.write_with_chunk(&arr);
+        }
     }
 
     pub fn begin_join(&self) {
@@ -322,8 +365,32 @@ fn handle_s2c(shared: &Rc<RefCell<Shared>>, msg: ServerToClient, t4: f64) {
             s.pending_projectiles
                 .push(PeerProjectileBatch { id, projectiles });
         }
+        ServerToClient::PeerImpactHit { id, hit, .. } => {
+            let mut s = shared.borrow_mut();
+            if s.player_id == Some(id) {
+                return;
+            }
+            s.pending_hits.push(PeerImpactHitBatch { firer: id, hit });
+        }
         ServerToClient::Welcome { .. } | ServerToClient::Reject { .. } => {}
     }
+}
+
+pub fn ammo_kind_from_wire(ammo: u8) -> Option<AmmoKind> {
+    match ammo {
+        0 => Some(AmmoKind::LightFoam),
+        1 => Some(AmmoKind::ThickFoam),
+        2 => Some(AmmoKind::Grenade),
+        _ => None,
+    }
+}
+
+fn ammo_kind_to_wire(ammo: AmmoKind) -> Option<u8> {
+    Some(match ammo {
+        AmmoKind::LightFoam => 0,
+        AmmoKind::ThickFoam => 1,
+        AmmoKind::Grenade => 2,
+    })
 }
 
 /// Convert a net spawn into a sim projectile (ammo + max range from weapon table).

@@ -1241,20 +1241,30 @@ pub enum KitPose {
 /// Locomotion clip applies for [`KitPose::Present`] while mode uses a loco clip
 /// (walk, sprint, or stop-settle). Pass the matching clip (walk or sprint).
 /// Emote (039): optional one-shot clip + age; holsters hold/blaster ownership.
+/// Die (043): when not alive, optional `die` clip + age owns full-body present.
 pub fn pose_character_kit(
     parts: &[CharPart],
     self_state: &game_sim::SelfState,
     loco_clip: Option<&AnimClip>,
     emote_clip: Option<(&AnimClip, f32)>,
+    die_clip: Option<(&AnimClip, f32)>,
     pose: KitPose,
 ) -> (Vec<Mat4>, Mat4) {
-    let emoting = pose == KitPose::Present && emote_clip.is_some() && self_state.is_emoting();
-    let sprinting = self_state.locomotion.is_sprint() && !emoting;
-    let armed = self_state.presents_armed();
+    let dying = pose == KitPose::Present && !self_state.alive && die_clip.is_some();
+    let emoting =
+        pose == KitPose::Present && !dying && emote_clip.is_some() && self_state.is_emoting();
+    let sprinting = self_state.locomotion.is_sprint() && !emoting && !dying;
+    let armed = self_state.presents_armed() && !dying;
     // Hold + aim owns the right arm only while armed and not sprinting / emoting.
     let hold_right = armed && !sprinting && !emoting;
+    let die_over = match (pose, die_clip) {
+        (KitPose::Present, Some((clip, age))) if dying => Some(clip.sample_overrides_at(age)),
+        _ => None,
+    };
     let loco_over = match (pose, loco_clip) {
-        (KitPose::Present, Some(clip)) if !emoting && self_state.locomotion.uses_loco_clip() => {
+        (KitPose::Present, Some(clip))
+            if !dying && !emoting && self_state.locomotion.uses_loco_clip() =>
+        {
             Some(clip.sample_overrides(self_state.walk_phase))
         }
         _ => None,
@@ -1271,6 +1281,16 @@ pub fn pose_character_kit(
     let mut locals = Vec::with_capacity(parts.len());
     for p in parts {
         let mut local = p.bind_local;
+
+        // Full-body collapse owns every channel the kit authored (root + limbs).
+        if let Some(ref over) = die_over {
+            if let Some(sample) = over.get(&p.name) {
+                local = apply_anim_to_bind(p.bind_local, *sample);
+            }
+            locals.push(local);
+            continue;
+        }
+
         if let Some(ref over) = loco_over {
             if let Some(sample) = over.get(&p.name) {
                 // Walk armed: legs + left arm (right stays hold). Sprint or unarmed: both arms.

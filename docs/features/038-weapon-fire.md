@@ -1,8 +1,10 @@
 # Feature 038 - Weapon fire
 
-Mounted **LMB** fires the active blaster. Class fire modes, per-letter cadence and ballistics, and **claim-and-relay** projectile spawns drive presentation: muzzle flash and mild weapon jolt on self and remotes. Infinite ammo; projectiles fly under gravity and despawn at max range.
+Mounted **LMB** fires the active blaster. Class fire modes, per-letter cadence and ballistics, and **claim-and-relay** projectile spawns. Infinite ammo; projectiles fly under gravity and despawn at max range.
 
-Depends on **007**, **012**, **013** / **015** / **017**, **020**, **021**, **037** (held attach / muzzle world), and the MP relay backbone (**022+**).
+**Combat shot** is the skill channel: **camera / look origin → crosshair** (view centre, **015**). **Muzzle** points from **037** are **presentation only** (flash, which barrel(s) show FX). They do not own projectile spawn origin.
+
+Depends on **007**, **012**, **013** / **015** / **017**, **020**, **021**, **037** (held attach / muzzle world for FX), and the MP relay backbone (**022+**).
 
 ## Input
 
@@ -55,11 +57,21 @@ Each accepted discharge spawns one or more projectiles in sim. Config uses metre
 | id | — | Stable for net and present |
 | owner | player | Shooter claim |
 | weapon | letter | Active blaster at spawn |
-| origin | m | World spawn point |
-| velocity | m/s | Initial world velocity |
+| origin | m | World spawn: **look / camera origin** (mounted view eyes) |
+| velocity | m/s | Initial world velocity along aim |
 | max_range | m | Despawn after this path length |
 
-**Aim** is look / view centre (**015**). **Origin** is the firing muzzle point(s) from the **037** held chain (blaster-local muzzles under `held_blaster`; same world points **012** marks on the lineup), at or slightly ahead of the barrel exit. Present jolt does not steer aim.
+### Combat aim and origin
+
+| Owns | Fact |
+| --- | --- |
+| **Look / camera** | **Projectile origin** (mounted look origin, **017**) |
+| **Aim / crosshair** | **Projectile direction** — view centre (**015**); later kick/sway/flinch stack on that aim offset |
+| **Muzzle (037)** | **VFX only** — flash placement, which kit muzzles fire for present cues |
+
+**Do not** spawn combat projectiles at the barrel. Parallel “muzzle + look direction” paths break the skill channel (near-miss under the reticle can still clip the mesh).
+
+Shotgun and multi-pellet letters use a **look-space** cone (half-angle in the tune table) about that aim. Scatter is sim-owned and calibratable. Multi-muzzle policy does **not** move combat origin to each barrel; it selects **which muzzles flash** (and how many flash cues) on the discharge.
 
 **Motion:** constant gravity \(\mathbf{g} = (0, -9.81, 0)\,\mathrm{m/s^2}\):
 
@@ -69,26 +81,26 @@ Each accepted discharge spawns one or more projectiles in sim. Config uses metre
 
 Despawn when distance along the path from origin reaches `max_range`.
 
-### Muzzle policy (per letter)
+### Muzzle policy (per letter) — present FX
+
+Which kit muzzles show flash on a discharge (037 world points). Combat pellets still leave the **look origin**.
 
 | Policy | Meaning |
 | --- | --- |
-| single | One muzzle base; pellets from that point |
-| all | Every kit muzzle on the same discharge |
-| alternate | Round-robin one muzzle per discharge |
+| single | Flash the primary (first) muzzle |
+| all | Flash every kit muzzle on the same discharge |
+| alternate | Round-robin one muzzle flash per discharge |
 
-| Letter | Policy | Pellets (draft) |
+| Letter | Policy | Pellets (draft, combat) |
 | --- | --- | --- |
 | a–h, k, m, n, r | single | 1 (shotgun **k**: 6, spread) |
 | i, l, p, q | alternate | 1 per discharge |
-| j | all (2) | 3 per muzzle |
-| o | all (4) | 2 per muzzle |
-
-Shotgun and multi-pellet letters use a look-space cone (half-angle in the tune table). Scatter is sim-owned and calibratable.
+| j | all (2) | 3 per flashing muzzle family (draft total as today) |
+| o | all (4) | 2 per flashing muzzle family (draft total as today) |
 
 ### Tune table (draft — feel later)
 
-RPM → discharge interval \(60 / \mathrm{RPM}\) s. Burst uses the same family inside a string.
+RPM → discharge interval \(60 / \mathrm{RPM}\) s. Burst uses the same family inside a string. \(v_\mathrm{muzzle}\) is **launch speed** of the sim projectile (not “from the mesh muzzle”).
 
 | Letter | RPM | \(v_\mathrm{muzzle}\) (m/s) | max range (m) | spread half-angle (°) |
 | --- | --- | --- | --- | --- |
@@ -113,7 +125,7 @@ RPM → discharge interval \(60 / \mathrm{RPM}\) s. Burst uses the same family i
 
 ## Net
 
-Shooter runs fire gates and spawn, then **claims** the projectiles. Server **relays** to peers. Remotes **accept** and present with the same motion rules. Server watches traffic; it does not own projectile objects.
+Shooter runs fire gates and spawn, then **claims** the projectiles. Server **relays** to peers. Remotes **accept** and present motion / FX. Server watches traffic; it does not own projectile objects. Relayed projectiles are **present** (tracers / remote FX), not peer hit authority (see later combat claims).
 
 Conceptual wire (postcard, names flexible):
 
@@ -126,11 +138,11 @@ Bump **`protocol`** when the wire changes. Align claim send/apply with the joine
 
 ## Present
 
-Flash and jolt follow **discharge**, self and remote alike.
+Flash and jolt follow **discharge**, self and remote alike. Muzzle is the present chain only.
 
-- **Muzzle flash:** solid sphere (~0.03 m, warm colour, ~0.05 s draft) at each muzzle that fired, in **present pose**: world points from **037** (`held_blaster · muzzle_local`), same chain as the drawn blaster (optional slight bore offset). Present placement — not a free sim/aim fudge. **Rebind each frame** to the live muzzle while the flash lives (no frozen world crumbs under move).
-- **Weapon jolt:** mild present-pose kick on the held blaster — pitch/yaw and a short push back along the bore — then settle toward rest. **Pivot is the hand / weapon grip `G` (037)** (`held · T(G) · J · inv(T(G))`), not the blaster mesh origin. Camera and reticle stay put. Flash tracks the same pose.
-- Optional dev-gated debug tracer for projectiles while tuning.
+- **Muzzle flash:** solid sphere (~0.03 m, warm colour, ~0.05 s draft) at each **037** muzzle selected by muzzle policy, in **present pose**: `held_blaster · muzzle_local` (optional slight bore offset). **Rebind each frame** to the live muzzle while the flash lives. Not the combat projectile origin.
+- **Weapon jolt:** mild present-pose kick on the held blaster — pitch/yaw and a short push back along the bore — then settle. **Pivot is the hand / weapon grip `G` (037)**. (Later **040** makes kick real sim aim; this feature’s jolt is the present seed.)
+- Optional dev-gated debug tracer for projectiles while tuning (path may start at look origin; flash still at muzzle).
 
 ### Jolt (class draft)
 
@@ -151,15 +163,16 @@ Text command (same console paradigm; name in help, e.g. `blaster <letter>`): set
 
 ## Config
 
-One baked weapon table in **`game-sim`** (shared with present as needed): mode, `T_ready`, RPM, muzzle velocity, max range, spread, muzzle policy, jolt. Sim owns spawn and integration; client reads flash/jolt for draw.
+One baked weapon table in **`game-sim`** (shared with present as needed): mode, `T_ready`, RPM, launch speed, max range, spread, muzzle policy (FX), jolt. Sim owns combat spawn (look origin + aim) and integration; client reads flash/jolt for draw.
 
 ## Acceptance criteria
 
 - Mounted session LMB fires when the active slot is armed: semi on press edge, SMG full auto while held, AR 3-round burst with commit, hold-to-chain, and one pending re-press.
 - Fire clears sprint; next fire waits for sprint→fire tax and letter `T_ready`; swap/equip pays `T_ready`.
 - Burst holds weapon-side actions; look, move, and jump stay free. Air leaves fire free.
-- Each discharge spawns projectile(s) from look aim and muzzle points, with letter muzzle velocity, gravity, and max-range despawn; ammo is unlimited.
-- Multi-muzzle and shotgun spread follow the letter policy and tune table.
+- Each discharge spawns projectile(s) from the **look / camera origin** along **crosshair aim**, with letter launch speed, gravity, and max-range despawn; ammo is unlimited.
+- **Muzzle points are not combat spawn origins**; they place flash (and related FX) only.
+- Multi-muzzle policy selects present flash muzzles; shotgun / multi-pellet spread is look-space about aim.
 - Shooter claims spawns; server relays; remotes show flash and jolt (and optional debug tracers) from those claims.
 - Flash spheres sit on the present-pose **037** muzzles that fired (self and remotes) and **rebind each frame** for their lifetime; jolt is present-pose on the held blaster, pivoting on grip / hand socket.
 - Dev text command equips any letter, flipping slots when **021** requires it.

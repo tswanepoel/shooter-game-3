@@ -2,6 +2,7 @@
 
 #![cfg(target_arch = "wasm32")]
 
+mod body_hit;
 #[cfg(feature = "debug-tools")]
 mod debug;
 mod emote_wheel;
@@ -18,13 +19,16 @@ mod self_present;
 mod view;
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
+use game_net::PlayerId;
 #[cfg(feature = "debug-tools")]
 use game_sim::equip_blaster_letter;
 use game_sim::{
-    FireState, ProjectileWorld, SelfState, CAMERA_FAR_M, CAMERA_NEAR_M, CAMERA_VERTICAL_FOV_RAD,
-    DEBUG_GRID_HALF_EXTENT_M, GRID_MAJOR_EVERY, GRID_MINOR_SPACING_M,
+    impact_damage, FireState, PlayerHealth, ProjectileWorld, SelfState, CAMERA_FAR_M,
+    CAMERA_NEAR_M, CAMERA_VERTICAL_FOV_RAD, DEBUG_GRID_HALF_EXTENT_M, GRID_MAJOR_EVERY,
+    GRID_MINOR_SPACING_M,
 };
 use glam::Mat4;
 use wasm_bindgen::prelude::*;
@@ -541,6 +545,26 @@ fn build_debug_grid() -> Vec<Vertex> {
     vertices
 }
 
+fn apply_impact_in_present(
+    target: PlayerId,
+    ammo: game_sim::AmmoKind,
+    speed: f32,
+    local_id: Option<PlayerId>,
+    self_state: &mut SelfState,
+    health_by_id: &mut HashMap<PlayerId, PlayerHealth>,
+) {
+    if local_id == Some(target) {
+        let dmg = impact_damage(ammo, speed);
+        self_state.apply_damage(dmg);
+        health_by_id.insert(target, PlayerHealth::read_from_self(self_state));
+    } else {
+        let entry = health_by_id
+            .entry(target)
+            .or_insert_with(PlayerHealth::full);
+        entry.apply_impact(ammo, speed);
+    }
+}
+
 pub(crate) struct ClientInner {
     renderer: Renderer,
     canvas: HtmlCanvasElement,
@@ -555,6 +579,7 @@ pub(crate) struct ClientInner {
     remote_present: RemotePresent,
     fire: FireState,
     projectiles: ProjectileWorld,
+    health_by_id: HashMap<PlayerId, PlayerHealth>,
     last_frame_secs: f64,
     #[cfg(feature = "debug-tools")]
     fps_ema: f32,
@@ -765,18 +790,26 @@ impl ClientInner {
 
         self.self_state.tick_emote(dt);
 
-        // Holster restore before muzzle sample so 037 points exist on the fire frame (039).
         if fire_held && self.self_state.is_emoting() {
             self.self_state.clear_emote();
         }
         let owner = self.mp.player_id().unwrap_or(0);
+        let look_origin = match &self.self_present {
+            SelfPresentState::Ready(gpu) => gpu.view.look_origin,
+            _ => self.self_state.position + glam::Vec3::new(0.0, 1.52, 0.27),
+        };
         let muzzle_worlds = match &self.self_present {
             SelfPresentState::Ready(gpu) => gpu.fire_muzzle_worlds(&self.self_state),
             _ => Vec::new(),
         };
-        let discharges = self
-            .fire
-            .tick(dt, &mut self.self_state, fire_held, owner, &muzzle_worlds);
+        let discharges = self.fire.tick(
+            dt,
+            &mut self.self_state,
+            fire_held,
+            owner,
+            look_origin,
+            &muzzle_worlds,
+        );
         let mut claimed: Vec<game_sim::Projectile> = Vec::new();
         for d in &discharges {
             for p in &d.projectiles {
@@ -789,7 +822,7 @@ impl ClientInner {
                     self.fire.mesh_pose(),
                     &d.fired_muzzles,
                 ),
-                _ => d.projectiles.iter().map(|p| p.origin).collect(),
+                _ => muzzle_worlds.clone(),
             };
             self.renderer
                 .fire_fx
@@ -825,7 +858,111 @@ impl ClientInner {
             }
         }
 
-        self.projectiles.tick(dt);
+        let local_id = self.mp.player_id();
+        let firer_id = local_id.unwrap_or(0);
+        if !self.mp.joined() {
+            self.health_by_id.clear();
+        }
+
+        let remote_samples: Vec<(PlayerId, game_net::DriveView)> = if self.mp.joined() {
+            self.mp
+                .remotes()
+                .samples()
+                .map(|(id, s)| (id, s.drive.clone()))
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        if let Some(id) = local_id {
+            self.health_by_id
+                .entry(id)
+                .or_insert_with(|| PlayerHealth::read_from_self(&self.self_state));
+        }
+        for (id, _) in &remote_samples {
+            self.health_by_id
+                .entry(*id)
+                .or_insert_with(PlayerHealth::full);
+        }
+        if self.mp.joined() {
+            let mut keep: HashMap<PlayerId, ()> =
+                remote_samples.iter().map(|(id, _)| (*id, ())).collect();
+            if let Some(id) = local_id {
+                keep.insert(id, ());
+            }
+            self.health_by_id.retain(|id, _| keep.contains_key(id));
+        }
+
+        let remote_hit_states: Vec<(PlayerId, SelfState)> = remote_samples
+            .iter()
+            .filter_map(|(id, drive)| {
+                let h = self.health_by_id.get(id)?;
+                if !h.alive {
+                    return None;
+                }
+                let mut state = mp::drive_to_state(drive);
+                state.alive = true;
+                state.die_age_s = 0.0;
+                Some((*id, state))
+            })
+            .collect();
+
+        let hits = {
+            let remote_present = &self.remote_present;
+            let states = &remote_hit_states;
+            self.projectiles.tick_hits_with(dt, firer_id, |from, to| {
+                let mut best: Option<(f32, PlayerId, glam::Vec3)> = None;
+                for (id, state) in states {
+                    let Some(hit) = remote_present.trace_segment(*id, state, from, to) else {
+                        continue;
+                    };
+                    if best.map(|(bt, _, _)| hit.t < bt).unwrap_or(true) {
+                        best = Some((hit.t, *id, hit.position));
+                    }
+                }
+                best.map(|(_, id, p)| (id, p))
+            })
+        };
+        for h in &hits {
+            apply_impact_in_present(
+                h.target_id,
+                h.ammo,
+                h.speed,
+                local_id,
+                &mut self.self_state,
+                &mut self.health_by_id,
+            );
+        }
+        if !hits.is_empty() {
+            self.mp.claim_hits(&hits);
+        }
+
+        for batch in self.mp.take_peer_hits() {
+            let Some(ammo) = mp::ammo_kind_from_wire(batch.hit.ammo) else {
+                continue;
+            };
+            apply_impact_in_present(
+                batch.hit.target,
+                ammo,
+                batch.hit.speed,
+                local_id,
+                &mut self.self_state,
+                &mut self.health_by_id,
+            );
+        }
+
+        self.self_state.tick_health(dt);
+        if let Some(id) = local_id {
+            self.health_by_id
+                .insert(id, PlayerHealth::read_from_self(&self.self_state));
+        }
+        for (id, h) in self.health_by_id.iter_mut() {
+            if local_id == Some(*id) {
+                continue;
+            }
+            h.tick_regen(dt);
+        }
+
         self.renderer.fire_fx.tick(dt);
 
         self.mp.on_frame(dt, &self.self_state);
@@ -857,10 +994,17 @@ impl ClientInner {
                 .iter()
                 .map(|(id, _)| (*id, self.renderer.fire_fx.remote_kick(*id)))
                 .collect();
-            self.remote_present
-                .apply_all(&self.renderer.queue, samples.into_iter(), |id| {
-                    kicks.get(&id).copied().unwrap_or_default()
-                });
+            self.remote_present.apply_all(
+                &self.renderer.queue,
+                samples.into_iter(),
+                |id| kicks.get(&id).copied().unwrap_or_default(),
+                |id| {
+                    self.health_by_id
+                        .get(&id)
+                        .map(|h| (h.alive, h.die_age_s))
+                        .unwrap_or((true, 0.0))
+                },
+            );
         } else {
             self.remote_present.clear();
         }
@@ -1300,6 +1444,7 @@ impl GameClient {
             remote_present: RemotePresent::new(),
             fire: FireState::new(),
             projectiles: ProjectileWorld::new(),
+            health_by_id: HashMap::new(),
             last_frame_secs: 0.0,
             #[cfg(feature = "debug-tools")]
             fps_ema: 0.0,

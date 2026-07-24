@@ -143,6 +143,9 @@ pub struct SelfState {
     /// Which hand is active: a filled slot or unarmed (021).
     pub active: ActiveWeapon,
     pub alive: bool,
+    pub health: f32,
+    pub regen_block_s: f32,
+    pub die_age_s: f32,
 
     /// Look-relative forward wish (−1…1). Positive is W.
     pub wish_forward: f32,
@@ -192,6 +195,9 @@ impl SelfState {
             secondary: Some(b'b'),
             active: ActiveWeapon::Primary,
             alive: true,
+            health: crate::HEALTH_MAX,
+            regen_block_s: 0.0,
+            die_age_s: 0.0,
             wish_forward: 0.0,
             wish_strafe: 0.0,
             locomotion: LocomotionMode::Stand,
@@ -235,9 +241,9 @@ impl SelfState {
         self.is_emoting()
     }
 
-    /// Present-armed: active letter filled and not holstered for emote.
+    /// Present-armed: living, active letter filled, and not holstered for emote.
     pub fn presents_armed(&self) -> bool {
-        self.is_armed() && !self.emote_holster()
+        self.alive && self.is_armed() && !self.emote_holster()
     }
 
     /// Clear emote drive (natural end, cancel, replace prep).
@@ -258,10 +264,47 @@ impl SelfState {
         }
     }
 
+    pub fn apply_damage(&mut self, amount: f32) {
+        if !self.alive || amount <= 0.0 {
+            return;
+        }
+        self.health = (self.health - amount).max(0.0);
+        self.regen_block_s = crate::HEALTH_REGEN_DELAY_S;
+        if self.health <= 0.0 {
+            self.health = 0.0;
+            self.alive = false;
+            self.die_age_s = 0.0;
+            self.sprint_latched = false;
+            self.clear_emote();
+            self.wish_forward = 0.0;
+            self.wish_strafe = 0.0;
+            if !self.locomotion.is_air() {
+                self.locomotion = LocomotionMode::Stand;
+                self.walk_phase = 0.0;
+            }
+        }
+    }
+
+    pub fn tick_health(&mut self, dt: f32) {
+        let dt = dt.max(0.0);
+        if !self.alive {
+            self.die_age_s += dt;
+            return;
+        }
+        if self.regen_block_s > 0.0 {
+            self.regen_block_s = (self.regen_block_s - dt).max(0.0);
+            return;
+        }
+        if self.health < crate::HEALTH_MAX && crate::HEALTH_REGEN_FULL_S > 1e-6 {
+            let rate = crate::HEALTH_MAX / crate::HEALTH_REGEN_FULL_S;
+            self.health = (self.health + rate * dt).min(crate::HEALTH_MAX);
+        }
+    }
+
     /// Commit a wheel slot. Requires grounded; `weapon_side_blocked` is burst (038).
     /// Replaces an in-flight emote. Clears sprint latch.
     pub fn try_commit_emote(&mut self, id: u8, weapon_side_blocked: bool) -> bool {
-        if weapon_side_blocked || !self.is_grounded() {
+        if !self.alive || weapon_side_blocked || !self.is_grounded() {
             return false;
         }
         if crate::emote_def(id).is_none() {
@@ -297,7 +340,7 @@ impl SelfState {
     /// Toggle active slot: primary ↔ secondary. Empty slots stay in the cycle (unarmed).
     /// Cancels emote (039) so the new hand is free immediately.
     pub fn cycle_weapon(&mut self, dir: i8) {
-        if dir.signum() == 0 {
+        if !self.alive || dir.signum() == 0 {
             return;
         }
         self.clear_emote();
@@ -321,7 +364,7 @@ impl SelfState {
     }
 
     pub fn try_jump(&mut self) {
-        if !self.is_grounded() {
+        if !self.alive || !self.is_grounded() {
             return;
         }
         self.clear_emote();
@@ -392,6 +435,18 @@ impl SelfState {
     /// Look-relative walk wish (−1…1). Ground: phase from distance. Air: coast + gravity.
     /// `sprint_tap` is a Shift press edge (020); latches sprint only (no cancel). Stamina gates start/drain.
     pub fn apply_move(&mut self, dt: f32, forward: f32, strafe: f32, sprint_tap: bool) {
+        let dt = dt.max(0.0);
+        if !self.alive {
+            self.wish_forward = 0.0;
+            self.wish_strafe = 0.0;
+            self.sprint_latched = false;
+            if self.locomotion.is_air() {
+                self.integrate_air(dt, false);
+            }
+            self.sync_pose();
+            return;
+        }
+
         self.wish_forward = forward.clamp(-1.0, 1.0);
         self.wish_strafe = strafe.clamp(-1.0, 1.0);
 
@@ -410,7 +465,6 @@ impl SelfState {
             self.look_forward_xz() * self.wish_forward + self.look_right_xz() * self.wish_strafe;
         wish.y = 0.0;
 
-        let dt = dt.max(0.0);
         let moving = wish.length_squared() > 1e-12;
 
         if self.locomotion.is_air() {

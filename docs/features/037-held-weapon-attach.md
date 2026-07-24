@@ -96,7 +96,7 @@ All of: self blaster draw, debug lineup held pair, muzzle world points, and pres
 - **Hold look preserved:** under `holding-right` (lineup and armed stand / aim), grip placement, level weapon, muzzle forward, and dual kit scale match the current product baseline for letters `a`…`r`.
 - **Arm follow:** when the arm matrix changes (aim pitch, torso, sprint loco), the held blaster uses the same arm matrix as the drawn `arm-right` part in that pose pass.
 - **Tables and READMEs:** grip and muzzle data are documented in the spaces above; blaster README composition matches the code. Character README notes the logic hand socket.
-- **Scope:** presentation attach and documentation only. Sim aim, fire cadence, ballistics, and net contracts stay as in **015** / **038** and related features; they consume the cleaned present chain for origins and cues where those already depend on held pose.
+- **Scope:** presentation attach and documentation only. Sim aim, fire cadence, ballistics, and net contracts stay as in **015** / **038** and related features. **038** combat spawn is look origin → crosshair; this chain supplies **muzzle world points for present FX** (flash, markers), not combat projectile origin.
 
 ## Kit documentation
 

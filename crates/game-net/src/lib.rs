@@ -6,7 +6,7 @@ pub const TICK_HZ: u32 = 180;
 
 pub const TICK_DURATION_SECS: f64 = 1.0 / TICK_HZ as f64;
 
-pub const PROTOCOL_VERSION: u16 = 5;
+pub const PROTOCOL_VERSION: u16 = 6;
 
 pub type PlayerId = u32;
 
@@ -68,6 +68,18 @@ pub struct NetProjectileSpawn {
     pub muzzle_index: u8,
 }
 
+/// Firer-claimed impact hit (043). Ammo kind wire: 0 light foam, 1 thick foam, 2 grenade.
+/// Peers translate ammo + speed → health; not a flat damage number.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NetImpactHit {
+    pub projectile_id: u64,
+    pub target: PlayerId,
+    /// 0 = light foam, 1 = thick foam, 2 = grenade.
+    pub ammo: u8,
+    /// Speed at contact (m/s).
+    pub speed: f32,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ClientToServer {
     Hello {
@@ -84,6 +96,11 @@ pub enum ClientToServer {
     ProjectileSpawn {
         tick: u64,
         projectiles: Vec<NetProjectileSpawn>,
+    },
+    /// Shooter-claimed impact hit (043). VFX projectiles are separate.
+    ImpactHit {
+        tick: u64,
+        hit: NetImpactHit,
     },
 }
 
@@ -122,6 +139,12 @@ pub enum ServerToClient {
         tick: u64,
         id: PlayerId,
         projectiles: Vec<NetProjectileSpawn>,
+    },
+    /// Relayed peer impact hit (043). `id` is the firer.
+    PeerImpactHit {
+        tick: u64,
+        id: PlayerId,
+        hit: NetImpactHit,
     },
 }
 
@@ -298,6 +321,30 @@ mod tests {
             tick: 12,
             id: 3,
             projectiles: spawns,
+        };
+        let b = encode_s2c(&s2c).unwrap();
+        assert_eq!(decode_s2c(&b).unwrap(), s2c);
+    }
+
+    #[test]
+    fn impact_hit_roundtrip() {
+        let hit = NetImpactHit {
+            projectile_id: 42,
+            target: 2,
+            ammo: 0,
+            speed: 380.0,
+        };
+        let c2s = ClientToServer::ImpactHit {
+            tick: 15,
+            hit: hit.clone(),
+        };
+        let b = encode_c2s(&c2s).unwrap();
+        assert_eq!(decode_c2s(&b).unwrap(), c2s);
+
+        let s2c = ServerToClient::PeerImpactHit {
+            tick: 15,
+            id: 1,
+            hit,
         };
         let b = encode_s2c(&s2c).unwrap();
         assert_eq!(decode_s2c(&b).unwrap(), s2c);

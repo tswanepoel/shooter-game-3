@@ -18,7 +18,6 @@ pub struct Projectile {
     /// Shooter id (0 in solo when not networked).
     pub owner: u32,
     pub weapon: u8,
-    /// Round kind (042). Shared fact for this projectile's life.
     pub ammo: AmmoKind,
     pub origin: Vec3,
     pub position: Vec3,
@@ -26,7 +25,7 @@ pub struct Projectile {
     /// Path length from origin (m).
     pub traveled: f32,
     pub max_range: f32,
-    /// Kit muzzle index that spawned this (present flash).
+    /// Flash muzzle index when present has kit muzzles.
     pub muzzle_index: u8,
 }
 
@@ -205,16 +204,17 @@ impl FireState {
         (x as f32) / (u32::MAX as f32)
     }
 
-    /// Advance timers, kick settle, and sway; consume fire input; maybe produce discharges.
+    /// Advance timers / kick / sway; maybe discharge.
     ///
-    /// Aim is look + kick + sway. Kick is added after spawn (this shot uses pre-add).
-    /// `muzzle_worlds` empty → no spawn. `owner` is projectile owner id (0 solo).
+    /// Projectiles spawn at `look_origin` along look + kick + sway (pre-kick for this
+    /// shot). `muzzle_worlds` select flash muzzles only; may be empty.
     pub fn tick(
         &mut self,
         dt: f32,
         self_state: &mut SelfState,
         fire_held: bool,
         owner: u32,
+        look_origin: Vec3,
         muzzle_worlds: &[Vec3],
     ) -> Vec<Discharge> {
         let dt = dt.max(0.0);
@@ -222,6 +222,15 @@ impl FireState {
         self.sprint_fire_s = (self.sprint_fire_s - dt).max(0.0);
         self.cooldown_s = (self.cooldown_s - dt).max(0.0);
         self.kick.settle(dt, self.kick_settle_s);
+
+        if !self_state.alive {
+            self.sway.clear();
+            self.fire_held = false;
+            self.prev_held = false;
+            self.burst_left = 0;
+            self.burst_pending = false;
+            return Vec::new();
+        }
 
         let letter = self_state.active_blaster();
         self.sync_active_letter(letter);
@@ -252,7 +261,6 @@ impl FireState {
         self.fire_held = fire_held;
         self.prev_held = fire_held;
 
-        // Fire cancels emote (holster restore before muzzle spawn) and sprint (038/039).
         let fire_intent =
             press_edge || (fire_held && def.mode == FireMode::FullAuto) || self.burst_active();
         if fire_intent && self_state.is_emoting() {
@@ -275,8 +283,8 @@ impl FireState {
 
         // Burst continuation (string always finishes).
         if self.burst_active() {
-            if self.gates_clear() && !muzzle_worlds.is_empty() {
-                if let Some(d) = self.spawn_discharge(def, owner, aim, muzzle_worlds) {
+            if self.gates_clear() {
+                if let Some(d) = self.spawn_discharge(def, owner, look_origin, aim, muzzle_worlds) {
                     self.burst_left = self.burst_left.saturating_sub(1);
                     self.cooldown_s = def.shot_interval_s();
                     out.push(d);
@@ -300,18 +308,22 @@ impl FireState {
             FireMode::Burst => press_edge,
         };
 
-        if want && self.gates_clear() && !muzzle_worlds.is_empty() {
+        if want && self.gates_clear() {
             match def.mode {
                 FireMode::Burst => {
                     self.burst_left = def.burst_count;
-                    if let Some(d) = self.spawn_discharge(def, owner, aim, muzzle_worlds) {
+                    if let Some(d) =
+                        self.spawn_discharge(def, owner, look_origin, aim, muzzle_worlds)
+                    {
                         self.burst_left = self.burst_left.saturating_sub(1);
                         self.cooldown_s = def.shot_interval_s();
                         out.push(d);
                     }
                 }
                 FireMode::Semi | FireMode::FullAuto => {
-                    if let Some(d) = self.spawn_discharge(def, owner, aim, muzzle_worlds) {
+                    if let Some(d) =
+                        self.spawn_discharge(def, owner, look_origin, aim, muzzle_worlds)
+                    {
                         self.cooldown_s = def.shot_interval_s();
                         out.push(d);
                     }
@@ -326,12 +338,10 @@ impl FireState {
         &mut self,
         def: &WeaponDef,
         owner: u32,
+        look_origin: Vec3,
         aim: Vec3,
         muzzle_worlds: &[Vec3],
     ) -> Option<Discharge> {
-        if muzzle_worlds.is_empty() {
-            return None;
-        }
         let aim = {
             let len = aim.length();
             if len < 1e-8 {
@@ -341,23 +351,26 @@ impl FireState {
             }
         };
 
-        let muzzle_indices: Vec<usize> = match def.muzzle_policy {
-            MuzzlePolicy::Single => vec![0],
-            MuzzlePolicy::All => (0..muzzle_worlds.len()).collect(),
-            MuzzlePolicy::Alternate => {
-                let n = muzzle_worlds.len().max(1);
-                let i = (self.alt_muzzle as usize) % n;
-                self.alt_muzzle = self.alt_muzzle.wrapping_add(1);
-                vec![i]
-            }
+        // Multi-muzzle multiplies pellet groups (count); flash indices from kit list.
+        let (muzzle_indices, fired_muzzles): (Vec<usize>, Vec<u8>) = if muzzle_worlds.is_empty() {
+            (vec![0], Vec::new())
+        } else {
+            let idxs: Vec<usize> = match def.muzzle_policy {
+                MuzzlePolicy::Single => vec![0],
+                MuzzlePolicy::All => (0..muzzle_worlds.len()).collect(),
+                MuzzlePolicy::Alternate => {
+                    let n = muzzle_worlds.len().max(1);
+                    let i = (self.alt_muzzle as usize) % n;
+                    self.alt_muzzle = self.alt_muzzle.wrapping_add(1);
+                    vec![i]
+                }
+            };
+            let fired: Vec<u8> = idxs.iter().map(|&i| i as u8).collect();
+            (idxs, fired)
         };
 
         let mut projectiles = Vec::new();
-        let mut fired_muzzles = Vec::new();
-
         for &mi in &muzzle_indices {
-            let origin = muzzle_worlds[mi.min(muzzle_worlds.len() - 1)];
-            fired_muzzles.push(mi as u8);
             for _ in 0..def.pellets {
                 let dir = scatter_direction(aim, def.spread_half_deg, &mut || self.next_rand01());
                 let id = self.next_id;
@@ -367,8 +380,8 @@ impl FireState {
                     owner,
                     weapon: def.letter,
                     ammo: def.ammo(),
-                    origin,
-                    position: origin,
+                    origin: look_origin,
+                    position: look_origin,
                     velocity: dir * def.muzzle_vel,
                     traveled: 0.0,
                     max_range: def.max_range,
@@ -425,6 +438,9 @@ fn scatter_direction(aim: Vec3, half_deg: f32, rand01: &mut dyn FnMut() -> f32) 
 /// Returns `Ok(true)` if loadout changed. Pays ready via [`FireState::sync_active_letter`]
 /// on the next tick if letter changes.
 pub fn equip_blaster_letter(state: &mut SelfState, letter: u8) -> Result<bool, &'static str> {
+    if !state.alive {
+        return Err("dead");
+    }
     let class = WeaponClass::from_letter(letter).ok_or("unknown blaster letter")?;
     state.clear_emote();
     let before = (
@@ -649,8 +665,25 @@ mod tests {
         SelfState::default_loadout()
     }
 
+    fn eye() -> Vec3 {
+        Vec3::new(0.0, 1.52, 0.27)
+    }
+
     fn muzzles() -> Vec<Vec3> {
         vec![Vec3::new(0.0, 1.4, 0.4)]
+    }
+
+    #[test]
+    fn dead_does_not_fire() {
+        let mut fire = FireState::new();
+        let mut s = armed_self();
+        s.set_primary(Some(b'b')).unwrap();
+        fire.pay_ready(b'b');
+        fire.ready_s = 0.0;
+        s.apply_damage(crate::HEALTH_MAX);
+        assert!(!s.alive);
+        let d = fire.tick(0.0, &mut s, true, 0, eye(), &muzzles());
+        assert!(d.is_empty());
     }
 
     #[test]
@@ -663,16 +696,16 @@ mod tests {
 
         let m = muzzles();
         // press
-        let d0 = fire.tick(1.0 / 60.0, &mut s, true, 0, &m);
+        let d0 = fire.tick(1.0 / 60.0, &mut s, true, 0, eye(), &m);
         assert_eq!(d0.len(), 1);
         assert_eq!(d0[0].projectiles.len(), 1);
         // hold
-        let d1 = fire.tick(1.0 / 60.0, &mut s, true, 0, &m);
+        let d1 = fire.tick(1.0 / 60.0, &mut s, true, 0, eye(), &m);
         assert!(d1.is_empty());
         // release + press after cooldown
-        let _ = fire.tick(1.0, &mut s, false, 0, &m);
+        let _ = fire.tick(1.0, &mut s, false, 0, eye(), &m);
         fire.cooldown_s = 0.0;
-        let d2 = fire.tick(1.0 / 60.0, &mut s, true, 0, &m);
+        let d2 = fire.tick(1.0 / 60.0, &mut s, true, 0, eye(), &m);
         assert_eq!(d2.len(), 1);
     }
 
@@ -687,7 +720,7 @@ mod tests {
         let mut total = 0;
         // Hold for ~0.1s at 780 RPM → interval ~0.077s → about 2 shots
         for _ in 0..20 {
-            let d = fire.tick(0.01, &mut s, true, 0, &m);
+            let d = fire.tick(0.01, &mut s, true, 0, eye(), &m);
             total += d.len();
         }
         assert!(total >= 2, "total discharges={total}");
@@ -701,14 +734,14 @@ mod tests {
         fire.pay_ready(b'd');
         fire.ready_s = 0.0;
         let m = muzzles();
-        let d0 = fire.tick(0.0, &mut s, true, 0, &m);
+        let d0 = fire.tick(0.0, &mut s, true, 0, eye(), &m);
         assert_eq!(d0.len(), 1);
         assert!(fire.blocks_weapon_side());
         // finish string
         let mut n = 1;
         for _ in 0..20 {
             fire.cooldown_s = 0.0;
-            let d = fire.tick(0.001, &mut s, false, 0, &m);
+            let d = fire.tick(0.001, &mut s, false, 0, eye(), &m);
             n += d.len();
             if !fire.burst_active() {
                 break;
@@ -727,7 +760,7 @@ mod tests {
         s.apply_move(0.05, 1.0, 0.0, true);
         assert!(s.sprint_latched);
         let m = muzzles();
-        let _ = fire.tick(0.0, &mut s, true, 0, &m);
+        let _ = fire.tick(0.0, &mut s, true, 0, eye(), &m);
         assert!(!s.sprint_latched);
         assert!(fire.sprint_fire_s > 0.1);
     }
@@ -774,6 +807,43 @@ mod tests {
     }
 
     #[test]
+    fn projectiles_spawn_from_look_not_muzzle() {
+        let mut fire = FireState::new();
+        let mut s = armed_self();
+        s.set_primary(Some(b'b')).unwrap();
+        fire.pay_ready(b'b');
+        fire.ready_s = 0.0;
+        let barrel = muzzles();
+        let d = fire.tick(0.0, &mut s, true, 0, eye(), &barrel);
+        assert_eq!(d.len(), 1);
+        let p = &d[0].projectiles[0];
+        assert!(
+            (p.origin - eye()).length() < 1e-5,
+            "combat origin is camera, got {:?}",
+            p.origin
+        );
+        assert!(
+            (p.origin - barrel[0]).length() > 0.1,
+            "must not spawn at barrel"
+        );
+        assert_eq!(d[0].fired_muzzles, vec![0], "flash still names a muzzle");
+    }
+
+    #[test]
+    fn combat_spawns_without_muzzle_fx_points() {
+        let mut fire = FireState::new();
+        let mut s = armed_self();
+        s.set_primary(Some(b'b')).unwrap();
+        fire.pay_ready(b'b');
+        fire.ready_s = 0.0;
+        let d = fire.tick(0.0, &mut s, true, 0, eye(), &[]);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].projectiles.len(), 1);
+        assert!((d[0].projectiles[0].origin - eye()).length() < 1e-5);
+        assert!(d[0].fired_muzzles.is_empty());
+    }
+
+    #[test]
     fn spawn_carries_ammo_and_blaster_muzzle_vel() {
         let mut fire = FireState::new();
         let mut s = armed_self();
@@ -783,7 +853,7 @@ mod tests {
         fire.ready_s = 0.0;
         // Zero spread via forcing letter e is wrong; use b and check speed magnitude.
         let def = weapon_def(b'b').unwrap();
-        let d = fire.tick(0.0, &mut s, true, 0, &muzzles());
+        let d = fire.tick(0.0, &mut s, true, 0, eye(), &muzzles());
         assert_eq!(d.len(), 1);
         let p = &d[0].projectiles[0];
         assert_eq!(p.ammo, AmmoKind::LightFoam);
@@ -799,7 +869,7 @@ mod tests {
         fire.pay_ready(b'e');
         fire.ready_s = 0.0;
         let def_e = weapon_def(b'e').unwrap();
-        let d = fire.tick(0.0, &mut s, true, 0, &muzzles());
+        let d = fire.tick(0.0, &mut s, true, 0, eye(), &muzzles());
         let p = &d[0].projectiles[0];
         assert_eq!(p.ammo, AmmoKind::ThickFoam);
         assert!((p.velocity.length() - def_e.muzzle_vel).abs() < 1e-2);
@@ -810,7 +880,7 @@ mod tests {
         s.set_primary(Some(b'a')).unwrap();
         fire.pay_ready(b'a');
         fire.ready_s = 0.0;
-        let d = fire.tick(0.0, &mut s, true, 0, &muzzles());
+        let d = fire.tick(0.0, &mut s, true, 0, eye(), &muzzles());
         assert_eq!(d[0].projectiles[0].ammo, AmmoKind::Grenade);
     }
 
@@ -821,7 +891,7 @@ mod tests {
         s.set_primary(Some(b'k')).unwrap();
         fire.pay_ready(b'k');
         fire.ready_s = 0.0;
-        let d = fire.tick(0.0, &mut s, true, 0, &muzzles());
+        let d = fire.tick(0.0, &mut s, true, 0, eye(), &muzzles());
         assert_eq!(d[0].projectiles.len(), 6);
         for p in &d[0].projectiles {
             assert_eq!(p.ammo, AmmoKind::LightFoam);
@@ -845,7 +915,7 @@ mod tests {
         s.set_primary(Some(b'k')).unwrap();
         fire.pay_ready(b'k');
         fire.ready_s = 0.0;
-        let d = fire.tick(0.0, &mut s, true, 0, &muzzles());
+        let d = fire.tick(0.0, &mut s, true, 0, eye(), &muzzles());
         assert_eq!(d[0].projectiles.len(), 6);
     }
 
@@ -877,13 +947,13 @@ mod tests {
         fire.ready_s = 0.0;
         let m = muzzles();
         assert_eq!(fire.kick().pitch_rad, 0.0);
-        let d = fire.tick(0.0, &mut s, true, 0, &m);
+        let d = fire.tick(0.0, &mut s, true, 0, eye(), &m);
         assert_eq!(d.len(), 1);
         let pitch_after = fire.kick().pitch_rad;
         assert!(pitch_after > 0.0, "kick pitch={pitch_after}");
         // Settle over many frames without firing.
         for _ in 0..120 {
-            let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, &m);
+            let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, eye(), &m);
         }
         assert!(
             fire.kick().pitch_rad < pitch_after * 0.05,
@@ -902,7 +972,7 @@ mod tests {
         fire.ready_s = 0.0;
         fire.kick.pitch_rad = 10f32.to_radians();
         fire.kick_settle_s = 1000.0;
-        let d = fire.tick(0.0, &mut s, true, 0, &muzzles());
+        let d = fire.tick(0.0, &mut s, true, 0, eye(), &muzzles());
         let vel = d[0].projectiles[0].velocity.normalize();
         let expected = aim_from_self(
             &s,
@@ -929,7 +999,7 @@ mod tests {
         assert_eq!(fire.sway().pitch_rad, 0.0);
         assert_eq!(fire.sway().yaw_rad, 0.0);
         for _ in 0..90 {
-            let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, &muzzles());
+            let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, eye(), &muzzles());
         }
         let mag = fire.sway().pitch_rad.abs() + fire.sway().yaw_rad.abs();
         assert!(mag > 1e-5, "sway should move while armed hold, mag={mag}");
@@ -943,12 +1013,12 @@ mod tests {
         fire.pay_ready(b'p');
         fire.ready_s = 0.0;
         for _ in 0..60 {
-            let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, &[]);
+            let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, eye(), &[]);
         }
         assert!(fire.sway().pitch_rad.abs() + fire.sway().yaw_rad.abs() > 0.0);
         s.set_primary(None).unwrap();
         s.set_secondary(None).unwrap();
-        let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, &[]);
+        let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, eye(), &[]);
         assert_eq!(fire.sway().pitch_rad, 0.0);
         assert_eq!(fire.sway().yaw_rad, 0.0);
     }
@@ -962,7 +1032,7 @@ mod tests {
         fire.ready_s = 0.0;
         // Build resting sway, freeze kick settle so it stays zero.
         for _ in 0..120 {
-            let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, &[]);
+            let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, eye(), &[]);
         }
         fire.kick = KickPose::default();
         let pose = fire.aim_pose();
@@ -972,7 +1042,7 @@ mod tests {
         );
         // Force zero spread weapon path: b has spread — compare direction before scatter
         // by zeroing spread effect via matching aim_pose at fire instant (dt=0 keeps sway).
-        let d = fire.tick(0.0, &mut s, true, 0, &muzzles());
+        let d = fire.tick(0.0, &mut s, true, 0, eye(), &muzzles());
         let vel = d[0].projectiles[0].velocity.normalize();
         let expected = aim_from_self(&s, pose);
         // Spread on pistol is small; should still align roughly with aim_pose.
@@ -993,7 +1063,7 @@ mod tests {
             fire.ready_s = 0.0;
             let mut peak = 0.0f32;
             for _ in 0..600 {
-                let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, &[]);
+                let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, eye(), &[]);
                 let m = fire.sway().pitch_rad.abs() + fire.sway().yaw_rad.abs();
                 peak = peak.max(m);
             }
@@ -1015,7 +1085,7 @@ mod tests {
         fire.pay_ready(b'b');
         fire.ready_s = 0.0;
         for _ in 0..90 {
-            let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, &[]);
+            let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, eye(), &[]);
         }
         let still = fire.sway().pitch_rad.abs() + fire.sway().yaw_rad.abs();
         assert!(still > 1e-5);
@@ -1023,7 +1093,7 @@ mod tests {
         for i in 0..30 {
             s.ocular_yaw = i as f32 * 0.4;
             s.ocular_pitch = (i as f32 * 0.05).sin() * 0.2;
-            let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, &[]);
+            let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, eye(), &[]);
         }
         let moving = fire.sway().pitch_rad.abs() + fire.sway().yaw_rad.abs();
         assert!(

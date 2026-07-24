@@ -8,6 +8,7 @@ use game_sim::{emote_clip_name, KickPose, SelfState, EMOTE_CATALOG, FACE_OFFSET_
 use glam::{Mat4, Vec3};
 use wasm_bindgen::JsValue;
 
+use crate::body_hit::{self, PartHit};
 use crate::mesh_unlit::{
     self, AnimClip, CharPart, KitPose, MeshVertex, UnlitMeshGpu, UnlitMeshLayout,
 };
@@ -33,6 +34,7 @@ pub struct SelfGpu {
     walk_clip: AnimClip,
     /// Kenney `sprint` clip (phase from sim while sprinting).
     sprint_clip: AnimClip,
+    die_clip: AnimClip,
     /// Wheel emote clips, index = slot id (039).
     emote_clips: Vec<AnimClip>,
     /// part index → primitive index in character batch (0), if meshful.
@@ -69,6 +71,8 @@ impl SelfGpu {
             mesh_unlit::extract_clip(char_glb, "walk").map_err(|e| JsValue::from_str(&e))?;
         let sprint_clip =
             mesh_unlit::extract_clip(char_glb, "sprint").map_err(|e| JsValue::from_str(&e))?;
+        let die_clip =
+            mesh_unlit::extract_clip(char_glb, "die").map_err(|e| JsValue::from_str(&e))?;
         let mut emote_clips = Vec::with_capacity(EMOTE_CATALOG.len());
         for def in &EMOTE_CATALOG {
             let clip =
@@ -82,8 +86,15 @@ impl SelfGpu {
             &walk_clip
         };
         let emote = emote_pair(self_state, &emote_clips);
-        let (worlds, arm_kit) =
-            mesh_unlit::pose_character_kit(&parts, self_state, Some(loco), emote, KitPose::Present);
+        let die = die_pair(self_state, &die_clip);
+        let (worlds, arm_kit) = mesh_unlit::pose_character_kit(
+            &parts,
+            self_state,
+            Some(loco),
+            emote,
+            die,
+            KitPose::Present,
+        );
         let k2w = mesh_unlit::kit_to_world(self_state.placement_matrix(), min_y);
 
         let mut char_cpu: Vec<(Vec<MeshVertex>, Vec<u32>, [f32; 4])> = Vec::new();
@@ -167,6 +178,7 @@ impl SelfGpu {
             parts,
             walk_clip,
             sprint_clip,
+            die_clip,
             emote_clips,
             part_prim,
             blasters,
@@ -196,11 +208,13 @@ impl SelfGpu {
             &self.walk_clip
         };
         let emote = emote_pair(self_state, &self.emote_clips);
+        let die = die_pair(self_state, &self.die_clip);
         let (_, arm_kit) = mesh_unlit::pose_character_kit(
             &self.parts,
             self_state,
             Some(loco),
             emote,
+            die,
             KitPose::Present,
         );
         (k2w, arm_kit)
@@ -245,6 +259,26 @@ impl SelfGpu {
             .collect()
     }
 
+    pub fn trace_segment(&self, self_state: &SelfState, from: Vec3, to: Vec3) -> Option<PartHit> {
+        let loco = if self_state.locomotion.is_sprint() {
+            &self.sprint_clip
+        } else {
+            &self.walk_clip
+        };
+        let emote = emote_pair(self_state, &self.emote_clips);
+        let die = die_pair(self_state, &self.die_clip);
+        body_hit::trace_segment_parts(
+            &self.parts,
+            self_state,
+            Some(loco),
+            emote,
+            die,
+            self.min_y,
+            from,
+            to,
+        )
+    }
+
     /// Body + active blaster from drive (walk/sprint/jump/stand/emote).
     ///
     /// `first_person`: hide the head shell so the mounted eye isn't inside it
@@ -264,11 +298,13 @@ impl SelfGpu {
             &self.walk_clip
         };
         let emote = emote_pair(self_state, &self.emote_clips);
+        let die = die_pair(self_state, &self.die_clip);
         let (present_worlds, arm_kit) = mesh_unlit::pose_character_kit(
             &self.parts,
             self_state,
             Some(loco),
             emote,
+            die,
             KitPose::Present,
         );
 
@@ -315,6 +351,7 @@ impl SelfGpu {
             &self.parts,
             self_state,
             Some(&self.walk_clip),
+            None,
             None,
             KitPose::Look,
         );
@@ -372,10 +409,20 @@ fn look_origin_world(parts: &[CharPart], worlds: &[Mat4], k2w: Mat4) -> Vec3 {
 }
 
 fn emote_pair<'a>(self_state: &SelfState, clips: &'a [AnimClip]) -> Option<(&'a AnimClip, f32)> {
+    if !self_state.alive {
+        return None;
+    }
     let id = self_state.emote?;
     let _ = emote_clip_name(id)?;
     let clip = clips.get(id as usize)?;
     Some((clip, self_state.emote_age_s))
+}
+
+fn die_pair<'a>(self_state: &SelfState, die_clip: &'a AnimClip) -> Option<(&'a AnimClip, f32)> {
+    if self_state.alive {
+        return None;
+    }
+    Some((die_clip, self_state.die_age_s))
 }
 
 #[derive(Default)]

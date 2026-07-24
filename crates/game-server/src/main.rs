@@ -352,6 +352,24 @@ async fn handle_session(
                                 let guard = roster.lock().await;
                                 guard.relay_datagram(player_id, &relay);
                             }
+                            Ok(ClientToServer::ImpactHit { tick, hit }) => {
+                                let joined = {
+                                    let guard = roster.lock().await;
+                                    guard.contains(player_id)
+                                };
+                                if !joined {
+                                    continue;
+                                }
+                                // Claim-and-relay; server does not re-sim the shot (043).
+                                // Not echoed to firer → each present applies once.
+                                let relay = encode_s2c(&ServerToClient::PeerImpactHit {
+                                    tick,
+                                    id: player_id,
+                                    hit,
+                                })?;
+                                let guard = roster.lock().await;
+                                guard.relay_datagram(player_id, &relay);
+                            }
                             Ok(ClientToServer::Hello { .. }) => {}
                             Err(_) => {}
                         }
