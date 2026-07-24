@@ -1,4 +1,4 @@
-//! Weapon fire gates, modes, and projectile motion (038/042).
+//! Weapon fire gates, modes, and projectile motion (038/042/047).
 
 use glam::{Quat, Vec3};
 
@@ -7,6 +7,16 @@ use crate::weapons::{
     SPRINT_FIRE_BASE_S,
 };
 use crate::{ActiveWeapon, AmmoKind, SelfState, WeaponClass};
+
+// Kick fatigue (047): raw heat → weight^curve → multiplies settle_s.
+const KICK_FATIGUE_RISE: f32 = 0.26;
+const KICK_FATIGUE_RECOVER_S: f32 = 0.35;
+const KICK_FATIGUE_SETTLE_MULT: f32 = 40.0;
+const KICK_FATIGUE_CURVE: f32 = 8.0;
+
+fn kick_fatigue_weight(raw: f32) -> f32 {
+    raw.clamp(0.0, 1.0).powf(KICK_FATIGUE_CURVE)
+}
 
 /// One projectile in flight (anemic bag; motion rules live on [`ProjectileWorld`]).
 ///
@@ -102,6 +112,8 @@ pub struct FireState {
     rng: u32,
     kick: KickPose,
     kick_settle_s: f32,
+    /// Raw spray heat 0…1 (curved before it scales settle).
+    kick_fatigue: f32,
     sway: SwayState,
     flinch: KickPose,
     flinch_settle_s: f32,
@@ -129,6 +141,7 @@ impl FireState {
             rng: 0xC0FFEE42,
             kick: KickPose::default(),
             kick_settle_s: 0.08,
+            kick_fatigue: 0.0,
             sway: SwayState::new(0xA11_5A4E),
             flinch: KickPose::default(),
             flinch_settle_s: FLINCH_SETTLE_S,
@@ -157,6 +170,17 @@ impl FireState {
     /// Hit flinch only (no kick / sway).
     pub fn flinch(&self) -> KickPose {
         self.flinch
+    }
+
+    /// Curved fatigue weight 0…1 (scales kick settle; HUD).
+    pub fn kick_fatigue_weight(&self) -> f32 {
+        kick_fatigue_weight(self.kick_fatigue)
+    }
+
+    /// Effective kick settle_s this frame (base × fatigue scale).
+    pub fn kick_settle_eff_s(&self) -> f32 {
+        let w = kick_fatigue_weight(self.kick_fatigue);
+        self.kick_settle_s * (1.0 + w * (KICK_FATIGUE_SETTLE_MULT - 1.0))
     }
 
     /// Kick + full sway + flinch (shots and reticle).
@@ -269,11 +293,18 @@ impl FireState {
         self.ready_s = (self.ready_s - dt).max(0.0);
         self.sprint_fire_s = (self.sprint_fire_s - dt).max(0.0);
         self.cooldown_s = (self.cooldown_s - dt).max(0.0);
-        self.kick.settle(dt, self.kick_settle_s);
+
+        let string_active = fire_held || self.burst_left > 0;
+        if !string_active && self.kick_fatigue > 0.0 {
+            let recover = KICK_FATIGUE_RECOVER_S.max(1e-4);
+            self.kick_fatigue = (self.kick_fatigue - dt / recover).max(0.0);
+        }
+        self.kick.settle(dt, self.kick_settle_eff_s().max(1e-4));
         self.flinch.settle(dt, self.flinch_settle_s);
 
         if !self_state.alive {
             self.sway.clear();
+            self.kick_fatigue = 0.0;
             self.fire_held = false;
             self.prev_held = false;
             self.burst_left = 0;
@@ -286,6 +317,7 @@ impl FireState {
 
         let Some(letter) = letter else {
             self.sway.clear();
+            self.kick_fatigue = 0.0;
             self.fire_held = false;
             self.prev_held = false;
             self.burst_left = 0;
@@ -446,6 +478,7 @@ impl FireState {
         };
         self.kick.add_kick(def, yaw_sign);
         self.kick_settle_s = def.kick.settle_s.max(1e-4);
+        self.kick_fatigue = (self.kick_fatigue + KICK_FATIGUE_RISE).min(1.0);
 
         Some(Discharge {
             weapon: def.letter,
@@ -665,12 +698,6 @@ impl KickPose {
         self.pitch_rad += k.pitch_deg.to_radians();
         self.yaw_rad += k.yaw_deg.to_radians() * sign;
         self.back_m += k.back_m;
-        // Cap stack at ~2.5× one kick.
-        self.pitch_rad = self.pitch_rad.min(k.pitch_deg.to_radians() * 2.5);
-        self.yaw_rad = self
-            .yaw_rad
-            .clamp(-k.yaw_deg.to_radians() * 2.5, k.yaw_deg.to_radians() * 2.5);
-        self.back_m = self.back_m.min(k.back_m * 2.5);
     }
 
     pub fn settle(&mut self, dt: f32, settle_s: f32) {
@@ -1000,7 +1027,6 @@ mod tests {
         assert_eq!(d.len(), 1);
         let pitch_after = fire.kick().pitch_rad;
         assert!(pitch_after > 0.0, "kick pitch={pitch_after}");
-        // Settle over many frames without firing.
         for _ in 0..120 {
             let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, eye(), &m);
         }
@@ -1008,6 +1034,59 @@ mod tests {
             fire.kick().pitch_rad < pitch_after * 0.05,
             "kick did not settle: {}",
             fire.kick().pitch_rad
+        );
+    }
+
+    #[test]
+    fn full_auto_kick_stacks_climb() {
+        let mut fire = FireState::new();
+        let mut s = armed_self();
+        s.set_primary(Some(b'c')).unwrap();
+        fire.pay_ready(b'c');
+        fire.ready_s = 0.0;
+        let m = muzzles();
+        let one = weapon_def(b'c').unwrap().kick.pitch_deg.to_radians();
+        let mut shots = 0u32;
+        let mut peak = 0.0f32;
+        let dt = 1.0 / 60.0;
+        for _ in 0..45 {
+            let d = fire.tick(dt, &mut s, true, 0, eye(), &m);
+            shots += d.len() as u32;
+            peak = peak.max(fire.kick().pitch_rad);
+        }
+        assert!(shots >= 4, "expected several SMG shots, got {shots}");
+        assert!(
+            peak > one * 1.5,
+            "kick should climb under spray: peak={peak} one={one} shots={shots}"
+        );
+    }
+
+    #[test]
+    fn kick_fatigue_rises_on_fire_and_recovers() {
+        let mut fire = FireState::new();
+        let mut s = armed_self();
+        s.set_primary(Some(b'c')).unwrap();
+        fire.pay_ready(b'c');
+        fire.ready_s = 0.0;
+        let m = muzzles();
+        let dt = 1.0 / 60.0;
+        assert_eq!(fire.kick_fatigue_weight(), 0.0);
+        for _ in 0..30 {
+            let _ = fire.tick(dt, &mut s, true, 0, eye(), &m);
+        }
+        assert!(
+            fire.kick_fatigue > 0.5,
+            "expected raw heat under spray, got {}",
+            fire.kick_fatigue
+        );
+        for _ in 0..60 {
+            let _ = fire.tick(dt, &mut s, false, 0, eye(), &m);
+        }
+        assert!(
+            fire.kick_fatigue < 0.15 && fire.kick_fatigue_weight() < 0.05,
+            "fatigue should recover after string, raw={} w={}",
+            fire.kick_fatigue,
+            fire.kick_fatigue_weight()
         );
     }
 

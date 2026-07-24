@@ -1,7 +1,8 @@
-//! Baked weapon fire table (038/040/041/042).
+//! Baked weapon fire table (038/040/041/042/047).
 //!
 //! Blaster owns initial velocity and which ammo kind it fires (via class → ammo).
 //! Ammo mass lives on [`crate::AmmoKind`] / [`crate::ammo_def`], not here.
+//! Kick dirt + base settle live here; fatigue scaling of settle is in `fire` (047).
 
 use crate::{ammo_for_class, AmmoKind, WeaponClass};
 
@@ -97,40 +98,40 @@ pub const PROJECTILE_GRAVITY: glam::Vec3 = glam::Vec3::new(0.0, -9.81, 0.0);
 fn kick_for(class: WeaponClass) -> WeaponKick {
     match class {
         WeaponClass::Pistol => WeaponKick {
-            pitch_deg: 0.4,
-            yaw_deg: 0.1,
-            back_m: 0.008,
-            settle_s: 0.04,
+            pitch_deg: 0.55,
+            yaw_deg: 0.14,
+            back_m: 0.009,
+            settle_s: 0.05,
         },
         WeaponClass::Smg => WeaponKick {
-            pitch_deg: 0.25,
-            yaw_deg: 0.08,
-            back_m: 0.006,
-            settle_s: 0.03,
+            pitch_deg: 0.50,
+            yaw_deg: 0.14,
+            back_m: 0.007,
+            settle_s: 0.055,
         },
         WeaponClass::AssaultRifle => WeaponKick {
-            pitch_deg: 0.35,
-            yaw_deg: 0.1,
+            pitch_deg: 0.55,
+            yaw_deg: 0.14,
             back_m: 0.010,
-            settle_s: 0.045,
+            settle_s: 0.055,
         },
         WeaponClass::SniperRifle => WeaponKick {
-            pitch_deg: 0.7,
-            yaw_deg: 0.12,
-            back_m: 0.014,
-            settle_s: 0.07,
+            pitch_deg: 0.85,
+            yaw_deg: 0.16,
+            back_m: 0.013,
+            settle_s: 0.055,
         },
         WeaponClass::Shotgun => WeaponKick {
-            pitch_deg: 0.9,
-            yaw_deg: 0.2,
+            pitch_deg: 1.05,
+            yaw_deg: 0.26,
             back_m: 0.018,
-            settle_s: 0.06,
+            settle_s: 0.055,
         },
         WeaponClass::Launcher => WeaponKick {
-            pitch_deg: 1.1,
-            yaw_deg: 0.15,
+            pitch_deg: 1.15,
+            yaw_deg: 0.18,
             back_m: 0.020,
-            settle_s: 0.08,
+            settle_s: 0.055,
         },
     }
 }
@@ -225,10 +226,10 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         pellets: 1,
         burst_count: 0,
         kick: WeaponKick {
-            pitch_deg: 1.1,
-            yaw_deg: 0.15,
+            pitch_deg: 1.15,
+            yaw_deg: 0.18,
             back_m: 0.020,
-            settle_s: 0.08,
+            settle_s: 0.055,
         },
     },
     // b pistol
@@ -245,10 +246,10 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         pellets: 1,
         burst_count: 0,
         kick: WeaponKick {
-            pitch_deg: 0.4,
-            yaw_deg: 0.1,
-            back_m: 0.008,
-            settle_s: 0.04,
+            pitch_deg: 0.55,
+            yaw_deg: 0.14,
+            back_m: 0.009,
+            settle_s: 0.05,
         },
     },
     // c smg
@@ -265,10 +266,10 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         pellets: 1,
         burst_count: 0,
         kick: WeaponKick {
-            pitch_deg: 0.25,
-            yaw_deg: 0.08,
-            back_m: 0.006,
-            settle_s: 0.03,
+            pitch_deg: 0.50,
+            yaw_deg: 0.14,
+            back_m: 0.007,
+            settle_s: 0.055,
         },
     },
     // d AR
@@ -285,10 +286,10 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         pellets: 1,
         burst_count: 3,
         kick: WeaponKick {
-            pitch_deg: 0.35,
-            yaw_deg: 0.1,
+            pitch_deg: 0.55,
+            yaw_deg: 0.14,
             back_m: 0.010,
-            settle_s: 0.045,
+            settle_s: 0.055,
         },
     },
     // e sniper
@@ -305,10 +306,10 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         pellets: 1,
         burst_count: 0,
         kick: WeaponKick {
-            pitch_deg: 0.7,
-            yaw_deg: 0.12,
-            back_m: 0.014,
-            settle_s: 0.07,
+            pitch_deg: 0.85,
+            yaw_deg: 0.16,
+            back_m: 0.013,
+            settle_s: 0.055,
         },
     },
     // f sniper
@@ -325,10 +326,10 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         pellets: 1,
         burst_count: 0,
         kick: WeaponKick {
-            pitch_deg: 0.7,
-            yaw_deg: 0.12,
-            back_m: 0.014,
-            settle_s: 0.07,
+            pitch_deg: 0.85,
+            yaw_deg: 0.16,
+            back_m: 0.013,
+            settle_s: 0.055,
         },
     },
     // g smg
@@ -345,10 +346,10 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         pellets: 1,
         burst_count: 0,
         kick: WeaponKick {
-            pitch_deg: 0.25,
-            yaw_deg: 0.08,
-            back_m: 0.006,
-            settle_s: 0.03,
+            pitch_deg: 0.50,
+            yaw_deg: 0.14,
+            back_m: 0.007,
+            settle_s: 0.055,
         },
     },
     // h smg
@@ -365,10 +366,10 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         pellets: 1,
         burst_count: 0,
         kick: WeaponKick {
-            pitch_deg: 0.25,
-            yaw_deg: 0.08,
-            back_m: 0.006,
-            settle_s: 0.03,
+            pitch_deg: 0.50,
+            yaw_deg: 0.14,
+            back_m: 0.007,
+            settle_s: 0.055,
         },
     },
     // i pistol alternate
@@ -385,10 +386,10 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         pellets: 1,
         burst_count: 0,
         kick: WeaponKick {
-            pitch_deg: 0.4,
-            yaw_deg: 0.1,
-            back_m: 0.008,
-            settle_s: 0.04,
+            pitch_deg: 0.55,
+            yaw_deg: 0.14,
+            back_m: 0.009,
+            settle_s: 0.05,
         },
     },
     // j shotgun all(2) × 3
@@ -405,10 +406,10 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         pellets: 3,
         burst_count: 0,
         kick: WeaponKick {
-            pitch_deg: 0.9,
-            yaw_deg: 0.2,
+            pitch_deg: 1.05,
+            yaw_deg: 0.26,
             back_m: 0.018,
-            settle_s: 0.06,
+            settle_s: 0.055,
         },
     },
     // k shotgun single × 6
@@ -425,10 +426,10 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         pellets: 6,
         burst_count: 0,
         kick: WeaponKick {
-            pitch_deg: 0.9,
-            yaw_deg: 0.2,
+            pitch_deg: 1.05,
+            yaw_deg: 0.26,
             back_m: 0.018,
-            settle_s: 0.06,
+            settle_s: 0.055,
         },
     },
     // l smg alternate
@@ -445,10 +446,10 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         pellets: 1,
         burst_count: 0,
         kick: WeaponKick {
-            pitch_deg: 0.25,
-            yaw_deg: 0.08,
-            back_m: 0.006,
-            settle_s: 0.03,
+            pitch_deg: 0.50,
+            yaw_deg: 0.14,
+            back_m: 0.007,
+            settle_s: 0.055,
         },
     },
     // m smg
@@ -465,10 +466,10 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         pellets: 1,
         burst_count: 0,
         kick: WeaponKick {
-            pitch_deg: 0.25,
-            yaw_deg: 0.08,
-            back_m: 0.006,
-            settle_s: 0.03,
+            pitch_deg: 0.50,
+            yaw_deg: 0.14,
+            back_m: 0.007,
+            settle_s: 0.055,
         },
     },
     // n AR
@@ -485,10 +486,10 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         pellets: 1,
         burst_count: 3,
         kick: WeaponKick {
-            pitch_deg: 0.35,
-            yaw_deg: 0.1,
+            pitch_deg: 0.55,
+            yaw_deg: 0.14,
             back_m: 0.010,
-            settle_s: 0.045,
+            settle_s: 0.055,
         },
     },
     // o shotgun all(4) × 2
@@ -505,10 +506,10 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         pellets: 2,
         burst_count: 0,
         kick: WeaponKick {
-            pitch_deg: 0.9,
-            yaw_deg: 0.2,
+            pitch_deg: 1.05,
+            yaw_deg: 0.26,
             back_m: 0.018,
-            settle_s: 0.06,
+            settle_s: 0.055,
         },
     },
     // p smg
@@ -525,10 +526,10 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         pellets: 1,
         burst_count: 0,
         kick: WeaponKick {
-            pitch_deg: 0.25,
-            yaw_deg: 0.08,
-            back_m: 0.006,
-            settle_s: 0.03,
+            pitch_deg: 0.50,
+            yaw_deg: 0.14,
+            back_m: 0.007,
+            settle_s: 0.055,
         },
     },
     // q AR alternate
@@ -545,10 +546,10 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         pellets: 1,
         burst_count: 3,
         kick: WeaponKick {
-            pitch_deg: 0.35,
-            yaw_deg: 0.1,
+            pitch_deg: 0.55,
+            yaw_deg: 0.14,
             back_m: 0.010,
-            settle_s: 0.045,
+            settle_s: 0.055,
         },
     },
     // r AR
@@ -565,10 +566,10 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         pellets: 1,
         burst_count: 3,
         kick: WeaponKick {
-            pitch_deg: 0.35,
-            yaw_deg: 0.1,
+            pitch_deg: 0.55,
+            yaw_deg: 0.14,
             back_m: 0.010,
-            settle_s: 0.045,
+            settle_s: 0.055,
         },
     },
 ];

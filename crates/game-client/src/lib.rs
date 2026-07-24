@@ -1225,15 +1225,33 @@ impl ClientInner {
             let screen_h = height as f32 / ppp;
             let raw = self.debug.take_raw_input(screen_w, screen_h, time);
 
-            let hud_line = if self.debug.net_hud() {
-                let mut line = format!("fps {:.0}", self.fps_ema);
-                if let Some(tick) = self.mp.hud_tick_field() {
-                    line.push_str("  ");
-                    line.push_str(&tick);
+            let hud_line = {
+                let net = self.debug.net_hud();
+                let kick = self.debug.kick_hud();
+                if !net && !kick {
+                    None
+                } else {
+                    let mut parts: Vec<String> = Vec::new();
+                    if net {
+                        let mut line = format!("fps {:.0}", self.fps_ema);
+                        if let Some(tick) = self.mp.hud_tick_field() {
+                            line.push_str("  ");
+                            line.push_str(&tick);
+                        }
+                        parts.push(line);
+                    }
+                    if kick {
+                        let k = self.fire.kick();
+                        parts.push(format!(
+                            "fat {:.2}  kP {:.2}°  kY {:.2}°  set {:.0}ms",
+                            self.fire.kick_fatigue_weight(),
+                            k.pitch_rad.to_degrees(),
+                            k.yaw_rad.to_degrees(),
+                            self.fire.kick_settle_eff_s() * 1000.0,
+                        ));
+                    }
+                    Some(parts.join("  |  "))
                 }
-                Some(line)
-            } else {
-                None
             };
             let full = self.debug.shell.run_frame(raw, ppp, hud_line.as_deref());
             if let Some(cmd) = self.debug.shell.take_pending_command() {

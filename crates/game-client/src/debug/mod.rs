@@ -116,6 +116,10 @@ impl DebugTools {
         self.registry.get_bool("hud.net").unwrap_or(true)
     }
 
+    pub fn kick_hud(&self) -> bool {
+        self.registry.get_bool("hud.kick").unwrap_or(true)
+    }
+
     pub fn draw_tracers(&self) -> bool {
         self.registry.get_bool("draw.tracers").unwrap_or(false)
     }

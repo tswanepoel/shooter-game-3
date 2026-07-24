@@ -54,6 +54,13 @@ impl DebugRegistry {
             },
         );
         self.cvars.insert(
+            "hud.kick",
+            CVar {
+                value: CVarValue::Bool(true),
+                help: "client: kick fatigue / pitch on top banner (047)",
+            },
+        );
+        self.cvars.insert(
             "draw.tracers",
             CVar {
                 value: CVarValue::Bool(false),
@@ -85,6 +92,7 @@ impl DebugRegistry {
             "flycam" | "fly" => self.cmd_flycam(&args),
             "lineup" => self.cmd_lineup(&args),
             "nethud" => self.cmd_nethud(&args),
+            "kickhud" => self.cmd_kickhud(&args),
             "remount" => {
                 self.set_bool("cam.fly", false);
                 "cam.fly = 0 (remount)".into()
@@ -125,6 +133,7 @@ impl DebugRegistry {
             "  flycam|fly [on|off|toggle]  debug flycam (F8)".into(),
             "  lineup [on|off|toggle]  blaster lineup (armed characters)".into(),
             "  nethud [on|off|toggle]  top FPS / tick banner".into(),
+            "  kickhud [on|off|toggle]  kick fatigue / pitch (047)".into(),
             "  remount           leave flycam, restore self view".into(),
             "  screenshot|shot   capture frame (F9)".into(),
             "  mp join|leave|status  WebTransport shared tick + remotes".into(),
@@ -160,6 +169,10 @@ impl DebugRegistry {
 
     fn cmd_nethud(&mut self, args: &[&str]) -> String {
         self.cmd_bool_toggle("hud.net", args, "nethud")
+    }
+
+    fn cmd_kickhud(&mut self, args: &[&str]) -> String {
+        self.cmd_bool_toggle("hud.kick", args, "kickhud")
     }
 
     fn cmd_bool_toggle(&mut self, cvar: &str, args: &[&str], usage_name: &str) -> String {
@@ -283,5 +296,18 @@ mod tests {
         assert_eq!(r.get_bool("hud.net"), Some(true));
         assert!(r.execute("help").contains("nethud"));
         assert!(r.execute("help").contains("hud.net"));
+    }
+
+    #[test]
+    fn kickhud_cvar_commands() {
+        let mut r = DebugRegistry::new();
+        r.register_defaults();
+        assert_eq!(r.get_bool("hud.kick"), Some(true));
+        assert!(r.execute("kickhud off").contains("0"));
+        assert_eq!(r.get_bool("hud.kick"), Some(false));
+        assert!(r.execute("kickhud").contains("1"));
+        assert_eq!(r.get_bool("hud.kick"), Some(true));
+        assert!(r.execute("help").contains("kickhud"));
+        assert!(r.execute("help").contains("hud.kick"));
     }
 }
