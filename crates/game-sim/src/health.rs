@@ -1,4 +1,4 @@
-//! Health and impact damage (043).
+//! Health and impact damage (043 / 046).
 
 use glam::Vec3;
 
@@ -16,10 +16,77 @@ pub const IMPACT_DAMAGE_PER_MOMENTUM: f32 = 3.5;
 /// Kenney `die` clip length; hold last frame after.
 pub const DIE_DURATION_S: f32 = 0.33;
 
-pub fn impact_damage(ammo: AmmoKind, speed_m_s: f32) -> f32 {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HitBodyPart {
+    Head,
+    Torso,
+    ArmLeft,
+    ArmRight,
+    LegLeft,
+    LegRight,
+}
+
+impl HitBodyPart {
+    pub fn scale(self) -> f32 {
+        match self {
+            Self::Head => 2.0,
+            Self::Torso => 1.0,
+            Self::ArmLeft | Self::ArmRight => 0.85,
+            Self::LegLeft | Self::LegRight => 0.75,
+        }
+    }
+
+    pub fn kit_name(self) -> &'static str {
+        match self {
+            Self::Head => "head",
+            Self::Torso => "torso",
+            Self::ArmLeft => "arm-left",
+            Self::ArmRight => "arm-right",
+            Self::LegLeft => "leg-left",
+            Self::LegRight => "leg-right",
+        }
+    }
+
+    pub fn from_kit_name(name: &str) -> Option<Self> {
+        match name {
+            "head" => Some(Self::Head),
+            "torso" => Some(Self::Torso),
+            "arm-left" => Some(Self::ArmLeft),
+            "arm-right" => Some(Self::ArmRight),
+            "leg-left" => Some(Self::LegLeft),
+            "leg-right" => Some(Self::LegRight),
+            _ => None,
+        }
+    }
+
+    pub fn to_wire(self) -> u8 {
+        match self {
+            Self::Head => 0,
+            Self::Torso => 1,
+            Self::ArmLeft => 2,
+            Self::ArmRight => 3,
+            Self::LegLeft => 4,
+            Self::LegRight => 5,
+        }
+    }
+
+    pub fn from_wire(v: u8) -> Option<Self> {
+        match v {
+            0 => Some(Self::Head),
+            1 => Some(Self::Torso),
+            2 => Some(Self::ArmLeft),
+            3 => Some(Self::ArmRight),
+            4 => Some(Self::LegLeft),
+            5 => Some(Self::LegRight),
+            _ => None,
+        }
+    }
+}
+
+pub fn impact_damage(ammo: AmmoKind, speed_m_s: f32, part: HitBodyPart) -> f32 {
     let mass = ammo_def(ammo).mass;
     let speed = speed_m_s.max(0.0);
-    mass * speed * IMPACT_DAMAGE_PER_MOMENTUM
+    mass * speed * IMPACT_DAMAGE_PER_MOMENTUM * part.scale()
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -47,11 +114,11 @@ impl PlayerHealth {
     }
 
     /// Returns damage applied (0 if already dead).
-    pub fn apply_impact(&mut self, ammo: AmmoKind, speed_m_s: f32) -> f32 {
+    pub fn apply_impact(&mut self, ammo: AmmoKind, speed_m_s: f32, part: HitBodyPart) -> f32 {
         if !self.alive {
             return 0.0;
         }
-        let damage = impact_damage(ammo, speed_m_s);
+        let damage = impact_damage(ammo, speed_m_s, part);
         if damage <= 0.0 {
             return 0.0;
         }
@@ -122,14 +189,15 @@ pub struct ImpactHit {
     pub ammo: AmmoKind,
     pub speed: f32,
     pub position: Vec3,
+    pub part: HitBodyPart,
 }
 
 impl ProjectileWorld {
-    /// Step motion; for own projectiles call `hit_test(from, to)` → `(target_id, contact)`.
-    /// Does not apply health. Skips `owner != firer_id` (peer VFX).
+    /// Step own projectiles; `hit_test(from, to)` → `(target_id, contact, part)`.
+    /// No health apply. Peer VFX projectiles (`owner != firer_id`) are skipped.
     pub fn tick_hits_with<F>(&mut self, dt: f32, firer_id: u32, mut hit_test: F) -> Vec<ImpactHit>
     where
-        F: FnMut(Vec3, Vec3) -> Option<(u32, Vec3)>,
+        F: FnMut(Vec3, Vec3) -> Option<(u32, Vec3, HitBodyPart)>,
     {
         let dt = dt.max(0.0);
         let mut hits = Vec::new();
@@ -144,7 +212,7 @@ impl ProjectileWorld {
 
             let mut hit_this = false;
             if p.owner == firer_id {
-                if let Some((target_id, contact)) = hit_test(from, to) {
+                if let Some((target_id, contact, part)) = hit_test(from, to) {
                     if target_id != firer_id {
                         hits.push(ImpactHit {
                             target_id,
@@ -153,6 +221,7 @@ impl ProjectileWorld {
                             ammo: p.ammo,
                             speed,
                             position: contact,
+                            part,
                         });
                         hit_this = true;
                     }
@@ -196,7 +265,7 @@ mod tests {
     }
 
     /// Stand-in for client mesh collide: hit target 2 if segment crosses z ∈ [4, 6] at y≈0.9.
-    fn mock_mesh_hit(from: Vec3, to: Vec3) -> Option<(u32, Vec3)> {
+    fn mock_mesh_hit(from: Vec3, to: Vec3) -> Option<(u32, Vec3, HitBodyPart)> {
         let dz = to.z - from.z;
         if dz.abs() < 1e-8 {
             return None;
@@ -209,24 +278,55 @@ mod tests {
         if (p.y - 0.9).abs() > 0.5 || p.x.abs() > 0.5 {
             return None;
         }
-        Some((2, p))
+        Some((2, p, HitBodyPart::Torso))
     }
 
     #[test]
     fn impact_monotonic_in_speed_and_mass() {
-        let slow = impact_damage(AmmoKind::LightFoam, 100.0);
-        let fast = impact_damage(AmmoKind::LightFoam, 400.0);
+        let slow = impact_damage(AmmoKind::LightFoam, 100.0, HitBodyPart::Torso);
+        let fast = impact_damage(AmmoKind::LightFoam, 400.0, HitBodyPart::Torso);
         assert!(fast > slow);
         assert!(slow > 0.0);
 
-        let light = impact_damage(AmmoKind::LightFoam, 400.0);
-        let thick = impact_damage(AmmoKind::ThickFoam, 400.0);
-        let grenade = impact_damage(AmmoKind::Grenade, 400.0);
+        let light = impact_damage(AmmoKind::LightFoam, 400.0, HitBodyPart::Torso);
+        let thick = impact_damage(AmmoKind::ThickFoam, 400.0, HitBodyPart::Torso);
+        let grenade = impact_damage(AmmoKind::Grenade, 400.0, HitBodyPart::Torso);
         assert!(thick > light);
         assert!(grenade > thick);
         let m_l = ammo_def(AmmoKind::LightFoam).mass;
         let m_t = ammo_def(AmmoKind::ThickFoam).mass;
         assert!((thick / light - m_t / m_l).abs() < 1e-4);
+    }
+
+    #[test]
+    fn part_scale_orders_damage() {
+        let ammo = AmmoKind::LightFoam;
+        let speed = 400.0;
+        let head = impact_damage(ammo, speed, HitBodyPart::Head);
+        let torso = impact_damage(ammo, speed, HitBodyPart::Torso);
+        let arm = impact_damage(ammo, speed, HitBodyPart::ArmLeft);
+        let leg = impact_damage(ammo, speed, HitBodyPart::LegRight);
+        assert!((head / torso - 2.0).abs() < 1e-4);
+        assert!((arm / torso - 0.85).abs() < 1e-4);
+        assert!((leg / torso - 0.75).abs() < 1e-4);
+        assert!(head > torso && torso > arm && arm > leg);
+    }
+
+    #[test]
+    fn kit_name_and_wire_roundtrip() {
+        for p in [
+            HitBodyPart::Head,
+            HitBodyPart::Torso,
+            HitBodyPart::ArmLeft,
+            HitBodyPart::ArmRight,
+            HitBodyPart::LegLeft,
+            HitBodyPart::LegRight,
+        ] {
+            assert_eq!(HitBodyPart::from_kit_name(p.kit_name()), Some(p));
+            assert_eq!(HitBodyPart::from_wire(p.to_wire()), Some(p));
+        }
+        assert_eq!(HitBodyPart::from_kit_name("root"), None);
+        assert_eq!(HitBodyPart::from_wire(9), None);
     }
 
     #[test]
@@ -243,6 +343,7 @@ mod tests {
         assert_eq!(hits[0].target_id, 2);
         assert_eq!(hits[0].firer_id, 1);
         assert_eq!(hits[0].ammo, AmmoKind::LightFoam);
+        assert_eq!(hits[0].part, HitBodyPart::Torso);
         assert!(hits[0].speed > 0.0);
         assert!(world.projectiles.is_empty(), "spent on hit");
     }
@@ -272,7 +373,7 @@ mod tests {
         ));
         // hit_test returns firer id 2 → rejected.
         let hits = world.tick_hits_with(0.1, 2, |from, to| {
-            mock_mesh_hit(from, to).map(|(_, p)| (2, p))
+            mock_mesh_hit(from, to).map(|(_, p, part)| (2, p, part))
         });
         assert!(hits.is_empty());
         assert_eq!(world.projectiles.len(), 1);
@@ -295,21 +396,31 @@ mod tests {
     #[test]
     fn apply_impact_drops_health_once() {
         let mut h = PlayerHealth::full();
-        let d0 = h.apply_impact(AmmoKind::LightFoam, 400.0);
+        let d0 = h.apply_impact(AmmoKind::LightFoam, 400.0, HitBodyPart::Torso);
         assert!(d0 > 0.0);
         assert!(h.health < HEALTH_MAX);
         let mid = h.health;
-        let d1 = h.apply_impact(AmmoKind::LightFoam, 400.0);
+        let d1 = h.apply_impact(AmmoKind::LightFoam, 400.0, HitBodyPart::Torso);
         assert!(d1 > 0.0);
         assert!(h.health < mid);
+    }
+
+    #[test]
+    fn head_impact_hurts_more_than_leg() {
+        let mut head = PlayerHealth::full();
+        let mut leg = PlayerHealth::full();
+        let dh = head.apply_impact(AmmoKind::LightFoam, 400.0, HitBodyPart::Head);
+        let dl = leg.apply_impact(AmmoKind::LightFoam, 400.0, HitBodyPart::LegLeft);
+        assert!(dh > dl);
+        assert!(head.health < leg.health);
     }
 
     #[test]
     fn slower_impact_less_damage_via_translate() {
         let mut fast = PlayerHealth::full();
         let mut slow = PlayerHealth::full();
-        let df = fast.apply_impact(AmmoKind::LightFoam, 400.0);
-        let ds = slow.apply_impact(AmmoKind::LightFoam, 100.0);
+        let df = fast.apply_impact(AmmoKind::LightFoam, 400.0, HitBodyPart::Torso);
+        let ds = slow.apply_impact(AmmoKind::LightFoam, 100.0, HitBodyPart::Torso);
         assert!(df > ds);
     }
 
@@ -317,14 +428,15 @@ mod tests {
     fn heavier_ammo_hurts_more_at_same_speed() {
         let speed = 200.0;
         assert!(
-            impact_damage(AmmoKind::ThickFoam, speed) > impact_damage(AmmoKind::LightFoam, speed)
+            impact_damage(AmmoKind::ThickFoam, speed, HitBodyPart::Torso)
+                > impact_damage(AmmoKind::LightFoam, speed, HitBodyPart::Torso)
         );
     }
 
     #[test]
     fn regen_after_delay_and_reset_on_hit() {
         let mut h = PlayerHealth::full();
-        h.apply_impact(AmmoKind::LightFoam, 400.0);
+        h.apply_impact(AmmoKind::LightFoam, 400.0, HitBodyPart::Torso);
         let mid = h.health;
         h.tick_regen(HEALTH_REGEN_DELAY_S * 0.5);
         assert!((h.health - mid).abs() < 1e-4);
@@ -332,7 +444,7 @@ mod tests {
         h.tick_regen(1.0);
         assert!(h.health > mid);
         let before = h.health;
-        h.apply_impact(AmmoKind::LightFoam, 100.0);
+        h.apply_impact(AmmoKind::LightFoam, 100.0, HitBodyPart::Torso);
         assert!(h.health < before);
         assert!((h.regen_block_s - HEALTH_REGEN_DELAY_S).abs() < 1e-4);
     }
@@ -341,7 +453,7 @@ mod tests {
     fn zero_health_dead_no_respawn() {
         let mut h = PlayerHealth::full();
         while h.alive {
-            h.apply_impact(AmmoKind::Grenade, 200.0);
+            h.apply_impact(AmmoKind::Grenade, 200.0, HitBodyPart::Torso);
         }
         assert!(!h.alive);
         assert_eq!(h.health, 0.0);
@@ -351,16 +463,19 @@ mod tests {
         h.tick_regen(100.0);
         assert!(!h.alive);
         assert!(h.die_age_s > DIE_DURATION_S);
-        assert_eq!(h.apply_impact(AmmoKind::LightFoam, 400.0), 0.0);
+        assert_eq!(
+            h.apply_impact(AmmoKind::LightFoam, 400.0, HitBodyPart::Head),
+            0.0
+        );
     }
 
     #[test]
     fn write_to_self_kills_living_actions() {
         let mut s = SelfState::default_loadout();
         let mut h = PlayerHealth::full();
-        h.apply_impact(AmmoKind::Grenade, 500.0);
+        h.apply_impact(AmmoKind::Grenade, 500.0, HitBodyPart::Torso);
         while h.alive {
-            h.apply_impact(AmmoKind::Grenade, 500.0);
+            h.apply_impact(AmmoKind::Grenade, 500.0, HitBodyPart::Torso);
         }
         h.write_to_self(&mut s);
         assert!(!s.alive);

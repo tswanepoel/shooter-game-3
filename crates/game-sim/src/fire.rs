@@ -1110,14 +1110,18 @@ mod tests {
         fire.pay_ready(b'b');
         fire.ready_s = 0.0;
         assert_eq!(fire.flinch().pitch_rad, 0.0);
-        let dmg = crate::impact_damage(AmmoKind::LightFoam, 400.0);
+        let dmg = crate::impact_damage(AmmoKind::LightFoam, 400.0, crate::HitBodyPart::Torso);
         assert!(dmg > 0.0);
         fire.add_flinch(dmg);
         let pitch = fire.flinch().pitch_rad;
         assert!(pitch > 0.0, "flinch pitch={pitch}");
         // Stronger impact → stronger flinch (within cap).
         let mut fire2 = FireState::new();
-        fire2.add_flinch(crate::impact_damage(AmmoKind::Grenade, 400.0));
+        fire2.add_flinch(crate::impact_damage(
+            AmmoKind::Grenade,
+            400.0,
+            crate::HitBodyPart::Torso,
+        ));
         assert!(fire2.flinch().pitch_rad > pitch);
         // Zero damage: no flinch.
         let mut fire0 = FireState::new();
@@ -1141,7 +1145,11 @@ mod tests {
         s.set_primary(Some(b'b')).unwrap();
         fire.pay_ready(b'b');
         fire.ready_s = 0.0;
-        fire.add_flinch(crate::impact_damage(AmmoKind::LightFoam, 400.0));
+        fire.add_flinch(crate::impact_damage(
+            AmmoKind::LightFoam,
+            400.0,
+            crate::HitBodyPart::Torso,
+        ));
         // Hold flinch; zero kick settle interference.
         fire.kick = KickPose::default();
         fire.kick_settle_s = 1000.0;

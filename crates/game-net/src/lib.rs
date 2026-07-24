@@ -68,16 +68,15 @@ pub struct NetProjectileSpawn {
     pub muzzle_index: u8,
 }
 
-/// Firer-claimed impact hit (043). Ammo kind wire: 0 light foam, 1 thick foam, 2 grenade.
-/// Peers translate ammo + speed → health; not a flat damage number.
+/// Firer-claimed impact. Ammo 0/1/2 = light/thick/grenade.
+/// Part 0…5 = head, torso, arm-left, arm-right, leg-left, leg-right.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NetImpactHit {
     pub projectile_id: u64,
     pub target: PlayerId,
-    /// 0 = light foam, 1 = thick foam, 2 = grenade.
     pub ammo: u8,
-    /// Speed at contact (m/s).
     pub speed: f32,
+    pub part: u8,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -333,6 +332,7 @@ mod tests {
             target: 2,
             ammo: 0,
             speed: 380.0,
+            part: 0,
         };
         let c2s = ClientToServer::ImpactHit {
             tick: 15,

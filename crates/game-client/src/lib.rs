@@ -27,7 +27,7 @@ use game_net::PlayerId;
 #[cfg(feature = "debug-tools")]
 use game_sim::equip_blaster_letter;
 use game_sim::{
-    impact_damage, FireState, PlayerHealth, ProjectileWorld, SelfState, CAMERA_FAR_M,
+    impact_damage, FireState, HitBodyPart, PlayerHealth, ProjectileWorld, SelfState, CAMERA_FAR_M,
     CAMERA_NEAR_M, CAMERA_VERTICAL_FOV_RAD, DEBUG_GRID_HALF_EXTENT_M, GRID_MAJOR_EVERY,
     GRID_MINOR_SPACING_M,
 };
@@ -555,12 +555,12 @@ fn build_debug_grid() -> Vec<Vertex> {
     vertices
 }
 
-/// Apply impact health in this present. Returns damage applied to **local** self
-/// (for flinch 045); remotes / no-ops return 0.
+/// Apply impact in this present. Returns damage applied to local self (0 otherwise).
 fn apply_impact_in_present(
     target: PlayerId,
     ammo: game_sim::AmmoKind,
     speed: f32,
+    part: HitBodyPart,
     local_id: Option<PlayerId>,
     self_state: &mut SelfState,
     health_by_id: &mut HashMap<PlayerId, PlayerHealth>,
@@ -570,7 +570,7 @@ fn apply_impact_in_present(
             health_by_id.insert(target, PlayerHealth::read_from_self(self_state));
             return 0.0;
         }
-        let dmg = impact_damage(ammo, speed);
+        let dmg = impact_damage(ammo, speed, part);
         if dmg > 0.0 {
             self_state.apply_damage(dmg);
         }
@@ -580,7 +580,7 @@ fn apply_impact_in_present(
         let entry = health_by_id
             .entry(target)
             .or_insert_with(PlayerHealth::full);
-        entry.apply_impact(ammo, speed);
+        entry.apply_impact(ammo, speed, part);
         0.0
     }
 }
@@ -932,16 +932,19 @@ impl ClientInner {
             let remote_present = &self.remote_present;
             let states = &remote_hit_states;
             self.projectiles.tick_hits_with(dt, firer_id, |from, to| {
-                let mut best: Option<(f32, PlayerId, glam::Vec3)> = None;
+                let mut best: Option<(f32, PlayerId, glam::Vec3, HitBodyPart)> = None;
                 for (id, state) in states {
                     let Some(hit) = remote_present.trace_segment(*id, state, from, to) else {
                         continue;
                     };
-                    if best.map(|(bt, _, _)| hit.t < bt).unwrap_or(true) {
-                        best = Some((hit.t, *id, hit.position));
+                    let Some(part) = HitBodyPart::from_kit_name(&hit.part) else {
+                        continue;
+                    };
+                    if best.map(|(bt, _, _, _)| hit.t < bt).unwrap_or(true) {
+                        best = Some((hit.t, *id, hit.position, part));
                     }
                 }
-                best.map(|(_, id, p)| (id, p))
+                best.map(|(_, id, p, part)| (id, p, part))
             })
         };
         for h in &hits {
@@ -949,6 +952,7 @@ impl ClientInner {
                 h.target_id,
                 h.ammo,
                 h.speed,
+                h.part,
                 local_id,
                 &mut self.self_state,
                 &mut self.health_by_id,
@@ -969,10 +973,14 @@ impl ClientInner {
             let Some(ammo) = mp::ammo_kind_from_wire(batch.hit.ammo) else {
                 continue;
             };
+            let Some(part) = HitBodyPart::from_wire(batch.hit.part) else {
+                continue;
+            };
             let dmg = apply_impact_in_present(
                 batch.hit.target,
                 ammo,
                 batch.hit.speed,
+                part,
                 local_id,
                 &mut self.self_state,
                 &mut self.health_by_id,

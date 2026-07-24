@@ -7,7 +7,6 @@ use crate::mesh_unlit::{self, AnimClip, CharPart, KitPose, MeshVertex};
 
 #[derive(Debug, Clone)]
 pub struct PartHit {
-    #[allow(dead_code)]
     pub part: String,
     pub position: Vec3,
     /// Parametric t along `from → to` in [0, 1].

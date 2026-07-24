@@ -236,6 +236,7 @@ impl MpClient {
                 target: h.target_id,
                 ammo,
                 speed: h.speed,
+                part: h.part.to_wire(),
             };
             let Ok(payload) = encode_c2s(&ClientToServer::ImpactHit { tick, hit }) else {
                 continue;
