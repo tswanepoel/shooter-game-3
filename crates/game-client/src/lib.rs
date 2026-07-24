@@ -7,6 +7,7 @@ mod body_hit;
 mod debug;
 mod emote_wheel;
 mod fire_fx;
+mod hit_marker;
 mod input;
 #[cfg(feature = "debug-tools")]
 mod lineup;
@@ -39,6 +40,7 @@ use web_sys::HtmlCanvasElement;
 use debug::{DebugHost, DebugTools};
 use emote_wheel::{EmoteWheel, EmoteWheelGpu};
 use fire_fx::FireFx;
+use hit_marker::{HitMarker, HitMarkerGpu};
 use input::MoveInput;
 use input::{install_input_handlers, InputSession};
 #[cfg(feature = "debug-tools")]
@@ -126,6 +128,7 @@ struct Renderer {
     vertex_buffer: wgpu::Buffer,
     vertex_count: u32,
     reticle: ReticleGpu,
+    hit_marker_gpu: HitMarkerGpu,
     emote_wheel_gpu: EmoteWheelGpu,
     fire_fx: FireFx,
 }
@@ -291,6 +294,7 @@ impl Renderer {
         queue.write_buffer(&vertex_buffer, 0, bytemuck::cast_slice(&grid));
 
         let reticle = ReticleGpu::new(&device, config.format, MSAA_SAMPLE_COUNT);
+        let hit_marker_gpu = HitMarkerGpu::new(&device, config.format, MSAA_SAMPLE_COUNT);
         let emote_wheel_gpu = EmoteWheelGpu::new(&device, config.format, MSAA_SAMPLE_COUNT);
         let fire_fx = FireFx::new(&device, config.format, MSAA_SAMPLE_COUNT);
 
@@ -310,6 +314,7 @@ impl Renderer {
             vertex_buffer,
             vertex_count,
             reticle,
+            hit_marker_gpu,
             emote_wheel_gpu,
             fire_fx,
         })
@@ -353,6 +358,7 @@ impl Renderer {
         remotes: Option<&RemotePresent>,
         #[cfg(feature = "debug-tools")] lineup: Option<&LineupGpu>,
         draw_reticle: bool,
+        draw_hit_marker: bool,
         draw_emote_wheel: bool,
     ) -> Result<wgpu::SurfaceTexture, JsValue> {
         let frame = self
@@ -414,6 +420,10 @@ impl Renderer {
 
             if draw_reticle {
                 self.reticle.draw(&mut pass);
+            }
+
+            if draw_hit_marker {
+                self.hit_marker_gpu.draw(&mut pass);
             }
 
             self.fire_fx.draw(&mut pass);
@@ -575,6 +585,7 @@ pub(crate) struct ClientInner {
     pub(crate) session: InputSession,
     pub(crate) move_input: MoveInput,
     emote_wheel: EmoteWheel,
+    hit_marker: HitMarker,
     self_present: SelfPresentState,
     remote_present: RemotePresent,
     fire: FireState,
@@ -935,7 +946,11 @@ impl ClientInner {
         }
         if !hits.is_empty() {
             self.mp.claim_hits(&hits);
+            // One flash per claim batch; successive frames re-pulse (044).
+            self.hit_marker.pulse();
         }
+
+        self.hit_marker.tick(dt);
 
         for batch in self.mp.take_peer_hits() {
             let Some(ammo) = mp::ammo_kind_from_wire(batch.hit.ammo) else {
@@ -1119,6 +1134,18 @@ impl ClientInner {
         let draw_grid = true;
 
         let draw_reticle = reticle_pos.is_some() && !flycam;
+        let hit_alpha = self.hit_marker.alpha();
+        // Same world aim point as reticle / shots (look + kick + sway).
+        let draw_hit_marker = hit_alpha > 0.0 && reticle_pos.is_some() && !flycam;
+        self.renderer.hit_marker_gpu.update(
+            &self.renderer.queue,
+            view_proj,
+            if draw_hit_marker { reticle_pos } else { None },
+            cam_eye,
+            cam_fwd,
+            height as f32,
+            if draw_hit_marker { hit_alpha } else { 0.0 },
+        );
         let draw_emote_wheel = self.emote_wheel.is_open() && !flycam;
         let aspect = self.renderer.config.width as f32 / self.renderer.config.height.max(1) as f32;
         self.renderer.emote_wheel_gpu.update(
@@ -1146,6 +1173,7 @@ impl ClientInner {
                 remotes_ref,
                 lineup_ref,
                 draw_reticle,
+                draw_hit_marker,
                 draw_emote_wheel,
             )?
         };
@@ -1155,6 +1183,7 @@ impl ClientInner {
             self_ref,
             remotes_ref,
             draw_reticle,
+            draw_hit_marker,
             draw_emote_wheel,
         )?;
         let view = frame
@@ -1440,6 +1469,7 @@ impl GameClient {
             session: InputSession::new(),
             move_input: MoveInput::default(),
             emote_wheel,
+            hit_marker: HitMarker::new(),
             self_present: SelfPresentState::Idle,
             remote_present: RemotePresent::new(),
             fire: FireState::new(),
