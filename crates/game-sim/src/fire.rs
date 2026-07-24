@@ -1,4 +1,4 @@
-//! Weapon fire gates, modes, and projectile motion (038).
+//! Weapon fire gates, modes, and projectile motion (038/042).
 
 use glam::{Quat, Vec3};
 
@@ -6,15 +6,20 @@ use crate::weapons::{
     class_sway, weapon_def, FireMode, MuzzlePolicy, WeaponDef, WeaponSway, PROJECTILE_GRAVITY,
     SPRINT_FIRE_BASE_S,
 };
-use crate::{ActiveWeapon, SelfState, WeaponClass};
+use crate::{ActiveWeapon, AmmoKind, SelfState, WeaponClass};
 
 /// One projectile in flight (anemic bag; motion rules live on [`ProjectileWorld`]).
+///
+/// Carries ammo identity; mass is looked up via [`crate::ammo_def`], not stored here.
+/// Launch speed is set from the blaster's muzzle velocity at spawn.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Projectile {
     pub id: u64,
     /// Shooter id (0 in solo when not networked).
     pub owner: u32,
     pub weapon: u8,
+    /// Round kind (042). Shared fact for this projectile's life.
+    pub ammo: AmmoKind,
     pub origin: Vec3,
     pub position: Vec3,
     pub velocity: Vec3,
@@ -361,6 +366,7 @@ impl FireState {
                     id,
                     owner,
                     weapon: def.letter,
+                    ammo: def.ammo(),
                     origin,
                     position: origin,
                     velocity: dir * def.muzzle_vel,
@@ -733,6 +739,7 @@ mod tests {
             id: 1,
             owner: 0,
             weapon: b'b',
+            ammo: AmmoKind::LightFoam,
             origin: Vec3::ZERO,
             position: Vec3::ZERO,
             velocity: Vec3::new(0.0, 0.0, 100.0),
@@ -754,6 +761,7 @@ mod tests {
             id: 1,
             owner: 0,
             weapon: b'b',
+            ammo: AmmoKind::LightFoam,
             origin: Vec3::ZERO,
             position: Vec3::ZERO,
             velocity: Vec3::new(0.0, 0.0, 50.0),
@@ -763,6 +771,61 @@ mod tests {
         });
         world.tick(1.0); // travels 50m > 10
         assert!(world.projectiles.is_empty());
+    }
+
+    #[test]
+    fn spawn_carries_ammo_and_blaster_muzzle_vel() {
+        let mut fire = FireState::new();
+        let mut s = armed_self();
+        // Pistol b → light foam, muzzle_vel from letter.
+        s.set_primary(Some(b'b')).unwrap();
+        fire.pay_ready(b'b');
+        fire.ready_s = 0.0;
+        // Zero spread via forcing letter e is wrong; use b and check speed magnitude.
+        let def = weapon_def(b'b').unwrap();
+        let d = fire.tick(0.0, &mut s, true, 0, &muzzles());
+        assert_eq!(d.len(), 1);
+        let p = &d[0].projectiles[0];
+        assert_eq!(p.ammo, AmmoKind::LightFoam);
+        assert_eq!(p.weapon, b'b');
+        assert!((p.velocity.length() - def.muzzle_vel).abs() < 1e-2);
+        // Mass is looked up from ammo, not invented on the projectile bag.
+        assert_eq!(crate::ammo_def(p.ammo).mass, crate::MASS_LIGHT_FOAM_KG);
+
+        // Sniper e → thick foam, own muzzle speed.
+        let mut fire = FireState::new();
+        let mut s = armed_self();
+        s.set_primary(Some(b'e')).unwrap();
+        fire.pay_ready(b'e');
+        fire.ready_s = 0.0;
+        let def_e = weapon_def(b'e').unwrap();
+        let d = fire.tick(0.0, &mut s, true, 0, &muzzles());
+        let p = &d[0].projectiles[0];
+        assert_eq!(p.ammo, AmmoKind::ThickFoam);
+        assert!((p.velocity.length() - def_e.muzzle_vel).abs() < 1e-2);
+
+        // Launcher a → grenade.
+        let mut fire = FireState::new();
+        let mut s = armed_self();
+        s.set_primary(Some(b'a')).unwrap();
+        fire.pay_ready(b'a');
+        fire.ready_s = 0.0;
+        let d = fire.tick(0.0, &mut s, true, 0, &muzzles());
+        assert_eq!(d[0].projectiles[0].ammo, AmmoKind::Grenade);
+    }
+
+    #[test]
+    fn shotgun_pellets_share_ammo_kind() {
+        let mut fire = FireState::new();
+        let mut s = armed_self();
+        s.set_primary(Some(b'k')).unwrap();
+        fire.pay_ready(b'k');
+        fire.ready_s = 0.0;
+        let d = fire.tick(0.0, &mut s, true, 0, &muzzles());
+        assert_eq!(d[0].projectiles.len(), 6);
+        for p in &d[0].projectiles {
+            assert_eq!(p.ammo, AmmoKind::LightFoam);
+        }
     }
 
     #[test]

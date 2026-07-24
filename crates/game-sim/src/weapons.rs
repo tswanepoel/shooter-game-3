@@ -1,6 +1,9 @@
-//! Baked weapon fire table (038/040/041).
+//! Baked weapon fire table (038/040/041/042).
+//!
+//! Blaster owns initial velocity and which ammo kind it fires (via class → ammo).
+//! Ammo mass lives on [`crate::AmmoKind`] / [`crate::ammo_def`], not here.
 
-use crate::WeaponClass;
+use crate::{ammo_for_class, AmmoKind, WeaponClass};
 
 /// Fire trigger mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,6 +80,11 @@ impl WeaponDef {
         } else {
             60.0 / self.rpm
         }
+    }
+
+    /// Ammo kind this blaster fires (class map; no per-letter override).
+    pub fn ammo(self) -> AmmoKind {
+        ammo_for_class(self.class)
     }
 }
 
@@ -602,6 +610,7 @@ mod tests {
             assert!(def.muzzle_vel > 0.0);
             assert!(def.max_range > 0.0);
             assert!(def.pellets >= 1);
+            assert_eq!(def.ammo(), ammo_for_class(def.class));
         }
         assert_eq!(weapon_def(b'p').unwrap().mode, FireMode::FullAuto);
         assert_eq!(weapon_def(b'd').unwrap().mode, FireMode::Burst);
@@ -613,6 +622,12 @@ mod tests {
             weapon_def(b'p').unwrap().muzzle_policy,
             MuzzlePolicy::Alternate
         );
+        // Spec 042 letter → ammo samples
+        assert_eq!(weapon_def(b'a').unwrap().ammo(), AmmoKind::Grenade);
+        assert_eq!(weapon_def(b'e').unwrap().ammo(), AmmoKind::ThickFoam);
+        assert_eq!(weapon_def(b'f').unwrap().ammo(), AmmoKind::ThickFoam);
+        assert_eq!(weapon_def(b'b').unwrap().ammo(), AmmoKind::LightFoam);
+        assert_eq!(weapon_def(b'k').unwrap().ammo(), AmmoKind::LightFoam);
     }
 
     #[test]

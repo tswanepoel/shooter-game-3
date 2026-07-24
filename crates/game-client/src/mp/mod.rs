@@ -326,7 +326,7 @@ fn handle_s2c(shared: &Rc<RefCell<Shared>>, msg: ServerToClient, t4: f64) {
     }
 }
 
-/// Convert a net spawn into a sim projectile (max range from weapon table).
+/// Convert a net spawn into a sim projectile (ammo + max range from weapon table).
 pub fn net_spawn_to_projectile(owner: PlayerId, n: &NetProjectileSpawn) -> Option<Projectile> {
     let def = weapon_def(n.weapon)?;
     let origin = glam::Vec3::new(n.origin.x, n.origin.y, n.origin.z);
@@ -335,6 +335,7 @@ pub fn net_spawn_to_projectile(owner: PlayerId, n: &NetProjectileSpawn) -> Optio
         id: n.id,
         owner,
         weapon: n.weapon,
+        ammo: def.ammo(),
         origin,
         position: origin,
         velocity,
