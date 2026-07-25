@@ -213,6 +213,7 @@ impl HitMarkerGpu {
     }
 
     /// `center` is the reticle world point (weapon line).
+    #[allow(clippy::too_many_arguments)]
     pub fn update(
         &mut self,
         queue: &wgpu::Queue,

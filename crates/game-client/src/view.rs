@@ -103,6 +103,13 @@ impl FlyInput {
     }
 }
 
+/// Elevated look-at for pre-spawn / lobby overview of the empty map (051).
+pub fn overview_view_matrix() -> Mat4 {
+    let eye = Vec3::new(0.0, 14.0, 18.0);
+    let target = Vec3::ZERO;
+    Mat4::look_at_rh(eye, target, Vec3::Y)
+}
+
 /// One view pose source for the renderer.
 #[derive(Debug)]
 pub struct ViewController {

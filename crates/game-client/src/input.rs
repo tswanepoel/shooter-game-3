@@ -212,11 +212,22 @@ pub fn install_input_handlers(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCanv
     let document = window.document().expect("document");
 
     {
+        let inner = inner.clone();
         let canvas_el = canvas.clone();
         let on_click = Closure::<dyn FnMut(MouseEvent)>::new(move |event: MouseEvent| {
             if event.button() != 0 {
                 return;
             }
+            let client = inner.borrow();
+            // Join / spawn panels need a free cursor (forms, buttons).
+            if client.ui.blocks_pointer_lock(client.mp.phase()) {
+                return;
+            }
+            #[cfg(feature = "debug-tools")]
+            if client.debug.is_open() {
+                return;
+            }
+            drop(client);
             request_pointer_lock_raw(&canvas_el);
         });
         canvas
@@ -350,8 +361,8 @@ pub fn install_input_handlers(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCanv
                     2 => egui::vec2(event.delta_x() as f32, event.delta_y() as f32) * 30.0,
                     _ => egui::vec2(event.delta_x() as f32, event.delta_y() as f32),
                 };
-                let modifiers = client.debug.modifiers();
-                client.debug.push_event(egui::Event::MouseWheel {
+                let modifiers = client.ui.modifiers();
+                client.ui.push_event(egui::Event::MouseWheel {
                     unit: egui::MouseWheelUnit::Point,
                     delta,
                     modifiers,
@@ -380,10 +391,7 @@ pub fn install_input_handlers(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCanv
         on_wheel.forget();
     }
 
-    #[cfg(feature = "debug-tools")]
-    {
-        install_debug_shell_pointer(inner, canvas);
-    }
+    install_egui_pointer(inner, canvas);
 }
 
 fn pointer_locked_to(document: &Document, canvas: &HtmlCanvasElement) -> bool {
@@ -394,10 +402,10 @@ fn pointer_locked_to(document: &Document, canvas: &HtmlCanvasElement) -> bool {
 fn on_session_key_down(inner: &Rc<RefCell<ClientInner>>, event: &KeyboardEvent) {
     let mut client = inner.borrow_mut();
 
+    update_egui_modifiers(&mut client, event);
+
     #[cfg(feature = "debug-tools")]
     {
-        update_debug_modifiers(&mut client, event);
-
         if event.code() == "Backquote" || event.key() == "`" {
             event.prevent_default();
             if !event.repeat() {
@@ -425,26 +433,16 @@ fn on_session_key_down(inner: &Rc<RefCell<ClientInner>>, event: &KeyboardEvent) 
         if client.debug.is_open() {
             event.prevent_default();
             event.stop_propagation();
-            let modifiers = client.debug.modifiers();
-            if let Some(key) = map_egui_key(&event.code()) {
-                client.debug.push_event(egui::Event::Key {
-                    key,
-                    physical_key: None,
-                    pressed: true,
-                    repeat: event.repeat(),
-                    modifiers,
-                });
-            }
-            let key_str = event.key();
-            if key_str.chars().count() == 1 {
-                if let Some(ch) = key_str.chars().next() {
-                    if !ch.is_control() {
-                        client.debug.push_event(egui::Event::Text(ch.to_string()));
-                    }
-                }
-            }
+            push_egui_key(&mut client, event, true);
             return;
         }
+    }
+
+    let ui = client.ui.wants_ui_input(client.mp.phase());
+    if ui && !client.session.is_active() {
+        event.prevent_default();
+        push_egui_key(&mut client, event, true);
+        return;
     }
 
     if !client.session.is_active() {
@@ -488,23 +486,17 @@ fn on_session_key_down(inner: &Rc<RefCell<ClientInner>>, event: &KeyboardEvent) 
 fn on_session_key_up(inner: &Rc<RefCell<ClientInner>>, event: &KeyboardEvent) {
     let mut client = inner.borrow_mut();
 
-    #[cfg(feature = "debug-tools")]
-    {
-        update_debug_modifiers(&mut client, event);
+    update_egui_modifiers(&mut client, event);
 
-        if client.debug.is_open() {
-            if let Some(key) = map_egui_key(&event.code()) {
-                let modifiers = client.debug.modifiers();
-                client.debug.push_event(egui::Event::Key {
-                    key,
-                    physical_key: None,
-                    pressed: false,
-                    repeat: false,
-                    modifiers,
-                });
-            }
-            return;
-        }
+    #[cfg(feature = "debug-tools")]
+    if client.debug.is_open() {
+        push_egui_key(&mut client, event, false);
+        return;
+    }
+
+    if client.ui.wants_ui_input(client.mp.phase()) && !client.session.is_active() {
+        push_egui_key(&mut client, event, false);
+        return;
     }
 
     if !client.session.is_active() {
@@ -528,18 +520,40 @@ fn on_session_key_up(inner: &Rc<RefCell<ClientInner>>, event: &KeyboardEvent) {
     }
 }
 
-#[cfg(feature = "debug-tools")]
-fn update_debug_modifiers(client: &mut ClientInner, event: &KeyboardEvent) {
-    client.debug.set_modifiers(egui::Modifiers {
+fn update_egui_modifiers(client: &mut ClientInner, event: &KeyboardEvent) {
+    let mods = egui::Modifiers {
         alt: event.alt_key(),
         ctrl: event.ctrl_key(),
         shift: event.shift_key(),
         mac_cmd: event.meta_key(),
         command: event.ctrl_key() || event.meta_key(),
-    });
+    };
+    client.ui.set_modifiers(mods);
 }
 
-#[cfg(feature = "debug-tools")]
+fn push_egui_key(client: &mut ClientInner, event: &KeyboardEvent, pressed: bool) {
+    let modifiers = client.ui.modifiers();
+    if let Some(key) = map_egui_key(&event.code()) {
+        client.ui.push_event(egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed,
+            repeat: event.repeat(),
+            modifiers,
+        });
+    }
+    if pressed {
+        let key_str = event.key();
+        if key_str.chars().count() == 1 {
+            if let Some(ch) = key_str.chars().next() {
+                if !ch.is_control() {
+                    client.ui.push_event(egui::Event::Text(ch.to_string()));
+                }
+            }
+        }
+    }
+}
+
 fn map_egui_key(code: &str) -> Option<egui::Key> {
     use egui::Key;
     Some(match code {
@@ -559,7 +573,6 @@ fn map_egui_key(code: &str) -> Option<egui::Key> {
     })
 }
 
-#[cfg(feature = "debug-tools")]
 fn map_pointer_button(button: i16) -> egui::PointerButton {
     match button {
         1 => egui::PointerButton::Middle,
@@ -568,27 +581,33 @@ fn map_pointer_button(button: i16) -> egui::PointerButton {
     }
 }
 
-#[cfg(feature = "debug-tools")]
-fn install_debug_shell_pointer(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCanvasElement) {
+fn egui_wants_pointer(client: &ClientInner) -> bool {
+    #[cfg(feature = "debug-tools")]
+    if client.debug.is_open() {
+        return true;
+    }
+    client.ui.wants_ui_input(client.mp.phase()) && !client.session.is_active()
+}
+
+fn install_egui_pointer(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCanvasElement) {
     {
         let inner = inner.clone();
         let canvas_el = canvas.clone();
         let on_move = Closure::<dyn FnMut(MouseEvent)>::new(move |event: MouseEvent| {
             let mut client = inner.borrow_mut();
-            if !client.debug.is_open() {
+            if !egui_wants_pointer(&client) {
                 return;
             }
-            // CSS px = egui points.
             let rect = canvas_el.get_bounding_client_rect();
             let pos = egui::pos2(
                 (event.client_x() as f64 - rect.left()) as f32,
                 (event.client_y() as f64 - rect.top()) as f32,
             );
-            client.debug.push_event(egui::Event::PointerMoved(pos));
+            client.ui.push_event(egui::Event::PointerMoved(pos));
         });
         canvas
             .add_event_listener_with_callback("mousemove", on_move.as_ref().unchecked_ref())
-            .expect("debug mousemove");
+            .expect("egui mousemove");
         on_move.forget();
     }
 
@@ -597,18 +616,19 @@ fn install_debug_shell_pointer(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCan
         let canvas_el = canvas.clone();
         let on_down = Closure::<dyn FnMut(MouseEvent)>::new(move |event: MouseEvent| {
             let mut client = inner.borrow_mut();
-            if !client.debug.is_open() {
+            if !egui_wants_pointer(&client) {
                 return;
             }
             event.prevent_default();
+            event.stop_propagation();
             let rect = canvas_el.get_bounding_client_rect();
             let pos = egui::pos2(
                 (event.client_x() as f64 - rect.left()) as f32,
                 (event.client_y() as f64 - rect.top()) as f32,
             );
             let button = map_pointer_button(event.button());
-            let modifiers = client.debug.modifiers();
-            client.debug.push_event(egui::Event::PointerButton {
+            let modifiers = client.ui.modifiers();
+            client.ui.push_event(egui::Event::PointerButton {
                 pos,
                 button,
                 pressed: true,
@@ -617,7 +637,7 @@ fn install_debug_shell_pointer(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCan
         });
         canvas
             .add_event_listener_with_callback("mousedown", on_down.as_ref().unchecked_ref())
-            .expect("debug mousedown");
+            .expect("egui mousedown");
         on_down.forget();
     }
 
@@ -626,7 +646,7 @@ fn install_debug_shell_pointer(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCan
         let canvas_el = canvas.clone();
         let on_up = Closure::<dyn FnMut(MouseEvent)>::new(move |event: MouseEvent| {
             let mut client = inner.borrow_mut();
-            if !client.debug.is_open() {
+            if !egui_wants_pointer(&client) {
                 return;
             }
             let rect = canvas_el.get_bounding_client_rect();
@@ -635,8 +655,8 @@ fn install_debug_shell_pointer(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCan
                 (event.client_y() as f64 - rect.top()) as f32,
             );
             let button = map_pointer_button(event.button());
-            let modifiers = client.debug.modifiers();
-            client.debug.push_event(egui::Event::PointerButton {
+            let modifiers = client.ui.modifiers();
+            client.ui.push_event(egui::Event::PointerButton {
                 pos,
                 button,
                 pressed: false,
@@ -645,7 +665,7 @@ fn install_debug_shell_pointer(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCan
         });
         canvas
             .add_event_listener_with_callback("mouseup", on_up.as_ref().unchecked_ref())
-            .expect("debug mouseup");
+            .expect("egui mouseup");
         on_up.forget();
     }
 }

@@ -17,6 +17,7 @@ mod pack;
 mod remote_present;
 mod reticle;
 mod self_present;
+mod ui_overlay;
 mod view;
 
 use std::cell::RefCell;
@@ -48,9 +49,10 @@ use lineup::{LineupGpu, LineupState};
 use remote_present::RemotePresent;
 use reticle::ReticleGpu;
 use self_present::{SelfGpu, SelfPresentState};
+use ui_overlay::{DebugDraw, OverlayGpu, UiOverlay};
 #[cfg(feature = "debug-tools")]
 use view::FlyInput;
-use view::{ViewController, LOOK_SENS_RAD_PER_PX};
+use view::{overview_view_matrix, ViewController, LOOK_SENS_RAD_PER_PX};
 
 const CLEAR_COLOR: wgpu::Color = wgpu::Color {
     r: 0.05,
@@ -351,6 +353,7 @@ impl Renderer {
         view_proj
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_scene(
         &mut self,
         draw_grid: bool,
@@ -605,6 +608,7 @@ pub(crate) struct ClientInner {
     #[cfg(feature = "debug-tools")]
     fps_ema: f32,
     pub(crate) mp: mp::MpClient,
+    pub(crate) ui: UiOverlay,
     #[cfg(feature = "debug-tools")]
     pub(crate) debug: DebugTools,
     #[cfg(feature = "debug-tools")]
@@ -615,11 +619,6 @@ pub(crate) struct ClientInner {
 
 impl ClientInner {
     #[cfg(feature = "debug-tools")]
-    pub(crate) fn pixels_per_point(&self) -> f32 {
-        self.pixels_per_point
-    }
-
-    #[cfg(feature = "debug-tools")]
     fn drain_debug_host_requests(&mut self) {
         use debug::DebugHostRequest;
         for req in self.debug.take_host_requests() {
@@ -628,11 +627,14 @@ impl ClientInner {
                 DebugHostRequest::MpJoin => {
                     self.mp.begin_join();
                     self.debug.shell.push_log("mp: joining…");
+                    self.ui.set_status("joining…");
                 }
                 DebugHostRequest::MpLeave => {
                     self.mp.leave();
                     self.remote_present.clear();
+                    self.health_by_id.clear();
                     self.debug.shell.push_log("mp: left (solo)");
+                    self.ui.set_status(String::new());
                 }
                 DebugHostRequest::MpStatus => {
                     self.debug.shell.push_log(self.mp.status_line());
@@ -642,9 +644,6 @@ impl ClientInner {
                     self.debug.shell.push_log(msg);
                 }
             }
-        }
-        if let Some(err) = self.mp.take_error() {
-            self.debug.shell.push_log(err);
         }
         // Optional debug tracers (038).
         self.renderer.fire_fx.show_tracers = self.debug.draw_tracers();
@@ -709,6 +708,29 @@ impl ClientInner {
         let look = self.session.take_look_px();
         let session_ok = self.session.is_active();
 
+        let mp_blocks_play = self.mp.blocks_play();
+        let effects = self.mp.drain_frame_effects();
+        if effects.release_pointer_lock && self.session.is_active() {
+            if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+                doc.exit_pointer_lock();
+            }
+        }
+        if let Some(spawn) = effects.pending_spawn {
+            self.self_state = SelfState::default_loadout();
+            self.self_state.position = spawn.position;
+            self.self_state.ocular_yaw = spawn.yaw;
+            self.self_state.torso_yaw = spawn.yaw;
+            self.fire = FireState::new();
+            self.projectiles = ProjectileWorld::new();
+            self.health_by_id.clear();
+            self.ui.set_status(String::new());
+        }
+        if let Some(err) = effects.error {
+            #[cfg(feature = "debug-tools")]
+            self.debug.shell.push_log(err.clone());
+            self.ui.set_status(err);
+        }
+
         #[cfg(feature = "debug-tools")]
         let console_open = self.debug.is_open();
         #[cfg(not(feature = "debug-tools"))]
@@ -722,11 +744,12 @@ impl ClientInner {
         #[cfg(not(feature = "debug-tools"))]
         let was_fly = false;
 
-        let mut fire_held = session_ok && !console_open && !was_fly && self.move_input.fire_held();
+        let play_ok = session_ok && !console_open && !was_fly && !mp_blocks_play;
+        let mut fire_held = play_ok && self.move_input.fire_held();
         let emote_press = self.move_input.take_emote_press();
         let emote_release = self.move_input.take_emote_release();
 
-        if session_ok && !console_open && !was_fly {
+        if play_ok {
             // Emote wheel (039): B open / release commit; look freezes into select.
             // Fire while open closes without commit (fire path may still run).
             if fire_held && self.emote_wheel.is_open() {
@@ -800,7 +823,7 @@ impl ClientInner {
             }
             self.self_state.apply_move(dt, fwd, strafe, sprint_tap);
         } else {
-            if !session_ok || console_open || was_fly {
+            if !play_ok {
                 self.move_input.clear_keys();
                 self.move_input.set_fire_held(false);
                 self.move_input.set_emote_held(false);
@@ -879,11 +902,11 @@ impl ClientInner {
 
         let local_id = self.mp.player_id();
         let firer_id = local_id.unwrap_or(0);
-        if !self.mp.joined() {
+        if !self.mp.in_room() {
             self.health_by_id.clear();
         }
 
-        let remote_samples: Vec<(PlayerId, game_net::DriveView)> = if self.mp.joined() {
+        let remote_samples: Vec<(PlayerId, game_net::DriveView)> = if self.mp.in_room() {
             self.mp
                 .remotes()
                 .samples()
@@ -903,7 +926,7 @@ impl ClientInner {
                 .entry(*id)
                 .or_insert_with(PlayerHealth::full);
         }
-        if self.mp.joined() {
+        if self.mp.in_room() {
             let mut keep: HashMap<PlayerId, ()> =
                 remote_samples.iter().map(|(id, _)| (*id, ())).collect();
             if let Some(id) = local_id {
@@ -915,6 +938,9 @@ impl ClientInner {
         let remote_hit_states: Vec<(PlayerId, SelfState)> = remote_samples
             .iter()
             .filter_map(|(id, drive)| {
+                if !self.mp.peer_living(*id) {
+                    return None;
+                }
                 let h = self.health_by_id.get(id)?;
                 if !h.alive {
                     return None;
@@ -1004,18 +1030,21 @@ impl ClientInner {
 
         self.mp.on_frame(dt, &self.self_state);
 
-        if let SelfPresentState::Ready(gpu) = &mut self.self_present {
-            // Mounted FP hides local head (eye sits inside the shell). Flycam shows full body.
-            #[cfg(feature = "debug-tools")]
-            let first_person = !self.view.is_flycam();
-            #[cfg(not(feature = "debug-tools"))]
-            let first_person = true;
-            gpu.apply_state(&self.renderer.queue, &self.self_state, first_person);
-            self.view
-                .set_mounted_look(gpu.view.look_origin, gpu.view.look_forward);
+        let draw_local_self = self.mp.is_solo() || self.mp.is_living();
+        if draw_local_self {
+            if let SelfPresentState::Ready(gpu) = &mut self.self_present {
+                // Mounted FP hides local head (eye sits inside the shell). Flycam shows full body.
+                #[cfg(feature = "debug-tools")]
+                let first_person = !self.view.is_flycam();
+                #[cfg(not(feature = "debug-tools"))]
+                let first_person = true;
+                gpu.apply_state(&self.renderer.queue, &self.self_state, first_person);
+                self.view
+                    .set_mounted_look(gpu.view.look_origin, gpu.view.look_forward);
+            }
         }
 
-        if self.mp.joined() {
+        if self.mp.in_room() {
             let samples: Vec<_> = self
                 .mp
                 .remotes()
@@ -1069,7 +1098,11 @@ impl ClientInner {
         let flycam = false;
 
         let (cam_eye, cam_fwd) = self.view.eye_and_forward(&self.self_state);
-        let view_mat = self.view.view_matrix(&self.self_state);
+        let view_mat = if mp_blocks_play {
+            overview_view_matrix()
+        } else {
+            self.view.view_matrix(&self.self_state)
+        };
         let view_proj = self.renderer.write_view_proj(view_mat);
 
         let reticle_pos = match &self.self_present {
@@ -1126,18 +1159,24 @@ impl ClientInner {
             &self.projectiles.projectiles,
         );
 
-        if let SelfPresentState::Ready(gpu) = &self.self_present {
-            gpu.write_view_proj(&self.renderer.queue, view_proj);
+        if draw_local_self {
+            if let SelfPresentState::Ready(gpu) = &self.self_present {
+                gpu.write_view_proj(&self.renderer.queue, view_proj);
+            }
         }
-        if self.mp.joined() {
+        if self.mp.in_room() {
             self.remote_present
                 .write_view_proj_all(&self.renderer.queue, view_proj);
         }
-        let self_ref = match &self.self_present {
-            SelfPresentState::Ready(gpu) => Some(gpu),
-            _ => None,
+        let self_ref = if draw_local_self {
+            match &self.self_present {
+                SelfPresentState::Ready(gpu) => Some(gpu),
+                _ => None,
+            }
+        } else {
+            None
         };
-        let remotes_ref = if self.mp.joined() {
+        let remotes_ref = if self.mp.in_room() {
             Some(&self.remote_present)
         } else {
             None
@@ -1204,18 +1243,25 @@ impl ClientInner {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        #[cfg(feature = "debug-tools")]
         {
-            let ppp = self.pixels_per_point();
+            let ppp = self.pixels_per_point;
             let time = web_sys::window()
                 .and_then(|w| w.performance())
                 .map(|p| p.now() / 1000.0)
                 .unwrap_or(0.0);
             let screen_w = width as f32 / ppp;
             let screen_h = height as f32 / ppp;
-            let raw = self.debug.take_raw_input(screen_w, screen_h, time);
 
-            let hud_line = {
+            let roster = self.mp.roster();
+            let phase = self.mp.phase();
+            let connecting = self.mp.is_connecting();
+            let raw = self.ui.take_raw_input(screen_w, screen_h, time);
+
+            #[cfg(feature = "debug-tools")]
+            self.debug.apply_toggle();
+
+            #[cfg(feature = "debug-tools")]
+            let hud_owned = {
                 let net = self.debug.net_hud();
                 let residual = self.debug.residual_hud();
                 if !net && !residual {
@@ -1244,28 +1290,63 @@ impl ClientInner {
                     Some(parts.join("  |  "))
                 }
             };
-            let full = self.debug.shell.run_frame(raw, ppp, hud_line.as_deref());
-            if let Some(cmd) = self.debug.shell.take_pending_command() {
-                let _ = self.debug.execute(&cmd);
+
+            #[cfg(feature = "debug-tools")]
+            let debug_draw = {
+                let hud = hud_owned.as_deref();
+                if self.debug.shell.wants_draw(hud) {
+                    DebugDraw::Shell {
+                        shell: &mut self.debug.shell,
+                        hud,
+                    }
+                } else {
+                    DebugDraw::none()
+                }
+            };
+            #[cfg(not(feature = "debug-tools"))]
+            let debug_draw = DebugDraw::none();
+
+            let (full, actions) = self
+                .ui
+                .run(raw, ppp, phase, &roster, connecting, debug_draw);
+
+            if let Some((room, name)) = actions.join {
+                self.ui.set_status("joining…");
+                self.mp.begin_join_with(&room, &name);
             }
-            self.drain_debug_host_requests();
+            if actions.spawn {
+                self.mp.request_spawn();
+            }
+            if actions.leave {
+                self.mp.leave();
+                self.remote_present.clear();
+                self.health_by_id.clear();
+                self.ui.set_status(String::new());
+            }
+
+            #[cfg(feature = "debug-tools")]
+            {
+                if let Some(cmd) = self.debug.shell.take_pending_command() {
+                    let _ = self.debug.execute(&cmd);
+                }
+                self.drain_debug_host_requests();
+            }
 
             if let Some(full) = full {
                 let mut encoder =
                     self.renderer
                         .device
                         .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                            label: Some("egui-encoder"),
+                            label: Some("ui-encoder"),
                         });
-                self.debug.shell.render_overlay(
-                    debug::OverlayGpu {
+                self.ui.render(
+                    OverlayGpu {
                         device: &self.renderer.device,
                         queue: &self.renderer.queue,
                         encoder: &mut encoder,
                         view: &view,
                         width,
                         height,
-                        pixels_per_point: ppp,
                     },
                     full,
                 );
@@ -1273,11 +1354,6 @@ impl ClientInner {
                     .queue
                     .submit(std::iter::once(encoder.finish()));
             }
-        }
-
-        #[cfg(not(feature = "debug-tools"))]
-        {
-            let _ = view;
         }
 
         frame.present();
@@ -1346,7 +1422,7 @@ fn maybe_kick_self_load(inner: &Rc<RefCell<ClientInner>>) {
 fn maybe_kick_remote_loads(inner: &Rc<RefCell<ClientInner>>) {
     let loads = {
         let mut c = inner.borrow_mut();
-        if !c.mp.joined() {
+        if !c.mp.in_room() {
             if c.mp.remotes().count() == 0 {
                 c.remote_present.clear();
             }
@@ -1489,7 +1565,8 @@ impl GameClient {
         renderer.write_view_proj(view.view_matrix(&self_state));
 
         #[cfg(feature = "debug-tools")]
-        let debug = DebugTools::new(&renderer.device, renderer.config.format);
+        let debug = DebugTools::new();
+        let ui = UiOverlay::new(&renderer.device, renderer.config.format);
 
         let ppp = canvas_buffer_size(&canvas, renderer.max_texture_dim).2;
         let emote_wheel = EmoteWheel::new();
@@ -1512,6 +1589,7 @@ impl GameClient {
             #[cfg(feature = "debug-tools")]
             fps_ema: 0.0,
             mp: mp::MpClient::new(),
+            ui,
             #[cfg(feature = "debug-tools")]
             debug,
             #[cfg(feature = "debug-tools")]

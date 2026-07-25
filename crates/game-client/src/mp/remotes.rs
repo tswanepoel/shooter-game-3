@@ -45,8 +45,8 @@ impl RemoteTable {
         self.entries.entry(id).or_insert(None);
     }
 
-    pub fn remove(&mut self, id: PlayerId) {
-        self.entries.remove(&id);
+    pub fn retain(&mut self, mut f: impl FnMut(PlayerId) -> bool) {
+        self.entries.retain(|&id, _| f(id));
     }
 
     pub fn upsert_drive(&mut self, id: PlayerId, tick: u64, drive: DriveView) {

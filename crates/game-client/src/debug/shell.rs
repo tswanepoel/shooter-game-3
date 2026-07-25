@@ -1,7 +1,6 @@
-//! egui console shell — thin transport over the registry.
+//! Debug console widgets (drawn into the shared ui overlay).
 
 const MAX_LOG_LINES: usize = 200;
-const CONSOLE_FONT_SIZE: f32 = 12.0;
 
 pub struct DebugShell {
     pub open: bool,
@@ -10,35 +9,11 @@ pub struct DebugShell {
     log: Vec<String>,
     history: Vec<String>,
     history_cursor: Option<usize>,
-    /// Console line submitted this frame (run by ClientInner after egui).
     pending_command: Option<String>,
-    egui_ctx: egui::Context,
-    egui_renderer: egui_wgpu::Renderer,
 }
 
 impl DebugShell {
-    pub fn new(device: &wgpu::Device, surface_format: wgpu::TextureFormat) -> Self {
-        let egui_renderer = egui_wgpu::Renderer::new(device, surface_format, None, 1, false);
-        let egui_ctx = egui::Context::default();
-        egui_ctx.set_visuals(egui::Visuals::dark());
-        egui_ctx.style_mut(|style| {
-            style.spacing.item_spacing = egui::vec2(4.0, 2.0);
-            style.spacing.window_margin = egui::Margin::same(6);
-            let mono = egui::FontId::new(CONSOLE_FONT_SIZE, egui::FontFamily::Monospace);
-            let body = egui::FontId::new(CONSOLE_FONT_SIZE, egui::FontFamily::Proportional);
-            style.text_styles.insert(egui::TextStyle::Body, body);
-            style
-                .text_styles
-                .insert(egui::TextStyle::Monospace, mono.clone());
-            style
-                .text_styles
-                .insert(egui::TextStyle::Button, mono.clone());
-            style.text_styles.insert(
-                egui::TextStyle::Heading,
-                egui::FontId::new(14.0, egui::FontFamily::Proportional),
-            );
-        });
-
+    pub fn new() -> Self {
         Self {
             open: false,
             focus_input: false,
@@ -47,8 +22,6 @@ impl DebugShell {
             history: Vec::new(),
             history_cursor: None,
             pending_command: None,
-            egui_ctx,
-            egui_renderer,
         }
     }
 
@@ -66,19 +39,15 @@ impl DebugShell {
         }
     }
 
-    /// Run egui for the console and optional top HUD banner.
-    /// Submitted lines land in [`take_pending_command`] for the host to run.
-    pub fn run_frame(
-        &mut self,
-        raw_input: egui::RawInput,
-        pixels_per_point: f32,
-        hud_line: Option<&str>,
-    ) -> Option<egui::FullOutput> {
-        if !self.open && hud_line.is_none() {
-            return None;
-        }
+    pub fn wants_draw(&self, hud_line: Option<&str>) -> bool {
+        self.open || hud_line.is_some()
+    }
 
-        self.egui_ctx.set_pixels_per_point(pixels_per_point);
+    /// Draw console + optional HUD into the shared egui context.
+    pub fn ui(&mut self, ctx: &egui::Context, hud_line: Option<&str>) {
+        if !self.wants_draw(hud_line) {
+            return;
+        }
 
         let mut run_line: Option<String> = None;
         let mut history_delta: i32 = 0;
@@ -90,33 +59,29 @@ impl DebugShell {
         let mut input = std::mem::take(&mut self.input);
         let hud = hud_line.map(|s| s.to_string());
 
-        let full = self.egui_ctx.run(raw_input, |ctx| {
-            if console_open && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-                close = true;
-            }
+        if console_open && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            close = true;
+        }
 
-            if let Some(ref line) = hud {
-                egui::TopBottomPanel::top("net_hud")
-                    .exact_height(22.0)
-                    .frame(
-                        egui::Frame::NONE
-                            .fill(egui::Color32::from_rgba_unmultiplied(8, 10, 14, 200))
-                            .inner_margin(egui::Margin::symmetric(8, 3)),
-                    )
-                    .show(ctx, |ui| {
-                        ui.label(
-                            egui::RichText::new(line)
-                                .monospace()
-                                .size(12.0)
-                                .color(egui::Color32::from_rgb(180, 220, 160)),
-                        );
-                    });
-            }
+        if let Some(ref line) = hud {
+            egui::TopBottomPanel::top("net_hud")
+                .exact_height(22.0)
+                .frame(
+                    egui::Frame::NONE
+                        .fill(egui::Color32::from_rgba_unmultiplied(8, 10, 14, 200))
+                        .inner_margin(egui::Margin::symmetric(8, 3)),
+                )
+                .show(ctx, |ui| {
+                    ui.label(
+                        egui::RichText::new(line)
+                            .monospace()
+                            .size(12.0)
+                            .color(egui::Color32::from_rgb(180, 220, 160)),
+                    );
+                });
+        }
 
-            if !console_open {
-                return;
-            }
-
+        if console_open {
             let screen = ctx.screen_rect();
             let panel_h = (screen.height() * 0.32).clamp(120.0, 280.0);
 
@@ -174,7 +139,7 @@ impl DebugShell {
                         }
                     });
                 });
-        });
+        }
 
         self.focus_input = false;
         self.input = input;
@@ -196,9 +161,6 @@ impl DebugShell {
             self.pending_command = Some(trimmed);
             self.focus_input = true;
         }
-
-        // Still return output after Escape close so texture deltas are applied.
-        Some(full)
     }
 
     fn nudge_history(&mut self, delta: i32) {
@@ -225,65 +187,10 @@ impl DebugShell {
         self.history_cursor = Some(idx);
         self.input = self.history[idx].clone();
     }
-
-    pub fn render_overlay(&mut self, gpu: OverlayGpu<'_>, full: egui::FullOutput) {
-        let OverlayGpu {
-            device,
-            queue,
-            encoder,
-            view,
-            width,
-            height,
-            pixels_per_point,
-        } = gpu;
-
-        let textures_delta = full.textures_delta;
-        for (id, delta) in &textures_delta.set {
-            self.egui_renderer.update_texture(device, queue, *id, delta);
-        }
-        for id in &textures_delta.free {
-            self.egui_renderer.free_texture(id);
-        }
-
-        let tris = self.egui_ctx.tessellate(full.shapes, pixels_per_point);
-
-        let screen_descriptor = egui_wgpu::ScreenDescriptor {
-            size_in_pixels: [width, height],
-            pixels_per_point,
-        };
-
-        self.egui_renderer
-            .update_buffers(device, queue, encoder, &tris, &screen_descriptor);
-
-        {
-            let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("egui-pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                occlusion_query_set: None,
-                timestamp_writes: None,
-            });
-            // egui-wgpu expects a 'static pass lifetime (wgpu 24).
-            self.egui_renderer
-                .render(&mut pass.forget_lifetime(), &tris, &screen_descriptor);
-        }
-    }
 }
 
-/// GPU handles for painting the egui overlay onto the swapchain.
-pub struct OverlayGpu<'a> {
-    pub device: &'a wgpu::Device,
-    pub queue: &'a wgpu::Queue,
-    pub encoder: &'a mut wgpu::CommandEncoder,
-    pub view: &'a wgpu::TextureView,
-    pub width: u32,
-    pub height: u32,
-    pub pixels_per_point: f32,
+impl Default for DebugShell {
+    fn default() -> Self {
+        Self::new()
+    }
 }

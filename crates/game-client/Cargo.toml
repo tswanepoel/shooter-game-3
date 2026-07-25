@@ -11,7 +11,8 @@ default = ["debug-tools"]
 # In-engine debug shell, command/cvar registry, host bridge, blaster lineup.
 # Production strip: wasm-pack build -- --no-default-features
 # Self body/blaster (013) always ships; kit load deps are not debug-gated.
-debug-tools = ["dep:egui", "dep:egui-wgpu"]
+# Product UI (join/spawn/score) always uses egui.
+debug-tools = []
 
 [dependencies]
 wgpu = "24"
@@ -24,6 +25,7 @@ web-sys = { version = "0.3.67", features = [
   "Element",
   "ErrorEvent",
   "HtmlCanvasElement",
+  "HtmlDocument",
   "HtmlElement",
   "KeyboardEvent",
   "MouseEvent",
@@ -38,13 +40,14 @@ web-sys = { version = "0.3.67", features = [
   "WritableStream",
   "WritableStreamDefaultWriter",
 ] }
+# Document.cookie / set_cookie (051 display name).
 console_error_panic_hook = "0.1"
 glam = "0.24"
 bytemuck = { version = "1", features = ["derive"] }
 game-sim = { path = "../game-sim" }
 game-net = { path = "../game-net" }
-egui = { version = "0.31", optional = true }
-egui-wgpu = { version = "0.31", optional = true }
+egui = "0.31"
+egui-wgpu = "0.31"
 # Kit marks KHR_materials_unlit as required; enable so parse does not reject the GLBs.
 gltf = { version = "1.4", default-features = false, features = ["utils", "names", "KHR_materials_unlit", "extensions"] }
 png = "0.17"

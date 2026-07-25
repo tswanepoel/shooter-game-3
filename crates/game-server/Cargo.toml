@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 game-net = { path = "../game-net" }
+game-sim = { path = "../game-sim" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs"] }
 wtransport = { version = "0.7", features = ["self-signed"] }
 tracing = "0.1"

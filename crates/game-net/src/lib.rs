@@ -6,7 +6,14 @@ pub const TICK_HZ: u32 = 180;
 
 pub const TICK_DURATION_SECS: f64 = 1.0 / TICK_HZ as f64;
 
-pub const PROTOCOL_VERSION: u16 = 6;
+/// v8: roster is sole presence truth; PeerJoined/Left/Spawned removed.
+pub const PROTOCOL_VERSION: u16 = 8;
+
+/// Default room code (051 MVP). Client pre-fills this; server accepts only this value.
+pub const DEFAULT_ROOM_CODE: &str = "dev";
+
+/// Max display-name length after trim (051).
+pub const DISPLAY_NAME_MAX_CHARS: usize = 24;
 
 pub type PlayerId = u32;
 
@@ -79,10 +86,22 @@ pub struct NetImpactHit {
     pub part: u8,
 }
 
+/// One row on the room score roster (051). Sole membership / score / living truth.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RosterEntry {
+    pub id: PlayerId,
+    pub display_name: String,
+    pub score: u32,
+    /// True after successful spawn while still in the match (may be false after death until later respawn features).
+    pub living: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ClientToServer {
     Hello {
         protocol: u16,
+        room_code: String,
+        display_name: String,
     },
     ClockProbe {
         t1: f64,
@@ -101,6 +120,8 @@ pub enum ClientToServer {
         tick: u64,
         hit: NetImpactHit,
     },
+    /// Request living entry on the map (051). Reliable control stream only.
+    Spawn,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -120,13 +141,16 @@ pub enum ServerToClient {
         t3: f64,
         tick: u64,
     },
-    PeerJoined {
+    /// Local member may enter the map at this pose (051).
+    YouSpawned {
         tick: u64,
-        id: PlayerId,
+        position: NetVec3,
+        yaw: f32,
     },
-    PeerLeft {
+    /// Full roster snapshot — sole membership / score / living truth (051 / v8).
+    Roster {
         tick: u64,
-        id: PlayerId,
+        entries: Vec<RosterEntry>,
     },
     PeerDrive {
         tick: u64,
@@ -145,6 +169,19 @@ pub enum ServerToClient {
         id: PlayerId,
         hit: NetImpactHit,
     },
+}
+
+/// Trim, length-cap, and reject empty display names (shared client/server rules).
+pub fn normalize_display_name(raw: &str) -> Result<String, &'static str> {
+    let trimmed: String = raw.trim().chars().take(DISPLAY_NAME_MAX_CHARS).collect();
+    if trimmed.is_empty() {
+        return Err("display name empty");
+    }
+    Ok(trimmed)
+}
+
+pub fn display_name_key(name: &str) -> String {
+    name.to_lowercase()
 }
 
 pub fn encode_c2s(msg: &ClientToServer) -> Result<Vec<u8>, postcard::Error> {
@@ -226,6 +263,8 @@ mod tests {
     fn hello_roundtrip() {
         let msg = ClientToServer::Hello {
             protocol: PROTOCOL_VERSION,
+            room_code: DEFAULT_ROOM_CODE.into(),
+            display_name: "Ace".into(),
         };
         let b = encode_c2s(&msg).unwrap();
         assert_eq!(decode_c2s(&b).unwrap(), msg);
@@ -234,7 +273,7 @@ mod tests {
     #[test]
     fn welcome_roundtrip() {
         let msg = ServerToClient::Welcome {
-            protocol: 2,
+            protocol: PROTOCOL_VERSION,
             player_id: 7,
             tick: 42,
             server_time_secs: 1.5,
@@ -290,14 +329,39 @@ mod tests {
     }
 
     #[test]
-    fn peer_joined_left_roundtrip() {
-        let joined = ServerToClient::PeerJoined { tick: 10, id: 2 };
-        let b = encode_s2c(&joined).unwrap();
-        assert_eq!(decode_s2c(&b).unwrap(), joined);
+    fn spawn_and_roster_roundtrip() {
+        let spawn = ClientToServer::Spawn;
+        let b = encode_c2s(&spawn).unwrap();
+        assert_eq!(decode_c2s(&b).unwrap(), spawn);
 
-        let left = ServerToClient::PeerLeft { tick: 11, id: 2 };
-        let b = encode_s2c(&left).unwrap();
-        assert_eq!(decode_s2c(&b).unwrap(), left);
+        let you = ServerToClient::YouSpawned {
+            tick: 1,
+            position: NetVec3::new(2.0, 0.0, -1.0),
+            yaw: 0.5,
+        };
+        let b = encode_s2c(&you).unwrap();
+        assert_eq!(decode_s2c(&b).unwrap(), you);
+
+        let roster = ServerToClient::Roster {
+            tick: 3,
+            entries: vec![RosterEntry {
+                id: 1,
+                display_name: "Ace".into(),
+                score: 2,
+                living: true,
+            }],
+        };
+        let b = encode_s2c(&roster).unwrap();
+        assert_eq!(decode_s2c(&b).unwrap(), roster);
+    }
+
+    #[test]
+    fn normalize_display_name_rules() {
+        assert_eq!(normalize_display_name("  Ace  ").unwrap(), "Ace");
+        assert!(normalize_display_name("   ").is_err());
+        let long = "x".repeat(40);
+        assert_eq!(normalize_display_name(&long).unwrap().chars().count(), 24);
+        assert_eq!(display_name_key("Ace"), display_name_key("ace"));
     }
 
     #[test]
@@ -357,7 +421,12 @@ mod tests {
 
     #[test]
     fn directional_roots_do_not_cross_decode() {
-        let c2s = encode_c2s(&ClientToServer::Hello { protocol: 1 }).unwrap();
+        let c2s = encode_c2s(&ClientToServer::Hello {
+            protocol: 1,
+            room_code: DEFAULT_ROOM_CODE.into(),
+            display_name: "x".into(),
+        })
+        .unwrap();
         assert!(decode_s2c(&c2s).is_err());
         let s2c = encode_s2c(&ServerToClient::Reject { reason: "x".into() }).unwrap();
         assert!(decode_c2s(&s2c).is_err());
@@ -365,8 +434,20 @@ mod tests {
 
     #[test]
     fn framed_s2c_roundtrip_batch() {
-        let a = ServerToClient::PeerJoined { tick: 1, id: 2 };
-        let b = ServerToClient::PeerLeft { tick: 3, id: 2 };
+        let a = ServerToClient::YouSpawned {
+            tick: 1,
+            position: NetVec3::new(0.0, 0.0, 0.0),
+            yaw: 0.0,
+        };
+        let b = ServerToClient::Roster {
+            tick: 3,
+            entries: vec![RosterEntry {
+                id: 2,
+                display_name: "A".into(),
+                score: 0,
+                living: false,
+            }],
+        };
         let mut buf = encode_s2c_frame(&a).unwrap();
         buf.extend(encode_s2c_frame(&b).unwrap());
         // partial tail

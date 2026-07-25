@@ -34,14 +34,17 @@ impl ClockSync {
         self.last_reply_tick = Some(tick);
     }
 
+    #[cfg(any(feature = "debug-tools", test))]
     pub fn offset_secs(&self) -> Option<f64> {
         self.offset_secs
     }
 
+    #[cfg(any(feature = "debug-tools", test))]
     pub fn last_delay_secs(&self) -> Option<f64> {
         self.last_delay_secs
     }
 
+    #[cfg(any(feature = "debug-tools", test))]
     pub fn sample_count(&self) -> u32 {
         self.sample_count
     }

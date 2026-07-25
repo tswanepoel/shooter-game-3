@@ -675,6 +675,7 @@ name = "game-server"
 version = "0.1.0"
 dependencies = [
  "game-net",
+ "game-sim",
  "serde",
  "serde_json",
  "tokio",
