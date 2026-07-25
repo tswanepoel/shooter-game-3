@@ -41,8 +41,8 @@ npm run dev
 - Ground-truth world constants (metres, Y-up, camera/grid quantities) live here; client consumes them
 
 ### `game-net` crate
-- Directional postcard wire: `ClientToServer` / `ServerToClient` (Hello, Welcome, Reject, clock probe/reply, drive sample, peer drive/presence)
-- `PlayerId` (`u32`), `PROTOCOL_VERSION`, shared `TICK_HZ`; length-prefixed S2C frames on the reliable stream after Welcome
+- Shared multiplayer wire types (`ClientToServer` / `ServerToClient`) and constants (`PlayerId`, `PROTOCOL_VERSION`, `TICK_HZ`)
+- Client and server must use the same protocol version
 
 ### `game-server` crate
 - WebTransport host; fixed tick; roster relay of drive samples and peer join/leave

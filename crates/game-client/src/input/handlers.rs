@@ -124,7 +124,6 @@ pub fn install_input_handlers(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCanv
                 client.move_input.clear_keys();
                 client.move_input.set_fire_held(false);
                 client.move_input.set_emote_held(false);
-                #[cfg(feature = "debug-tools")]
                 client.fly_input.clear_keys();
             }
             if active != was {
@@ -292,12 +291,11 @@ fn on_session_key_down(inner: &Rc<RefCell<ClientInner>>, event: &KeyboardEvent) 
     let code = event.code();
 
     #[cfg(feature = "debug-tools")]
-    let fly = client.view.is_flycam() || client.debug.flycam_wanted();
+    let fly = client.view.is_flycam() || client.debug.flycam_wanted() || client.mp.is_spectating();
     #[cfg(not(feature = "debug-tools"))]
-    let fly = false;
+    let fly = client.view.is_flycam() || client.mp.is_spectating();
 
     if fly {
-        #[cfg(feature = "debug-tools")]
         if crate::view::FlyInput::is_fly_key(&code) {
             event.prevent_default();
             client.fly_input.set_key(&code, true);
@@ -346,12 +344,11 @@ fn on_session_key_up(inner: &Rc<RefCell<ClientInner>>, event: &KeyboardEvent) {
     let code = event.code();
 
     #[cfg(feature = "debug-tools")]
-    let fly = client.view.is_flycam() || client.debug.flycam_wanted();
+    let fly = client.view.is_flycam() || client.debug.flycam_wanted() || client.mp.is_spectating();
     #[cfg(not(feature = "debug-tools"))]
-    let fly = false;
+    let fly = client.view.is_flycam() || client.mp.is_spectating();
 
     if fly {
-        #[cfg(feature = "debug-tools")]
         client.fly_input.set_key(&code, false);
     } else if MoveInput::is_move_key(&code) {
         client.move_input.set_key(&code, false);

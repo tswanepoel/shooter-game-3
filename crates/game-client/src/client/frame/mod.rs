@@ -9,6 +9,7 @@ use game_sim::{FireState, ProjectileWorld, SelfState};
 use wasm_bindgen::prelude::*;
 
 use crate::renderer::canvas_buffer_size;
+use crate::self_present::SelfPresentState;
 
 use super::ClientInner;
 
@@ -47,7 +48,6 @@ impl ClientInner {
         let look = self.session.take_look_px();
         let session_ok = self.session.is_active();
 
-        let mp_blocks_play = self.mp.blocks_play();
         let effects = self.mp.drain_frame_effects();
         if effects.release_pointer_lock && self.session.is_active() {
             if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
@@ -55,7 +55,10 @@ impl ClientInner {
             }
         }
         if let Some(spawn) = effects.pending_spawn {
+            let character = self.mp.character();
+            let kit_changed = self.self_state.character != character;
             self.self_state = SelfState::default_loadout();
+            self.self_state.character = character;
             self.self_state.position = spawn.position;
             self.self_state.ocular_yaw = spawn.yaw;
             self.self_state.torso_yaw = spawn.yaw;
@@ -63,6 +66,9 @@ impl ClientInner {
             self.projectiles = ProjectileWorld::new();
             self.health_by_id.clear();
             self.ui.set_status(String::new());
+            if kit_changed {
+                self.self_present = SelfPresentState::Idle;
+            }
         }
         if let Some(err) = effects.error {
             #[cfg(feature = "debug-tools")]
@@ -75,24 +81,20 @@ impl ClientInner {
         #[cfg(not(feature = "debug-tools"))]
         let console_open = false;
 
-        // Fly sync runs *after* mounted look + posed eye so F8 seeds at the true FP camera.
         #[cfg(feature = "debug-tools")]
-        let want_fly = self.debug.flycam_wanted();
-        #[cfg(feature = "debug-tools")]
-        let was_fly = self.view.is_flycam();
+        let debug_fly = self.debug.flycam_wanted();
         #[cfg(not(feature = "debug-tools"))]
-        let was_fly = false;
+        let debug_fly = false;
 
-        let play_ok = session_ok && !console_open && !was_fly && !mp_blocks_play;
+        let cam = self.mp.cam_intent(debug_fly);
+        let was_fly = self.view.is_flycam();
+        let play_ok = session_ok && !console_open && !cam.is_fly() && !self.mp.blocks_play();
         let fire_held = self.tick_play_controls(dt, look, play_ok);
 
         self.tick_combat(dt, fire_held);
 
-        #[cfg(feature = "debug-tools")]
-        self.tick_present(dt, session_ok, console_open, was_fly, look, want_fly);
-        #[cfg(not(feature = "debug-tools"))]
-        self.tick_present(dt, session_ok, console_open, was_fly, look, false);
+        self.tick_present(dt, session_ok, console_open, was_fly, look, cam);
 
-        self.draw_frame(width, height, mp_blocks_play)
+        self.draw_frame(width, height, cam)
     }
 }

@@ -4,7 +4,7 @@ use wasm_bindgen::prelude::*;
 
 #[cfg(feature = "debug-tools")]
 use crate::lineup::LineupState;
-use crate::mp;
+use crate::mp::{self, CamIntent};
 use crate::self_present::SelfPresentState;
 use crate::ui_overlay::{DebugDraw, OverlayGpu};
 use crate::view::overview_view_matrix;
@@ -18,17 +18,13 @@ impl ClientInner {
         &mut self,
         width: u32,
         height: u32,
-        mp_blocks_play: bool,
+        cam: CamIntent,
     ) -> Result<(), JsValue> {
-        #[cfg(feature = "debug-tools")]
-        let flycam = self.view.is_flycam();
-        #[cfg(not(feature = "debug-tools"))]
-        let flycam = false;
-
-        let draw_local_self = self.mp.is_solo() || self.mp.is_living();
+        let flycam = cam.is_fly();
+        let draw_local_self = self.mp.is_living();
 
         let (cam_eye, cam_fwd) = self.view.eye_and_forward(&self.self_state);
-        let view_mat = if mp_blocks_play {
+        let view_mat = if cam == CamIntent::Overview {
             overview_view_matrix()
         } else {
             self.view.view_matrix(&self.self_state)
@@ -243,6 +239,26 @@ impl ClientInner {
             if let Some((room, name)) = actions.join {
                 self.ui.set_status("joining…");
                 self.mp.begin_join_with(&room, &name);
+            }
+            if actions.play {
+                self.ui.sync_pick_character(self.mp.character());
+                self.mp.choose_play();
+            }
+            if actions.spectate {
+                self.mp.choose_spectate();
+            }
+            if actions.back_to_role {
+                self.mp.back_to_role();
+            }
+            if let Some(ch) = actions.confirm_character {
+                if let Some(committed) = self.mp.confirm_character(ch) {
+                    let kit_changed = self.self_state.character != committed;
+                    self.self_state.character = committed;
+                    if kit_changed {
+                        self.self_present = SelfPresentState::Idle;
+                    }
+                    self.ui.sync_pick_character(committed);
+                }
             }
             if actions.spawn {
                 self.mp.request_spawn();

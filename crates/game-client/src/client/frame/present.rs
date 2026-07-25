@@ -1,11 +1,11 @@
-//! Self/remote mesh pose and debug flycam for one frame.
+//! Self/remote mesh pose and camera intent for one frame.
 
+use crate::mp::CamIntent;
 use crate::self_present::SelfPresentState;
 
 use super::super::ClientInner;
 
 impl ClientInner {
-    #[cfg_attr(not(feature = "debug-tools"), allow(unused_variables))]
     pub(super) fn tick_present(
         &mut self,
         dt: f32,
@@ -13,16 +13,12 @@ impl ClientInner {
         console_open: bool,
         was_fly: bool,
         look: glam::Vec2,
-        want_fly: bool,
+        cam: CamIntent,
     ) {
-        let draw_local_self = self.mp.is_solo() || self.mp.is_living();
+        let draw_local_self = self.mp.is_living();
         if draw_local_self {
             if let SelfPresentState::Ready(gpu) = &mut self.self_present {
-                // Mounted FP hides local head (eye sits inside the shell). Flycam shows full body.
-                #[cfg(feature = "debug-tools")]
-                let first_person = !self.view.is_flycam();
-                #[cfg(not(feature = "debug-tools"))]
-                let first_person = true;
+                let first_person = !cam.is_fly();
                 gpu.apply_state(&self.renderer.queue, &self.self_state, first_person);
                 self.view
                     .set_mounted_look(gpu.view.look_origin, gpu.view.look_forward);
@@ -53,28 +49,39 @@ impl ClientInner {
             self.remote_present.clear();
         }
 
-        #[cfg(feature = "debug-tools")]
-        {
-            let mounted_eye = self.view.mounted_eye();
-            if let Some(msg) = self
-                .view
-                .sync_fly_intent(want_fly, &self.self_state, mounted_eye)
-            {
-                self.debug.shell.push_log(msg.to_string());
-                // Enter or leave: drop sticky WASD (held keys may only start
-                // counting once flycam_wanted flips true mid-hold).
-                self.fly_input.clear_keys();
-                self.move_input.clear_keys();
+        let status = match cam {
+            CamIntent::ProductFly => {
+                if !self.view.is_flycam() {
+                    self.view.enter_spectate_flycam();
+                    Some("spectate flycam")
+                } else {
+                    None
+                }
             }
+            CamIntent::DebugFly => {
+                let eye = self.view.mounted_eye();
+                self.view.sync_fly_intent(true, &self.self_state, eye)
+            }
+            CamIntent::Mounted | CamIntent::Overview => {
+                let eye = self.view.mounted_eye();
+                self.view.sync_fly_intent(false, &self.self_state, eye)
+            }
+        };
+        if let Some(msg) = status {
+            #[cfg(feature = "debug-tools")]
+            self.debug.shell.push_log(msg.to_string());
+            #[cfg(not(feature = "debug-tools"))]
+            let _ = msg;
+            self.fly_input.clear_keys();
+            self.move_input.clear_keys();
+        }
 
-            let flycam = self.view.is_flycam();
-            if session_ok && flycam && !console_open {
-                // Enter frame already baked this look into self → fly pose; don't double-apply.
-                let look = if was_fly { look } else { glam::Vec2::ZERO };
-                self.view.update_flycam(dt, &self.fly_input, look);
-            } else if console_open || !session_ok {
-                self.fly_input.clear_keys();
-            }
+        let flycam = self.view.is_flycam() && cam.is_fly();
+        if session_ok && flycam && !console_open {
+            let look = if was_fly { look } else { glam::Vec2::ZERO };
+            self.view.update_flycam(dt, &self.fly_input, look);
+        } else if console_open || !session_ok || !cam.is_fly() {
+            self.fly_input.clear_keys();
         }
     }
 }

@@ -4,7 +4,8 @@ use std::sync::Arc;
 
 use game_net::{
     decode_c2s, display_name_key, encode_s2c, encode_s2c_frame, normalize_display_name,
-    ClientToServer, PlayerId, ServerToClient, DEFAULT_ROOM_CODE, PROTOCOL_VERSION,
+    ClientToServer, NetRole, PlayerId, ServerToClient, DEFAULT_CHARACTER, DEFAULT_ROOM_CODE,
+    PROTOCOL_VERSION,
 };
 use tokio::sync::{mpsc, Mutex};
 use tracing::{info, warn};
@@ -195,6 +196,8 @@ async fn admit_member(
                 reliable_tx: reliable_tx.clone(),
                 display_name,
                 combat: CombatState::fresh(),
+                role: NetRole::Player,
+                character: DEFAULT_CHARACTER,
             },
         );
         guard.broadcast_roster(join_tick);
@@ -266,8 +269,13 @@ async fn handle_control_msg(
     clock: &SharedClock,
     roster: &Mutex<Roster>,
 ) {
-    if matches!(msg, ClientToServer::Spawn) {
-        handle_spawn(player_id, clock, roster).await;
+    match msg {
+        ClientToServer::Spawn => handle_spawn(player_id, clock, roster).await,
+        ClientToServer::SetRole { role } => handle_set_role(player_id, role, clock, roster).await,
+        ClientToServer::SetCharacter { character } => {
+            handle_set_character(player_id, character, clock, roster).await;
+        }
+        _ => {}
     }
 }
 
@@ -297,10 +305,14 @@ async fn handle_datagram(
             }
             false
         }
-        ClientToServer::DriveSample { tick, drive } => {
+        ClientToServer::DriveSample { tick, mut drive } => {
             let guard = roster.lock().await;
             if !guard.living(player_id) {
                 return false;
+            }
+            // Authority: roster kit wins over client-claimed drive.character.
+            if let Some(ch) = guard.character(player_id) {
+                drive.character = ch;
             }
             let Ok(relay) = encode_s2c(&ServerToClient::PeerDrive {
                 tick,
@@ -351,8 +363,37 @@ async fn handle_datagram(
             }
             false
         }
-        // Spawn is reliable-stream only.
-        ClientToServer::Spawn | ClientToServer::Hello { .. } => false,
+        // Reliable-stream only.
+        ClientToServer::Spawn
+        | ClientToServer::SetRole { .. }
+        | ClientToServer::SetCharacter { .. }
+        | ClientToServer::Hello { .. } => false,
+    }
+}
+
+async fn handle_set_role(
+    player_id: PlayerId,
+    role: NetRole,
+    clock: &SharedClock,
+    roster: &Mutex<Roster>,
+) {
+    let tick = clock.tick();
+    let mut guard = roster.lock().await;
+    if guard.set_role(player_id, role) {
+        guard.broadcast_roster(tick);
+    }
+}
+
+async fn handle_set_character(
+    player_id: PlayerId,
+    character: u8,
+    clock: &SharedClock,
+    roster: &Mutex<Roster>,
+) {
+    let tick = clock.tick();
+    let mut guard = roster.lock().await;
+    if guard.set_character(player_id, character) {
+        guard.broadcast_roster(tick);
     }
 }
 
@@ -361,7 +402,7 @@ async fn handle_spawn(player_id: PlayerId, clock: &SharedClock, roster: &Mutex<R
     let (position, yaw) = spawn_pose(tick, player_id);
     let ok = {
         let mut guard = roster.lock().await;
-        guard.try_first_spawn(player_id)
+        guard.try_spawn(player_id)
     };
     if !ok {
         return;

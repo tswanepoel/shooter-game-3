@@ -98,12 +98,14 @@ pub async fn join_session(shared: Rc<RefCell<Shared>>) -> Result<(), JsValue> {
         s.display_name = Some(display_name);
         s.clock
             .seed_from_welcome(client_now_secs(), server_time, tick);
-        s.phase = MpPhase::Joined;
+        s.phase = MpPhase::Role;
         s.join_secs = 0.0;
         s.probe_accum = 0.0;
         s.drive_accum = 0.0;
         s.spawn_retry_accum = 0.0;
         s.spawn_requested = false;
+        s.character = game_net::DEFAULT_CHARACTER;
+        s.role = game_net::NetRole::Player;
         s.remotes.clear();
         s.roster.clear();
     }
@@ -186,10 +188,13 @@ fn handle_s2c(shared: &Rc<RefCell<Shared>>, msg: ServerToClient, t4: f64) {
         ServerToClient::Roster { entries, .. } => {
             let mut s = shared.borrow_mut();
             let player_id = s.player_id;
-            let Shared {
-                roster, remotes, ..
-            } = &mut *s;
-            apply_roster(roster, remotes, player_id, entries);
+            {
+                let Shared {
+                    roster, remotes, ..
+                } = &mut *s;
+                apply_roster(roster, remotes, player_id, entries);
+            }
+            s.reconcile_self_from_roster();
         }
         ServerToClient::PeerDrive { tick, id, drive } => {
             let mut s = shared.borrow_mut();

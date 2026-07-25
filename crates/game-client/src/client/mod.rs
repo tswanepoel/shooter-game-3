@@ -24,9 +24,7 @@ use crate::remote_present::RemotePresent;
 use crate::renderer::Renderer;
 use crate::self_present::SelfPresentState;
 use crate::ui_overlay::UiOverlay;
-#[cfg(feature = "debug-tools")]
-use crate::view::FlyInput;
-use crate::view::ViewController;
+use crate::view::{FlyInput, ViewController};
 pub(crate) struct ClientInner {
     renderer: Renderer,
     pub(crate) canvas: HtmlCanvasElement,
@@ -50,7 +48,6 @@ pub(crate) struct ClientInner {
     pub(crate) ui: UiOverlay,
     #[cfg(feature = "debug-tools")]
     pub(crate) debug: DebugTools,
-    #[cfg(feature = "debug-tools")]
     pub(crate) fly_input: FlyInput,
     #[cfg(feature = "debug-tools")]
     lineup: LineupState,
@@ -88,7 +85,6 @@ impl ClientInner {
             ui,
             #[cfg(feature = "debug-tools")]
             debug,
-            #[cfg(feature = "debug-tools")]
             fly_input: FlyInput::default(),
             #[cfg(feature = "debug-tools")]
             lineup: LineupState::Idle,
@@ -110,7 +106,7 @@ impl ClientInner {
                     self.mp.leave();
                     self.remote_present.clear();
                     self.health_by_id.clear();
-                    self.debug.shell.push_log("mp: left (solo)");
+                    self.debug.shell.push_log("mp: left (lobby)");
                     self.ui.set_status(String::new());
                 }
                 DebugHostRequest::MpStatus => {

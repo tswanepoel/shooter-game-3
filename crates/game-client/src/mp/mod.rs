@@ -1,4 +1,4 @@
-//! WebTransport multiplayer session (room join, spawn, score — 051).
+//! WebTransport multiplayer session (room join, role, character, spawn, score — 051/052).
 
 mod apply;
 mod clock;
@@ -16,8 +16,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use game_net::{
-    encode_c2s, normalize_display_name, ClientToServer, NetImpactHit, NetProjectileSpawn, NetVec3,
-    PlayerId, RosterEntry, DEFAULT_ROOM_CODE as ROOM_CODE, TICK_HZ,
+    encode_c2s, is_known_character, normalize_display_name, ClientToServer, NetImpactHit,
+    NetProjectileSpawn, NetRole, NetVec3, PlayerId, RosterEntry, DEFAULT_CHARACTER,
+    DEFAULT_ROOM_CODE as ROOM_CODE, TICK_HZ,
 };
 use game_sim::{weapon_def, AmmoKind, ImpactHit, Projectile, SelfState};
 use js_sys::{Reflect, Uint8Array};
@@ -29,28 +30,94 @@ use clock::ClockSync;
 use cookie::load_display_name_cookie as load_cookie;
 use session::{join_session, js_error_string};
 
-/// Resend Spawn while Joined after user confirm until YouSpawned.
+/// Resend Spawn while Ready after user confirm until YouSpawned.
 const SPAWN_RETRY_SECS: f32 = 0.5;
 
+/// Client product phase (UI/play gates). Server role/living is separate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MpPhase {
-    Solo,
+    Lobby,
     Connecting,
-    Joined,
+    Role,
+    Character,
+    Ready,
+    Spectating,
+    /// Death stays here until **053** owns the bench.
     Living,
 }
 
 impl MpPhase {
     pub fn in_room(self) -> bool {
-        matches!(self, Self::Joined | Self::Living)
+        matches!(
+            self,
+            Self::Role | Self::Character | Self::Ready | Self::Spectating | Self::Living
+        )
     }
 
     pub fn blocks_play(self) -> bool {
-        matches!(self, Self::Connecting | Self::Joined)
+        !matches!(self, Self::Living)
     }
 
     pub fn forces_free_cursor(self) -> bool {
-        matches!(self, Self::Connecting | Self::Joined)
+        matches!(
+            self,
+            Self::Lobby | Self::Connecting | Self::Role | Self::Character | Self::Ready
+        )
+    }
+
+    pub fn is_spectating(self) -> bool {
+        self == Self::Spectating
+    }
+
+    pub fn can_go(self, to: Self) -> bool {
+        use MpPhase::*;
+        matches!(
+            (self, to),
+            (Lobby, Connecting)
+                | (Connecting, Role)
+                | (Connecting, Lobby)
+                | (Role, Character)
+                | (Role, Spectating)
+                | (Role, Lobby)
+                | (Character, Ready)
+                | (Character, Role)
+                | (Character, Spectating)
+                | (Character, Lobby)
+                | (Ready, Character)
+                | (Ready, Living)
+                | (Ready, Spectating)
+                | (Ready, Role)
+                | (Ready, Lobby)
+                | (Spectating, Character)
+                | (Spectating, Role)
+                | (Spectating, Lobby)
+                | (Living, Spectating)
+                | (Living, Lobby)
+        )
+    }
+}
+
+/// Per-frame camera intent (product phase + optional debug F8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CamIntent {
+    Overview,
+    ProductFly,
+    DebugFly,
+    Mounted,
+}
+
+impl CamIntent {
+    pub fn derive(phase: MpPhase, debug_fly_wanted: bool) -> Self {
+        match phase {
+            MpPhase::Spectating => Self::ProductFly,
+            MpPhase::Living if debug_fly_wanted => Self::DebugFly,
+            MpPhase::Living => Self::Mounted,
+            _ => Self::Overview,
+        }
+    }
+
+    pub fn is_fly(self) -> bool {
+        matches!(self, Self::ProductFly | Self::DebugFly)
     }
 }
 
@@ -83,7 +150,6 @@ pub(crate) struct Shared {
     pub(crate) player_id: Option<PlayerId>,
     pub(crate) display_name: Option<String>,
     pub(crate) dgram_writer: Option<WritableStreamDefaultWriter>,
-    /// Bi-stream writer for reliable control (Spawn).
     pub(crate) reliable_writer: Option<WritableStreamDefaultWriter>,
     pub(crate) transport: Option<wasm_bindgen::JsValue>,
     pub(crate) last_error: Option<String>,
@@ -96,16 +162,17 @@ pub(crate) struct Shared {
     pub(crate) pending_projectiles: Vec<PeerProjectileBatch>,
     pub(crate) pending_hits: Vec<PeerImpactHitBatch>,
     pub(crate) pending_spawn: Option<PendingSpawn>,
-    /// User confirmed Spawn; retry until Living.
     pub(crate) spawn_requested: bool,
     pub(crate) join_room: String,
     pub(crate) join_name: String,
+    pub(crate) character: u8,
+    pub(crate) role: NetRole,
 }
 
 impl Shared {
     fn new() -> Self {
         Self {
-            phase: MpPhase::Solo,
+            phase: MpPhase::Lobby,
             clock: ClockSync::new(),
             player_id: None,
             display_name: None,
@@ -125,11 +192,13 @@ impl Shared {
             spawn_requested: false,
             join_room: ROOM_CODE.into(),
             join_name: String::new(),
+            character: DEFAULT_CHARACTER,
+            role: NetRole::Player,
         }
     }
 
     pub(crate) fn reset_session(&mut self) {
-        self.phase = MpPhase::Solo;
+        self.phase = MpPhase::Lobby;
         self.clock.clear();
         self.player_id = None;
         self.display_name = None;
@@ -146,6 +215,20 @@ impl Shared {
         self.pending_hits.clear();
         self.pending_spawn = None;
         self.spawn_requested = false;
+        self.character = DEFAULT_CHARACTER;
+        self.role = NetRole::Player;
+    }
+
+    /// Roster is kit/role authority; product phase stays client-side.
+    pub(crate) fn reconcile_self_from_roster(&mut self) {
+        let Some(id) = self.player_id else {
+            return;
+        };
+        let Some(me) = self.roster.iter().find(|e| e.id == id) else {
+            return;
+        };
+        self.character = me.character;
+        self.role = me.role;
     }
 }
 
@@ -172,16 +255,24 @@ impl MpClient {
         self.phase() == MpPhase::Living
     }
 
-    pub fn is_solo(&self) -> bool {
-        self.phase() == MpPhase::Solo
-    }
-
     pub fn is_connecting(&self) -> bool {
         self.phase() == MpPhase::Connecting
     }
 
+    pub fn is_spectating(&self) -> bool {
+        self.phase().is_spectating()
+    }
+
     pub fn blocks_play(&self) -> bool {
         self.phase().blocks_play()
+    }
+
+    pub fn character(&self) -> u8 {
+        self.shared.borrow().character
+    }
+
+    pub fn cam_intent(&self, debug_fly_wanted: bool) -> CamIntent {
+        CamIntent::derive(self.phase(), debug_fly_wanted)
     }
 
     pub fn remotes(&self) -> std::cell::Ref<'_, RemoteTable> {
@@ -206,15 +297,15 @@ impl MpClient {
     pub fn status_line(&self) -> String {
         let s = self.shared.borrow();
         match s.phase {
-            MpPhase::Solo => "mp: solo".into(),
+            MpPhase::Lobby => "mp: lobby".into(),
             MpPhase::Connecting => "mp: connecting…".into(),
-            MpPhase::Joined => {
+            MpPhase::Role => {
                 let name = s.display_name.as_deref().unwrap_or("—");
-                format!(
-                    "mp: joined (spawn) name={name} remotes={}",
-                    s.remotes.count()
-                )
+                format!("mp: role name={name}")
             }
+            MpPhase::Character => format!("mp: character {}", s.character as char),
+            MpPhase::Ready => format!("mp: ready (spawn) kit={}", s.character as char),
+            MpPhase::Spectating => "mp: spectating".into(),
             MpPhase::Living => {
                 let id = s
                     .player_id
@@ -356,7 +447,7 @@ impl MpClient {
 
     pub fn begin_join_with(&self, room_code: &str, display_name: &str) {
         let mut s = self.shared.borrow_mut();
-        if s.phase != MpPhase::Solo {
+        if !s.phase.can_go(MpPhase::Connecting) {
             return;
         }
         let name = match normalize_display_name(display_name) {
@@ -389,9 +480,71 @@ impl MpClient {
         });
     }
 
+    pub fn choose_play(&self) {
+        let mut s = self.shared.borrow_mut();
+        if !s.phase.can_go(MpPhase::Character) {
+            return;
+        }
+        s.role = NetRole::Player;
+        s.phase = MpPhase::Character;
+        s.spawn_requested = false;
+        send_reliable_locked(
+            &s,
+            &ClientToServer::SetRole {
+                role: NetRole::Player,
+            },
+        );
+    }
+
+    pub fn choose_spectate(&self) {
+        let mut s = self.shared.borrow_mut();
+        if !s.phase.can_go(MpPhase::Spectating) {
+            return;
+        }
+        s.role = NetRole::Spectator;
+        s.phase = MpPhase::Spectating;
+        s.spawn_requested = false;
+        send_reliable_locked(
+            &s,
+            &ClientToServer::SetRole {
+                role: NetRole::Spectator,
+            },
+        );
+    }
+
+    /// UI back only — does not resend role.
+    pub fn back_to_role(&self) {
+        let mut s = self.shared.borrow_mut();
+        if !s.phase.can_go(MpPhase::Role) {
+            return;
+        }
+        s.phase = MpPhase::Role;
+        s.spawn_requested = false;
+    }
+
+    /// Commit kit and advance to Ready (`SetCharacter` only).
+    pub fn confirm_character(&self, character: u8) -> Option<u8> {
+        if !is_known_character(character) {
+            return None;
+        }
+        let mut s = self.shared.borrow_mut();
+        if s.phase != MpPhase::Character && s.phase != MpPhase::Ready {
+            return None;
+        }
+        if s.phase == MpPhase::Character && !s.phase.can_go(MpPhase::Ready) {
+            return None;
+        }
+        s.character = character;
+        s.role = NetRole::Player;
+        s.phase = MpPhase::Ready;
+        s.spawn_requested = false;
+        send_reliable_locked(&s, &ClientToServer::SetCharacter { character });
+        Some(character)
+    }
+
     pub fn request_spawn(&self) {
         let mut s = self.shared.borrow_mut();
-        if s.phase != MpPhase::Joined {
+        if s.phase != MpPhase::Ready {
             return;
         }
         s.spawn_requested = true;
@@ -422,10 +575,10 @@ impl MpClient {
 
         let dgram = s.dgram_writer.clone();
         let living = s.phase == MpPhase::Living;
-        let joined = s.phase == MpPhase::Joined;
+        let ready = s.phase == MpPhase::Ready;
 
         let mut send_spawn = false;
-        if joined && s.spawn_requested {
+        if ready && s.spawn_requested {
             s.spawn_retry_accum += dt;
             if s.spawn_retry_accum >= SPAWN_RETRY_SECS {
                 s.spawn_retry_accum = 0.0;
@@ -481,7 +634,11 @@ impl Default for MpClient {
 }
 
 fn send_spawn_locked(s: &Shared) {
-    let Ok(payload) = encode_c2s(&ClientToServer::Spawn) else {
+    send_reliable_locked(s, &ClientToServer::Spawn);
+}
+
+fn send_reliable_locked(s: &Shared, msg: &ClientToServer) {
+    let Ok(payload) = encode_c2s(msg) else {
         return;
     };
     let Some(w) = s.reliable_writer.as_ref() else {
@@ -531,4 +688,41 @@ pub(crate) fn client_now_secs() -> f64 {
         .and_then(|w| w.performance())
         .map(|p| p.now() / 1000.0)
         .unwrap_or(0.0)
+}
+
+#[cfg(test)]
+mod phase_tests {
+    use super::*;
+
+    #[test]
+    fn transition_graph_core_paths() {
+        assert!(MpPhase::Lobby.can_go(MpPhase::Connecting));
+        assert!(MpPhase::Connecting.can_go(MpPhase::Role));
+        assert!(MpPhase::Role.can_go(MpPhase::Character));
+        assert!(MpPhase::Role.can_go(MpPhase::Spectating));
+        assert!(MpPhase::Character.can_go(MpPhase::Ready));
+        assert!(MpPhase::Ready.can_go(MpPhase::Living));
+        assert!(MpPhase::Spectating.can_go(MpPhase::Character));
+        assert!(MpPhase::Living.can_go(MpPhase::Spectating));
+        assert!(!MpPhase::Lobby.can_go(MpPhase::Living));
+        assert!(!MpPhase::Spectating.can_go(MpPhase::Living));
+        assert!(!MpPhase::Living.can_go(MpPhase::Ready));
+    }
+
+    #[test]
+    fn cam_intent_derives() {
+        assert_eq!(CamIntent::derive(MpPhase::Role, false), CamIntent::Overview);
+        assert_eq!(
+            CamIntent::derive(MpPhase::Spectating, true),
+            CamIntent::ProductFly
+        );
+        assert_eq!(
+            CamIntent::derive(MpPhase::Living, false),
+            CamIntent::Mounted
+        );
+        assert_eq!(
+            CamIntent::derive(MpPhase::Living, true),
+            CamIntent::DebugFly
+        );
+    }
 }

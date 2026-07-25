@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 
 use game_net::{
-    display_name_key, encode_s2c_frame, NetImpactHit, NetVec3, PlayerId, RosterEntry,
-    ServerToClient,
+    display_name_key, encode_s2c_frame, is_known_character, NetImpactHit, NetRole, NetVec3,
+    PlayerId, RosterEntry, ServerToClient,
 };
 use game_sim::{impact_damage, AmmoKind, HitBodyPart, HEALTH_MAX};
 use tokio::sync::mpsc;
@@ -65,6 +65,8 @@ pub struct PeerEntry {
     pub reliable_tx: mpsc::UnboundedSender<Vec<u8>>,
     pub display_name: String,
     pub combat: CombatState,
+    pub role: NetRole,
+    pub character: u8,
 }
 
 pub struct Roster {
@@ -151,11 +153,30 @@ impl Roster {
             .unwrap_or(false)
     }
 
-    pub fn try_first_spawn(&mut self, id: PlayerId) -> bool {
-        self.peers
-            .get_mut(&id)
-            .map(|p| p.combat.try_first_spawn())
-            .unwrap_or(false)
+    pub fn try_spawn(&mut self, id: PlayerId) -> bool {
+        let Some(peer) = self.peers.get_mut(&id) else {
+            return false;
+        };
+        try_spawn_member(&peer.role, peer.character, &mut peer.combat)
+    }
+
+    pub fn set_role(&mut self, id: PlayerId, role: NetRole) -> bool {
+        let Some(peer) = self.peers.get_mut(&id) else {
+            return false;
+        };
+        apply_role(&mut peer.role, &mut peer.combat, role);
+        true
+    }
+
+    pub fn set_character(&mut self, id: PlayerId, character: u8) -> bool {
+        let Some(peer) = self.peers.get_mut(&id) else {
+            return false;
+        };
+        apply_character(&mut peer.character, &peer.combat, character)
+    }
+
+    pub fn character(&self, id: PlayerId) -> Option<u8> {
+        self.peers.get(&id).map(|p| p.character)
     }
 
     /// Apply a claimed hit in place. Returns true when a kill was scored.
@@ -172,6 +193,8 @@ impl Roster {
                 display_name: p.display_name.clone(),
                 score: p.combat.score,
                 living: p.combat.living,
+                role: p.role,
+                character: p.character,
             })
             .collect();
         entries.sort_by_key(|e| e.id);
@@ -214,6 +237,28 @@ impl Roster {
             self.broadcast_reliable_all(&bytes);
         }
     }
+}
+
+pub fn apply_role(role: &mut NetRole, combat: &mut CombatState, new_role: NetRole) {
+    *role = new_role;
+    if new_role == NetRole::Spectator && combat.living {
+        combat.living = false;
+    }
+}
+
+pub fn apply_character(character: &mut u8, combat: &CombatState, new_character: u8) -> bool {
+    if combat.living || !is_known_character(new_character) {
+        return false;
+    }
+    *character = new_character;
+    true
+}
+
+pub fn try_spawn_member(role: &NetRole, character: u8, combat: &mut CombatState) -> bool {
+    if *role != NetRole::Player || !is_known_character(character) {
+        return false;
+    }
+    combat.try_first_spawn()
 }
 
 pub fn ammo_from_wire(ammo: u8) -> Option<AmmoKind> {
@@ -359,5 +404,47 @@ mod tests {
         assert_eq!(ya, yb);
         let (c, yc) = spawn_pose(11, 1);
         assert!(a != c || ya != yc);
+    }
+
+    #[test]
+    fn apply_role_clears_living_on_spectate() {
+        let mut role = NetRole::Player;
+        let mut combat = CombatState {
+            living: true,
+            has_entered: true,
+            health: HEALTH_MAX,
+            score: 0,
+        };
+        apply_role(&mut role, &mut combat, NetRole::Spectator);
+        assert_eq!(role, NetRole::Spectator);
+        assert!(!combat.living);
+    }
+
+    #[test]
+    fn apply_character_rejects_living_and_unknown() {
+        let mut ch = b'a';
+        let living = CombatState {
+            living: true,
+            has_entered: true,
+            health: HEALTH_MAX,
+            score: 0,
+        };
+        assert!(!apply_character(&mut ch, &living, b'c'));
+        assert_eq!(ch, b'a');
+
+        let waiting = CombatState::fresh();
+        assert!(!apply_character(&mut ch, &waiting, b'z'));
+        assert!(apply_character(&mut ch, &waiting, b'c'));
+        assert_eq!(ch, b'c');
+    }
+
+    #[test]
+    fn try_spawn_member_gates() {
+        let mut combat = CombatState::fresh();
+        assert!(!try_spawn_member(&NetRole::Spectator, b'a', &mut combat));
+        assert!(!try_spawn_member(&NetRole::Player, b'z', &mut combat));
+        assert!(try_spawn_member(&NetRole::Player, b'a', &mut combat));
+        assert!(combat.living && combat.has_entered);
+        assert!(!try_spawn_member(&NetRole::Player, b'a', &mut combat));
     }
 }

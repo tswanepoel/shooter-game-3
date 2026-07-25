@@ -17,7 +17,7 @@ After successful join (**Welcome**) and before living **spawn** (or as the stand
 3a. **Play** → **character picker** → confirm character → proceed toward spawn (defaults from **051** until **053**).  
 3b. **Spectate** → enter spectator view.
 
-From spectate, a GPU control may return to the role step to become a player (pick character, then spawn). v1 enters spectate from the post-join role step and from pre-spawn; living players keep their figure until death bench (**053**) or leave.
+From spectate, a GPU control may return to the role step to become a player (pick character, then spawn). Spectate is also reachable from pre-spawn and from living (score chrome). **Death** keeps the client in the living product phase with a corpse present until **053** owns the loadout/spawn bench; score and membership continue.
 
 ## Character
 
@@ -57,8 +57,10 @@ With character committed and role = player:
 
 ## Wire / present
 
-- C→S: commit role (`player` | `spectator`), and when player, `character_id`.  
-- S→C: roster/presence includes role and character id so peers draw the right kit and treat spectators as members without a living figure.  
+- Protocol **v9** (breaks v8 clients): roster rows carry `role` + `character`; C→S adds `SetRole` / `SetCharacter`.  
+- C→S: commit role (`player` | `spectator`), and when player, `character_id` (letter `a`…`r`).  
+- S→C: roster/presence includes role and character id so peers draw the right kit and treat spectators as members without a living figure. Last kit is kept while spectating.  
+- Drive relay stamps the server-known character so peer present cannot diverge from the commit.  
 - Remote pose tables include living figures; spectators contribute presence/roster only.
 
 ## Acceptance criteria

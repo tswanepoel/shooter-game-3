@@ -1,15 +1,11 @@
-//! Single render view: mount (self) or debug flycam.
+//! Single render view: mount (self) or flycam (product spectate + debug F8).
 
-use game_sim::SelfState;
-#[cfg(feature = "debug-tools")]
-use game_sim::OCULAR_ELEV_CAP_RAD;
+use game_sim::{SelfState, OCULAR_ELEV_CAP_RAD};
 use glam::{Mat4, Vec3};
 
 /// Default flycam move speed (m/s). Client presentation, not world ground truth.
-#[cfg(feature = "debug-tools")]
 const FLY_SPEED_M_S: f32 = 6.0;
 /// Sprint multiplier while Shift is held.
-#[cfg(feature = "debug-tools")]
 const FLY_SPRINT_MULT: f32 = 3.0;
 /// Mouse look sensitivity (radians per pixel). Shared with mounted ocular.
 pub const LOOK_SENS_RAD_PER_PX: f32 = 0.00015;
@@ -17,15 +13,15 @@ pub const LOOK_SENS_RAD_PER_PX: f32 = 0.00015;
 /// Rest eye before mesh reports a posed face point (character-a / FACE_OFFSET).
 const DEFAULT_MOUNTED_EYE_M: Vec3 = Vec3::new(0.0, 1.52, 0.27);
 const DEFAULT_MOUNTED_FORWARD: Vec3 = Vec3::Z;
+/// Spectate entry eye (matches overview loft roughly).
+const SPECTATE_START_EYE: Vec3 = Vec3::new(0.0, 8.0, 12.0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ViewMode {
     Mounted,
-    #[cfg(feature = "debug-tools")]
     Flycam,
 }
 
-#[cfg(feature = "debug-tools")]
 #[derive(Debug, Clone, Copy)]
 struct FlyPose {
     position: Vec3,
@@ -33,13 +29,26 @@ struct FlyPose {
     pitch: f32,
 }
 
-#[cfg(feature = "debug-tools")]
 impl FlyPose {
     fn from_self(self_state: &SelfState, eye: Vec3) -> Self {
         Self {
             position: eye,
             yaw: self_state.ocular_yaw,
             pitch: self_state.ocular_pitch,
+        }
+    }
+
+    fn overview_start() -> Self {
+        // Look toward origin from loft.
+        let eye = SPECTATE_START_EYE;
+        let to = -eye;
+        let yaw = to.x.atan2(to.z);
+        let flat = (to.x * to.x + to.z * to.z).sqrt();
+        let pitch = (-to.y).atan2(flat);
+        Self {
+            position: eye,
+            yaw,
+            pitch,
         }
     }
 
@@ -50,7 +59,6 @@ impl FlyPose {
 }
 
 /// Held-key input for the flycam controller (look comes from the input session).
-#[cfg(feature = "debug-tools")]
 #[derive(Debug, Default, Clone)]
 pub struct FlyInput {
     pub forward: bool,
@@ -62,7 +70,6 @@ pub struct FlyInput {
     pub sprint: bool,
 }
 
-#[cfg(feature = "debug-tools")]
 impl FlyInput {
     pub fn set_key(&mut self, code: &str, pressed: bool) {
         match code {
@@ -114,7 +121,6 @@ pub fn overview_view_matrix() -> Mat4 {
 #[derive(Debug)]
 pub struct ViewController {
     mode: ViewMode,
-    #[cfg(feature = "debug-tools")]
     fly: FlyPose,
     mounted_eye: Vec3,
     mounted_forward: Vec3,
@@ -130,7 +136,6 @@ impl ViewController {
     pub fn new() -> Self {
         Self {
             mode: ViewMode::Mounted,
-            #[cfg(feature = "debug-tools")]
             fly: FlyPose::from_self(&SelfState::default_loadout(), DEFAULT_MOUNTED_EYE_M),
             mounted_eye: DEFAULT_MOUNTED_EYE_M,
             mounted_forward: DEFAULT_MOUNTED_FORWARD,
@@ -147,18 +152,15 @@ impl ViewController {
     }
 
     /// World-space eye currently used for the mounted (FP) view.
-    #[cfg(feature = "debug-tools")]
     pub fn mounted_eye(&self) -> Vec3 {
         self.mounted_eye
     }
 
-    #[cfg(feature = "debug-tools")]
     pub fn is_flycam(&self) -> bool {
         self.mode == ViewMode::Flycam
     }
 
     /// Unmount at the given eye (must be the current FP camera position).
-    #[cfg(feature = "debug-tools")]
     pub fn enter_flycam(&mut self, self_state: &SelfState, eye: Vec3) {
         if self.mode == ViewMode::Mounted {
             self.mounted_eye = eye;
@@ -167,7 +169,14 @@ impl ViewController {
         self.mode = ViewMode::Flycam;
     }
 
-    #[cfg(feature = "debug-tools")]
+    /// Spectate free cam (overview loft start, not FP unmount).
+    pub fn enter_spectate_flycam(&mut self) {
+        if self.mode != ViewMode::Flycam {
+            self.fly = FlyPose::overview_start();
+        }
+        self.mode = ViewMode::Flycam;
+    }
+
     pub fn leave_flycam(&mut self, self_state: &SelfState) {
         self.mode = ViewMode::Mounted;
         self.fly = FlyPose::from_self(self_state, self.mounted_eye);
@@ -175,7 +184,6 @@ impl ViewController {
 
     /// Sync mode from `cam.fly` after the mounted eye for this frame is known.
     /// Returns a status line if mode changed.
-    #[cfg(feature = "debug-tools")]
     pub fn sync_fly_intent(
         &mut self,
         want_fly: bool,
@@ -195,7 +203,6 @@ impl ViewController {
         }
     }
 
-    #[cfg(feature = "debug-tools")]
     pub fn update_flycam(&mut self, dt: f32, input: &FlyInput, look_px: glam::Vec2) {
         if self.mode != ViewMode::Flycam {
             return;
@@ -245,7 +252,6 @@ impl ViewController {
         let (eye, forward) = self.eye_and_forward(self_state);
         let yaw = match self.mode {
             ViewMode::Mounted => forward.x.atan2(forward.z),
-            #[cfg(feature = "debug-tools")]
             ViewMode::Flycam => self.fly.yaw,
         };
         look_to_stable(eye, forward, yaw)
@@ -254,7 +260,6 @@ impl ViewController {
     pub fn eye_and_forward(&self, _self_state: &SelfState) -> (Vec3, Vec3) {
         match self.mode {
             ViewMode::Mounted => (self.mounted_eye, self.mounted_forward),
-            #[cfg(feature = "debug-tools")]
             ViewMode::Flycam => (self.fly.position, self.fly.forward()),
         }
     }
@@ -281,7 +286,7 @@ fn look_to_stable(eye: Vec3, forward: Vec3, yaw: f32) -> Mat4 {
     Mat4::look_to_rh(eye, forward, up)
 }
 
-#[cfg(all(test, feature = "debug-tools"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -397,5 +402,15 @@ mod tests {
             "flycam must keep straight-down from FP, fwd={fwd}"
         );
         assert!((v.fly.pitch + OCULAR_ELEV_CAP_RAD).abs() < 1e-5);
+    }
+
+    #[test]
+    fn spectate_starts_in_flycam() {
+        let mut v = ViewController::new();
+        v.enter_spectate_flycam();
+        assert!(v.is_flycam());
+        let s = SelfState::default_loadout();
+        let (eye, _) = v.eye_and_forward(&s);
+        assert!(eye.y > 2.0);
     }
 }

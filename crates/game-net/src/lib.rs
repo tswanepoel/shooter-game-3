@@ -6,8 +6,8 @@ pub const TICK_HZ: u32 = 180;
 
 pub const TICK_DURATION_SECS: f64 = 1.0 / TICK_HZ as f64;
 
-/// v8: roster is sole presence truth; PeerJoined/Left/Spawned removed.
-pub const PROTOCOL_VERSION: u16 = 8;
+/// v9: role + character on roster; SetRole / SetCharacter (052).
+pub const PROTOCOL_VERSION: u16 = 9;
 
 /// Default room code (051 MVP). Client pre-fills this; server accepts only this value.
 pub const DEFAULT_ROOM_CODE: &str = "dev";
@@ -15,7 +15,28 @@ pub const DEFAULT_ROOM_CODE: &str = "dev";
 /// Max display-name length after trim (051).
 pub const DISPLAY_NAME_MAX_CHARS: usize = 24;
 
+/// Default body kit letter (051 / 052 — Kenney character-a).
+pub const DEFAULT_CHARACTER: u8 = b'a';
+
+/// Inclusive kit letter range in the cooked character pack (`character-a` … `character-r`).
+pub const CHARACTER_FIRST: u8 = b'a';
+pub const CHARACTER_LAST: u8 = b'r';
+
 pub type PlayerId = u32;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NetRole {
+    Player,
+    Spectator,
+}
+
+pub fn is_known_character(id: u8) -> bool {
+    (CHARACTER_FIRST..=CHARACTER_LAST).contains(&id)
+}
+
+pub fn character_catalog() -> impl Iterator<Item = u8> {
+    CHARACTER_FIRST..=CHARACTER_LAST
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct NetVec3 {
@@ -86,14 +107,15 @@ pub struct NetImpactHit {
     pub part: u8,
 }
 
-/// One row on the room score roster (051). Sole membership / score / living truth.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RosterEntry {
     pub id: PlayerId,
     pub display_name: String,
     pub score: u32,
-    /// True after successful spawn while still in the match (may be false after death until later respawn features).
     pub living: bool,
+    pub role: NetRole,
+    /// Last committed kit (kept while spectating).
+    pub character: u8,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -120,7 +142,15 @@ pub enum ClientToServer {
         tick: u64,
         hit: NetImpactHit,
     },
-    /// Request living entry on the map (051). Reliable control stream only.
+    /// Reliable control stream only.
+    SetRole {
+        role: NetRole,
+    },
+    /// Reliable control stream only; rejected while living.
+    SetCharacter {
+        character: u8,
+    },
+    /// Reliable control stream only.
     Spawn,
 }
 
@@ -147,7 +177,7 @@ pub enum ServerToClient {
         position: NetVec3,
         yaw: f32,
     },
-    /// Full roster snapshot — sole membership / score / living truth (051 / v8).
+    /// Sole membership / score / living / role / kit truth.
     Roster {
         tick: u64,
         entries: Vec<RosterEntry>,
@@ -259,6 +289,17 @@ mod tests {
         }
     }
 
+    fn sample_roster_entry() -> RosterEntry {
+        RosterEntry {
+            id: 1,
+            display_name: "Ace".into(),
+            score: 2,
+            living: true,
+            role: NetRole::Player,
+            character: b'a',
+        }
+    }
+
     #[test]
     fn hello_roundtrip() {
         let msg = ClientToServer::Hello {
@@ -329,10 +370,20 @@ mod tests {
     }
 
     #[test]
-    fn spawn_and_roster_roundtrip() {
+    fn spawn_role_character_and_roster_roundtrip() {
         let spawn = ClientToServer::Spawn;
         let b = encode_c2s(&spawn).unwrap();
         assert_eq!(decode_c2s(&b).unwrap(), spawn);
+
+        let set_role = ClientToServer::SetRole {
+            role: NetRole::Spectator,
+        };
+        let b = encode_c2s(&set_role).unwrap();
+        assert_eq!(decode_c2s(&b).unwrap(), set_role);
+
+        let set_ch = ClientToServer::SetCharacter { character: b'c' };
+        let b = encode_c2s(&set_ch).unwrap();
+        assert_eq!(decode_c2s(&b).unwrap(), set_ch);
 
         let you = ServerToClient::YouSpawned {
             tick: 1,
@@ -344,15 +395,19 @@ mod tests {
 
         let roster = ServerToClient::Roster {
             tick: 3,
-            entries: vec![RosterEntry {
-                id: 1,
-                display_name: "Ace".into(),
-                score: 2,
-                living: true,
-            }],
+            entries: vec![sample_roster_entry()],
         };
         let b = encode_s2c(&roster).unwrap();
         assert_eq!(decode_s2c(&b).unwrap(), roster);
+    }
+
+    #[test]
+    fn known_character_letters() {
+        assert!(is_known_character(b'a'));
+        assert!(is_known_character(b'r'));
+        assert!(!is_known_character(b's'));
+        assert!(!is_known_character(b'A'));
+        assert_eq!(character_catalog().count(), 18);
     }
 
     #[test]
@@ -446,6 +501,8 @@ mod tests {
                 display_name: "A".into(),
                 score: 0,
                 living: false,
+                role: NetRole::Spectator,
+                character: b'b',
             }],
         };
         let mut buf = encode_s2c_frame(&a).unwrap();

@@ -1,6 +1,6 @@
 //! Single egui pipeline for product chrome and optional debug shell.
 
-use game_net::RosterEntry;
+use game_net::{character_catalog, NetRole, RosterEntry, DEFAULT_CHARACTER};
 
 use crate::mp::{self, MpPhase, DEFAULT_ROOM_CODE};
 
@@ -19,6 +19,10 @@ pub struct OverlayGpu<'a> {
 #[derive(Debug, Default, Clone)]
 pub struct ProductActions {
     pub join: Option<(String, String)>,
+    pub play: bool,
+    pub spectate: bool,
+    pub confirm_character: Option<u8>,
+    pub back_to_role: bool,
     pub spawn: bool,
     pub leave: bool,
 }
@@ -32,6 +36,7 @@ pub struct UiOverlay {
     display_name: String,
     status: String,
     ui_wants_pointer: bool,
+    pick_character: u8,
 }
 
 impl UiOverlay {
@@ -40,10 +45,10 @@ impl UiOverlay {
         let egui_ctx = egui::Context::default();
         egui_ctx.set_visuals(egui::Visuals::dark());
         egui_ctx.style_mut(|style| {
-            style.spacing.item_spacing = egui::vec2(4.0, 2.0);
-            style.spacing.window_margin = egui::Margin::same(6);
-            let mono = egui::FontId::new(12.0, egui::FontFamily::Monospace);
-            let body = egui::FontId::new(12.0, egui::FontFamily::Proportional);
+            style.spacing.item_spacing = egui::vec2(8.0, 6.0);
+            style.spacing.window_margin = egui::Margin::same(12);
+            let mono = egui::FontId::new(14.0, egui::FontFamily::Monospace);
+            let body = egui::FontId::new(16.0, egui::FontFamily::Proportional);
             style.text_styles.insert(egui::TextStyle::Body, body);
             style
                 .text_styles
@@ -51,6 +56,10 @@ impl UiOverlay {
             style
                 .text_styles
                 .insert(egui::TextStyle::Button, mono.clone());
+            style.text_styles.insert(
+                egui::TextStyle::Heading,
+                egui::FontId::new(22.0, egui::FontFamily::Proportional),
+            );
         });
         let name = mp::load_display_name_cookie().unwrap_or_default();
         Self {
@@ -62,6 +71,7 @@ impl UiOverlay {
             display_name: name,
             status: String::new(),
             ui_wants_pointer: false,
+            pick_character: DEFAULT_CHARACTER,
         }
     }
 
@@ -81,8 +91,13 @@ impl UiOverlay {
         self.status = msg.into();
     }
 
+    pub fn sync_pick_character(&mut self, character: u8) {
+        self.pick_character = character;
+    }
+
+    /// Full-frame gates take keyboard; living/spectate chrome uses pointer-over only.
     pub fn wants_ui_input(&self, phase: MpPhase) -> bool {
-        matches!(phase, MpPhase::Solo | MpPhase::Connecting | MpPhase::Joined)
+        phase.forces_free_cursor()
     }
 
     pub fn blocks_pointer_lock(&self, phase: MpPhase) -> bool {
@@ -114,98 +129,34 @@ impl UiOverlay {
     ) -> (Option<egui::FullOutput>, ProductActions) {
         self.egui_ctx.set_pixels_per_point(pixels_per_point);
 
-        let show_join = matches!(phase, MpPhase::Solo | MpPhase::Connecting);
-        let show_spawn = phase == MpPhase::Joined;
         let show_score = phase.in_room();
-
-        let room = &mut self.room_code;
-        let name = &mut self.display_name;
-        let status = self.status.clone();
         let mut actions = ProductActions::default();
+        let status = self.status.clone();
+        let pick = self.pick_character;
 
         let full = self.egui_ctx.run(raw_input, |ctx| {
-            if show_score && !roster.is_empty() {
-                egui::Area::new(egui::Id::new("score_roster"))
-                    .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-12.0, 12.0))
-                    .show(ctx, |ui| {
-                        egui::Frame::NONE
-                            .fill(egui::Color32::from_rgba_unmultiplied(8, 10, 14, 200))
-                            .inner_margin(egui::Margin::same(8))
-                            .show(ui, |ui| {
-                                ui.label(
-                                    egui::RichText::new("FFA")
-                                        .strong()
-                                        .color(egui::Color32::from_rgb(180, 220, 160)),
-                                );
-                                for e in roster {
-                                    let mark = if e.living { "●" } else { "○" };
-                                    ui.label(format!("{mark} {}  {}", e.display_name, e.score));
-                                }
-                            });
-                    });
+            if show_score {
+                draw_score(ctx, roster, phase, &mut actions);
             }
 
-            if show_join {
-                egui::Window::new("Join room")
-                    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-                    .collapsible(false)
-                    .resizable(false)
-                    .show(ctx, |ui| {
-                        egui::Grid::new("join_grid")
-                            .num_columns(2)
-                            .spacing([8.0, 8.0])
-                            .show(ui, |ui| {
-                                ui.label("Room");
-                                ui.add(
-                                    egui::TextEdit::singleline(room)
-                                        .desired_width(180.0)
-                                        .hint_text(DEFAULT_ROOM_CODE),
-                                );
-                                ui.end_row();
-                                ui.label("Name");
-                                ui.add(
-                                    egui::TextEdit::singleline(name)
-                                        .desired_width(180.0)
-                                        .hint_text("display name"),
-                                );
-                                ui.end_row();
-                            });
-                        ui.add_space(10.0);
-                        let join_btn = ui.add_enabled(
-                            !connecting,
-                            egui::Button::new(if connecting { "Joining…" } else { "Join" }),
-                        );
-                        if join_btn.clicked() {
-                            actions.join = Some((room.clone(), name.clone()));
-                        }
-                        if !status.is_empty() {
-                            ui.add_space(8.0);
-                            ui.colored_label(egui::Color32::from_rgb(220, 140, 120), &status);
-                        }
-                        ui.add_space(4.0);
-                        ui.small("Type freely. Empty canvas locks for solo (Esc unlocks).");
-                    });
-            }
-
-            if show_spawn {
-                egui::Window::new("Match")
-                    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-                    .collapsible(false)
-                    .resizable(false)
-                    .show(ctx, |ui| {
-                        ui.label("Free-for-all · empty map");
-                        ui.add_space(12.0);
-                        if ui
-                            .button(egui::RichText::new("  Spawn  ").size(18.0))
-                            .clicked()
-                        {
-                            actions.spawn = true;
-                        }
-                        ui.add_space(8.0);
-                        if ui.button("Leave").clicked() {
-                            actions.leave = true;
-                        }
-                    });
+            match phase {
+                MpPhase::Lobby | MpPhase::Connecting => {
+                    draw_join(
+                        ctx,
+                        &mut self.room_code,
+                        &mut self.display_name,
+                        connecting,
+                        &status,
+                        &mut actions,
+                    );
+                }
+                MpPhase::Role => draw_role(ctx, &mut actions),
+                MpPhase::Character => {
+                    draw_character(ctx, &mut self.pick_character, &mut actions);
+                }
+                MpPhase::Ready => draw_ready(ctx, pick, &mut actions),
+                MpPhase::Spectating => draw_spectate_chrome(ctx, &mut actions),
+                MpPhase::Living => {}
             }
 
             debug.draw(ctx);
@@ -215,7 +166,7 @@ impl UiOverlay {
             || self.egui_ctx.is_pointer_over_area()
             || self.egui_ctx.wants_keyboard_input();
 
-        let any = show_join || show_spawn || show_score || debug.active();
+        let any = phase != MpPhase::Living || show_score || debug.active();
         if any {
             (Some(full), actions)
         } else {
@@ -268,6 +219,240 @@ impl UiOverlay {
     }
 }
 
+fn draw_score(
+    ctx: &egui::Context,
+    roster: &[RosterEntry],
+    phase: MpPhase,
+    actions: &mut ProductActions,
+) {
+    if roster.is_empty() && phase != MpPhase::Living {
+        return;
+    }
+    egui::Area::new(egui::Id::new("score_roster"))
+        .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-12.0, 12.0))
+        .show(ctx, |ui| {
+            egui::Frame::NONE
+                .fill(egui::Color32::from_rgba_unmultiplied(8, 10, 14, 200))
+                .inner_margin(egui::Margin::same(8))
+                .show(ui, |ui| {
+                    ui.label(
+                        egui::RichText::new("FFA")
+                            .strong()
+                            .color(egui::Color32::from_rgb(180, 220, 160)),
+                    );
+                    for e in roster {
+                        let mark = if e.living {
+                            "●"
+                        } else if e.role == NetRole::Spectator {
+                            "◎"
+                        } else {
+                            "○"
+                        };
+                        let kit = e.character as char;
+                        ui.label(format!("{mark} {}  {}  [{kit}]", e.display_name, e.score));
+                    }
+                    if phase == MpPhase::Living {
+                        ui.add_space(6.0);
+                        if ui.small_button("Spectate").clicked() {
+                            actions.spectate = true;
+                        }
+                    }
+                });
+        });
+}
+
+fn draw_join(
+    ctx: &egui::Context,
+    room: &mut String,
+    name: &mut String,
+    connecting: bool,
+    status: &str,
+    actions: &mut ProductActions,
+) {
+    full_frame_shell(ctx, "Join room", |ui| {
+        egui::Grid::new("join_grid")
+            .num_columns(2)
+            .spacing([12.0, 12.0])
+            .show(ui, |ui| {
+                ui.label("Room");
+                ui.add(
+                    egui::TextEdit::singleline(room)
+                        .desired_width(220.0)
+                        .hint_text(DEFAULT_ROOM_CODE),
+                );
+                ui.end_row();
+                ui.label("Name");
+                ui.add(
+                    egui::TextEdit::singleline(name)
+                        .desired_width(220.0)
+                        .hint_text("display name"),
+                );
+                ui.end_row();
+            });
+        ui.add_space(16.0);
+        let join_btn = ui.add_enabled(
+            !connecting,
+            egui::Button::new(if connecting { "Joining…" } else { "Join" })
+                .min_size(egui::vec2(160.0, 36.0)),
+        );
+        if join_btn.clicked() {
+            actions.join = Some((room.clone(), name.clone()));
+        }
+        if !status.is_empty() {
+            ui.add_space(12.0);
+            ui.colored_label(egui::Color32::from_rgb(220, 140, 120), status);
+        }
+    });
+}
+
+fn draw_role(ctx: &egui::Context, actions: &mut ProductActions) {
+    full_frame_shell(ctx, "Choose role", |ui| {
+        ui.label("Free-for-all · empty map");
+        ui.add_space(20.0);
+        if ui
+            .add(
+                egui::Button::new(egui::RichText::new("  Play  ").size(20.0))
+                    .min_size(egui::vec2(200.0, 44.0)),
+            )
+            .clicked()
+        {
+            actions.play = true;
+        }
+        ui.add_space(12.0);
+        if ui
+            .add(
+                egui::Button::new(egui::RichText::new("  Spectate  ").size(18.0))
+                    .min_size(egui::vec2(200.0, 40.0)),
+            )
+            .clicked()
+        {
+            actions.spectate = true;
+        }
+        ui.add_space(24.0);
+        if ui.button("Leave").clicked() {
+            actions.leave = true;
+        }
+    });
+}
+
+fn draw_character(ctx: &egui::Context, pick: &mut u8, actions: &mut ProductActions) {
+    full_frame_shell(ctx, "Character", |ui| {
+        ui.label("Pick a body kit (shared kits allowed)");
+        ui.add_space(12.0);
+        egui::ScrollArea::vertical()
+            .max_height(280.0)
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    for id in character_catalog() {
+                        let label = format!("  {}  ", id as char);
+                        let selected = *pick == id;
+                        let btn = ui.selectable_label(selected, label);
+                        if btn.clicked() {
+                            *pick = id;
+                        }
+                    }
+                });
+            });
+        ui.add_space(16.0);
+        ui.label(format!("Selected: {}", *pick as char));
+        ui.add_space(12.0);
+        if ui
+            .add(
+                egui::Button::new(egui::RichText::new("  Confirm  ").size(18.0))
+                    .min_size(egui::vec2(180.0, 40.0)),
+            )
+            .clicked()
+        {
+            actions.confirm_character = Some(*pick);
+        }
+        ui.add_space(16.0);
+        ui.horizontal(|ui| {
+            if ui.button("Back").clicked() {
+                actions.back_to_role = true;
+            }
+            if ui.button("Spectate").clicked() {
+                actions.spectate = true;
+            }
+            if ui.button("Leave").clicked() {
+                actions.leave = true;
+            }
+        });
+    });
+}
+
+fn draw_ready(ctx: &egui::Context, pick: u8, actions: &mut ProductActions) {
+    full_frame_shell(ctx, "Ready", |ui| {
+        ui.label(format!(
+            "Character {} · default loadout (p / b)",
+            pick as char
+        ));
+        ui.add_space(20.0);
+        if ui
+            .add(
+                egui::Button::new(egui::RichText::new("  Spawn  ").size(20.0))
+                    .min_size(egui::vec2(200.0, 44.0)),
+            )
+            .clicked()
+        {
+            actions.spawn = true;
+        }
+        ui.add_space(16.0);
+        ui.horizontal(|ui| {
+            if ui.button("Change character").clicked() {
+                actions.play = true;
+            }
+            if ui.button("Spectate").clicked() {
+                actions.spectate = true;
+            }
+            if ui.button("Leave").clicked() {
+                actions.leave = true;
+            }
+        });
+    });
+}
+
+fn draw_spectate_chrome(ctx: &egui::Context, actions: &mut ProductActions) {
+    egui::Area::new(egui::Id::new("spectate_chrome"))
+        .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(12.0, -12.0))
+        .show(ctx, |ui| {
+            egui::Frame::NONE
+                .fill(egui::Color32::from_rgba_unmultiplied(8, 10, 14, 210))
+                .inner_margin(egui::Margin::same(10))
+                .show(ui, |ui| {
+                    ui.label(
+                        egui::RichText::new("Spectating · WASD fly · click to look")
+                            .color(egui::Color32::from_rgb(180, 200, 220)),
+                    );
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Play").clicked() {
+                            actions.play = true;
+                        }
+                        if ui.button("Leave").clicked() {
+                            actions.leave = true;
+                        }
+                    });
+                });
+        });
+}
+
+fn full_frame_shell(ctx: &egui::Context, title: &str, add: impl FnOnce(&mut egui::Ui)) {
+    egui::CentralPanel::default()
+        .frame(
+            egui::Frame::NONE
+                .fill(egui::Color32::from_rgba_unmultiplied(6, 8, 12, 230))
+                .inner_margin(egui::Margin::symmetric(48, 36)),
+        )
+        .show(ctx, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space(ui.available_height() * 0.12);
+                ui.heading(title);
+                ui.add_space(20.0);
+                add(ui);
+            });
+        });
+}
+
 pub enum DebugDraw<'a> {
     /// No debug chrome (production, or debug build with nothing to draw).
     None(std::marker::PhantomData<&'a ()>),
@@ -298,7 +483,7 @@ impl DebugDraw<'_> {
         }
         #[cfg(not(feature = "debug-tools"))]
         {
-            let _ = (self, ctx);
+            let _ = ctx;
         }
     }
 }
