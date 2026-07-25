@@ -23,11 +23,11 @@ impl ClientInner {
         let flycam = cam.is_fly();
         let draw_local_self = self.mp.is_living();
 
-        let (cam_eye, cam_fwd) = self.view.eye_and_forward(&self.self_state);
+        let (cam_eye, cam_fwd) = self.view.eye_and_forward();
         let view_mat = if cam == CamIntent::Overview {
             overview_view_matrix()
         } else {
-            self.view.view_matrix(&self.self_state)
+            self.view.view_matrix()
         };
         let view_proj = self.renderer.write_view_proj(view_mat);
 
@@ -190,7 +190,8 @@ impl ClientInner {
             let hud_owned = {
                 let net = self.debug.net_hud();
                 let residual = self.debug.residual_hud();
-                if !net && !residual {
+                let look = self.debug.look_hud();
+                if !net && !residual && !look {
                     None
                 } else {
                     let mut parts: Vec<String> = Vec::new();
@@ -211,6 +212,32 @@ impl ClientInner {
                             self.self_state.shoulder_fire_twist.to_degrees(),
                             fall_ms,
                             if cont { "  cont" } else { "" },
+                        ));
+                    }
+                    if look {
+                        let sens = crate::view::LOOK_SENS_RAD_PER_PX;
+                        let d_yaw_deg = (-self.last_look_px.x * sens).to_degrees();
+                        let d_pitch_deg = (-self.last_look_px.y * sens).to_degrees();
+                        let applied = self.last_play_ok && !self.emote_wheel.is_open();
+                        let (_, cam_fwd) = self.view.eye_and_forward();
+                        let cam_yaw_deg = cam_fwd.x.atan2(cam_fwd.z).to_degrees();
+                        parts.push(format!(
+                            "dx{:+.0} dy{:+.0}  dY{:+.3}° dP{:+.3}°  fY{:.3}° oP{:.2}° nF{:.2}°  camY{:.3}°  {}{}{}",
+                            self.last_look_px.x,
+                            self.last_look_px.y,
+                            d_yaw_deg,
+                            d_pitch_deg,
+                            self.self_state.facing.to_degrees(),
+                            self.self_state.look_offset_pitch.to_degrees(),
+                            self.self_state.neck_fold.to_degrees(),
+                            cam_yaw_deg,
+                            if self.session.is_active() {
+                                "sess"
+                            } else {
+                                "nosess"
+                            },
+                            if self.last_play_ok { " play" } else { " noplay" },
+                            if applied { " apply" } else { " skip" },
                         ));
                     }
                     Some(parts.join("  |  "))

@@ -44,6 +44,12 @@ pub(crate) struct ClientInner {
     last_frame_secs: f64,
     #[cfg(feature = "debug-tools")]
     fps_ema: f32,
+    /// Last frame's session look accumulate (px) for lookhud.
+    #[cfg(feature = "debug-tools")]
+    last_look_px: glam::Vec2,
+    /// Whether play controls ran look/loco this frame (lookhud).
+    #[cfg(feature = "debug-tools")]
+    last_play_ok: bool,
     pub(crate) mp: mp::MpClient,
     pub(crate) ui: UiOverlay,
     #[cfg(feature = "debug-tools")]
@@ -81,6 +87,10 @@ impl ClientInner {
             last_frame_secs: 0.0,
             #[cfg(feature = "debug-tools")]
             fps_ema: 0.0,
+            #[cfg(feature = "debug-tools")]
+            last_look_px: glam::Vec2::ZERO,
+            #[cfg(feature = "debug-tools")]
+            last_play_ok: false,
             mp: mp::MpClient::new(),
             ui,
             #[cfg(feature = "debug-tools")]

@@ -561,8 +561,7 @@ fn look_rate_damps_sway() {
     assert!(still > 1e-5);
     // Whip look hard for a stretch.
     for i in 0..30 {
-        s.ocular_yaw = i as f32 * 0.4;
-        s.ocular_pitch = (i as f32 * 0.05).sin() * 0.2;
+        s.set_look(i as f32 * 0.4, (i as f32 * 0.05).sin() * 0.2);
         let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, eye(), &[]);
     }
     let moving = s.shoulder_sway_fold.abs() + s.shoulder_sway_twist.abs();

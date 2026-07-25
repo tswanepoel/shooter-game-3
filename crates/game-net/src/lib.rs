@@ -66,12 +66,13 @@ pub enum NetActiveWeapon {
     Secondary,
 }
 
-/// Enough fields to rebuild present pose on a peer.
+/// Enough fields to rebuild present pose on a peer (facing + look offset + loco).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DriveView {
     pub position: NetVec3,
-    pub ocular_yaw: f32,
-    pub ocular_pitch: f32,
+    pub facing: f32,
+    pub look_offset_yaw: f32,
+    pub look_offset_pitch: f32,
     pub character: u8,
     pub primary: Option<u8>,
     pub secondary: Option<u8>,
@@ -279,8 +280,9 @@ mod tests {
     fn sample_drive() -> DriveView {
         DriveView {
             position: NetVec3::new(1.0, 0.0, 2.0),
-            ocular_yaw: 0.5,
-            ocular_pitch: -0.1,
+            facing: 0.5,
+            look_offset_yaw: 0.0,
+            look_offset_pitch: -0.1,
             character: b'a',
             primary: Some(b'p'),
             secondary: Some(b'b'),

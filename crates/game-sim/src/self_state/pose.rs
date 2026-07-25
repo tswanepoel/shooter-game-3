@@ -1,4 +1,4 @@
-//! Look, body presentation, and joint residual for SelfState.
+//! Look offset, body presentation, and joint residual for SelfState.
 
 use glam::{Mat4, Quat, Vec3};
 
@@ -6,19 +6,19 @@ use crate::weapons::WeaponDef;
 
 use super::SelfState;
 
-/// Look elevation hard cap: straight up / straight down (015).
-pub const OCULAR_ELEV_CAP_RAD: f32 = std::f32::consts::FRAC_PI_2;
+/// Look-offset elevation hard cap: straight up / straight down (015).
+pub const LOOK_ELEV_CAP_RAD: f32 = std::f32::consts::FRAC_PI_2;
 
 /// Hip look-offset fold at full look-down (inward).
-pub const TORSO_PITCH_INWARD_RAD: f32 = 15.0_f32.to_radians();
+pub const HIP_FOLD_INWARD_RAD: f32 = 15.0_f32.to_radians();
 /// Hip look-offset fold at full look-up (outward).
-pub const TORSO_PITCH_OUTWARD_RAD: f32 = 7.5_f32.to_radians();
+pub const HIP_FOLD_OUTWARD_RAD: f32 = 7.5_f32.to_radians();
 /// Right-shoulder look-offset fold at full look-down (inward).
-pub const SHOULDER_PITCH_INWARD_RAD: f32 = 75.0_f32.to_radians();
+pub const SHOULDER_FOLD_INWARD_RAD: f32 = 75.0_f32.to_radians();
 /// Right-shoulder look-offset fold at full look-up (outward).
-pub const SHOULDER_PITCH_OUTWARD_RAD: f32 = 82.5_f32.to_radians();
+pub const SHOULDER_FOLD_OUTWARD_RAD: f32 = 82.5_f32.to_radians();
 
-const HEAD_PITCH_BUDGET_RAD: f32 = 50.0_f32.to_radians();
+const NECK_FOLD_BUDGET_RAD: f32 = 50.0_f32.to_radians();
 
 const FIRE_CONTINUE_FALL_MULT: f32 = 6.0;
 
@@ -50,31 +50,18 @@ pub const RETICLE_SIZE_PX: f32 = 6.0;
 ///
 /// Chosen so rest look origin matches the calibrated feet-local eye
 /// `(0, 1.52, 0.27)` m (character-a: head pivot `(0, 1.9, 0)` kit, scale `0.1`,
-/// kitΓåÆm `1/1.5`, soles on y = 0).
+/// kit→m `1/1.5`, soles on y = 0).
 pub const FACE_OFFSET_HEAD_KIT: Vec3 = Vec3::new(0.0, 3.8, 4.05);
 
 impl SelfState {
-    /// Drive look direction (ocular yaw + pitch).
-    pub fn ocular_forward(&self) -> Vec3 {
-        dir_yaw_pitch(self.ocular_yaw, self.ocular_pitch)
-    }
-
-    /// Look direction after hip + neck residual (view rides this).
-    pub fn look_forward(&self) -> Vec3 {
-        dir_yaw_pitch(self.look_yaw(), self.look_pitch())
-    }
-
+    /// Look ground azimuth (`facing` + look-offset yaw). Wish / sway basis.
     pub fn look_yaw(&self) -> f32 {
-        self.ocular_yaw + self.head_yaw
+        self.facing + self.look_offset_yaw
     }
 
+    /// Look elevation (look-offset pitch).
     pub fn look_pitch(&self) -> f32 {
-        (self.ocular_pitch
-            + self.hip_fire_fold
-            + self.hip_hit_fold
-            + self.neck_fire_fold
-            + self.neck_hit_fold)
-            .clamp(-OCULAR_ELEV_CAP_RAD, OCULAR_ELEV_CAP_RAD)
+        self.look_offset_pitch
     }
 
     pub fn fire_fold_total(&self) -> f32 {
@@ -85,41 +72,51 @@ impl SelfState {
         self.hip_hit_fold + self.shoulder_hit_fold + self.neck_hit_fold
     }
 
-    /// Horizontal look forward on XZ (unit, y = 0).
+    /// Horizontal look forward on XZ (wish basis).
     pub fn look_forward_xz(&self) -> Vec3 {
-        Vec3::new(self.ocular_yaw.sin(), 0.0, self.ocular_yaw.cos())
+        let yaw = self.look_yaw();
+        Vec3::new(yaw.sin(), 0.0, yaw.cos())
     }
 
-    /// Horizontal look right on XZ (unit, y = 0).
-    /// Matches RH view / flycam: `forward_xz ├ù world_up` (screen-right).
+    /// Horizontal look right on XZ (`forward_xz × up`, RH screen-right).
     pub fn look_right_xz(&self) -> Vec3 {
         let f = self.look_forward_xz();
         Vec3::new(-f.z, 0.0, f.x)
     }
 
-    /// Body facing on XZ from torso yaw.
+    /// Body facing on XZ.
     pub fn body_facing(&self) -> Vec3 {
-        Vec3::new(self.torso_yaw.sin(), 0.0, self.torso_yaw.cos())
+        Vec3::new(self.facing.sin(), 0.0, self.facing.cos())
     }
 
-    /// Root placement: feet position + absolute body yaw.
+    /// Feet position + facing yaw.
     pub fn placement_matrix(&self) -> Mat4 {
-        Mat4::from_rotation_translation(Quat::from_rotation_y(self.torso_yaw), self.position)
+        Mat4::from_rotation_translation(Quat::from_rotation_y(self.facing), self.position)
     }
 
-    /// Apply mouse look deltas (radians) and snap body presentation to look.
-    /// `dt` is unused; kept so call sites stay frame-shaped.
+    /// Mouse look deltas into drive, then recompose. Yaw → facing; pitch → look offset.
+    /// Does not set the camera. `dt` unused (call sites stay frame-shaped).
     pub fn apply_look(&mut self, _dt: f32, delta_yaw: f32, delta_pitch: f32) {
-        self.ocular_yaw += delta_yaw;
-        self.ocular_pitch =
-            (self.ocular_pitch + delta_pitch).clamp(-OCULAR_ELEV_CAP_RAD, OCULAR_ELEV_CAP_RAD);
+        self.facing += delta_yaw;
+        self.look_offset_yaw = 0.0;
+        self.look_offset_pitch =
+            (self.look_offset_pitch + delta_pitch).clamp(-LOOK_ELEV_CAP_RAD, LOOK_ELEV_CAP_RAD);
         self.sync_pose();
     }
 
-    /// Set absolute look (radians) and snap body presentation. Used by server net apply.
+    /// Absolute world look azimuth + elevation → facing + look offset, then recompose.
     pub fn set_look(&mut self, yaw: f32, pitch: f32) {
-        self.ocular_yaw = yaw;
-        self.ocular_pitch = pitch.clamp(-OCULAR_ELEV_CAP_RAD, OCULAR_ELEV_CAP_RAD);
+        self.facing = yaw;
+        self.look_offset_yaw = 0.0;
+        self.look_offset_pitch = pitch.clamp(-LOOK_ELEV_CAP_RAD, LOOK_ELEV_CAP_RAD);
+        self.sync_pose();
+    }
+
+    /// Write facing + look offset, then recompose.
+    pub fn set_drive_look(&mut self, facing: f32, look_offset_yaw: f32, look_offset_pitch: f32) {
+        self.facing = facing;
+        self.look_offset_yaw = look_offset_yaw;
+        self.look_offset_pitch = look_offset_pitch.clamp(-LOOK_ELEV_CAP_RAD, LOOK_ELEV_CAP_RAD);
         self.sync_pose();
     }
 
@@ -127,21 +124,20 @@ impl SelfState {
         self.compose_joints();
     }
 
+    /// Look offset (+ residual) → hip / shoulder / neck folds; neck twist from look-offset yaw.
     pub fn compose_joints(&mut self) {
-        let (hip_look, shoulder_look) = elevation_targets(self.ocular_pitch);
-        let neck_look =
-            (self.ocular_pitch - hip_look).clamp(-HEAD_PITCH_BUDGET_RAD, HEAD_PITCH_BUDGET_RAD);
-        self.torso_yaw = self.ocular_yaw;
-        self.torso_pitch = hip_look + self.hip_fire_fold + self.hip_hit_fold;
-        self.shoulder_pitch = shoulder_look
+        let elev = self.look_offset_pitch;
+        let (hip_look, shoulder_look) = elevation_targets(elev);
+        let neck_look = (elev - hip_look).clamp(-NECK_FOLD_BUDGET_RAD, NECK_FOLD_BUDGET_RAD);
+        self.neck_twist = self.look_offset_yaw;
+        self.hip_fold = hip_look + self.hip_fire_fold + self.hip_hit_fold;
+        self.shoulder_fold = shoulder_look
             + self.shoulder_fire_fold
             + self.shoulder_hit_fold
             + self.shoulder_sway_fold;
-        self.shoulder_yaw =
+        self.shoulder_twist =
             self.shoulder_fire_twist + self.shoulder_hit_twist + self.shoulder_sway_twist;
-        // Facing tracks look: no neck look-offset twist.
-        self.head_yaw = 0.0;
-        self.head_pitch = neck_look + self.neck_fire_fold + self.neck_hit_fold;
+        self.neck_fold = neck_look + self.neck_fire_fold + self.neck_hit_fold;
     }
 
     /// Blaster direction after drive + hip + right shoulder. `None` when not present-armed.
@@ -152,15 +148,11 @@ impl SelfState {
         Some(self.weapon_line_dir())
     }
 
+    /// From composed joints only (neck residual does not contribute).
     fn weapon_line_dir(&self) -> Vec3 {
-        let fold = self.hip_fire_fold
-            + self.hip_hit_fold
-            + self.shoulder_fire_fold
-            + self.shoulder_hit_fold
-            + self.shoulder_sway_fold;
-        let twist = self.shoulder_fire_twist + self.shoulder_hit_twist + self.shoulder_sway_twist;
-        let yaw = self.ocular_yaw + twist;
-        let pitch = (self.ocular_pitch + fold).clamp(-OCULAR_ELEV_CAP_RAD, OCULAR_ELEV_CAP_RAD);
+        let yaw = self.facing + self.look_offset_yaw + self.shoulder_twist;
+        let pitch =
+            (self.hip_fold + self.shoulder_fold).clamp(-LOOK_ELEV_CAP_RAD, LOOK_ELEV_CAP_RAD);
         dir_yaw_pitch(yaw, pitch)
     }
 
@@ -314,23 +306,23 @@ fn dir_yaw_pitch(yaw: f32, pitch: f32) -> Vec3 {
     Vec3::new(yaw.sin() * cp, pitch.sin(), yaw.cos() * cp)
 }
 
-pub(crate) fn elevation_targets(ocular_pitch: f32) -> (f32, f32) {
-    let t = (ocular_pitch / OCULAR_ELEV_CAP_RAD).clamp(-1.0, 1.0);
+pub(crate) fn elevation_targets(look_offset_pitch: f32) -> (f32, f32) {
+    let t = (look_offset_pitch / LOOK_ELEV_CAP_RAD).clamp(-1.0, 1.0);
     if t >= 0.0 {
-        (t * TORSO_PITCH_OUTWARD_RAD, t * SHOULDER_PITCH_OUTWARD_RAD)
+        (t * HIP_FOLD_OUTWARD_RAD, t * SHOULDER_FOLD_OUTWARD_RAD)
     } else {
-        (t * TORSO_PITCH_INWARD_RAD, t * SHOULDER_PITCH_INWARD_RAD)
+        (t * HIP_FOLD_INWARD_RAD, t * SHOULDER_FOLD_INWARD_RAD)
     }
 }
 
 /// Look-elevation fold weights (hip, shoulder, neck). Sum to 1.
 fn residual_fold_shares(sign: f32) -> (f32, f32, f32) {
     let (hip_w, shoulder_w) = if sign >= 0.0 {
-        (TORSO_PITCH_OUTWARD_RAD, SHOULDER_PITCH_OUTWARD_RAD)
+        (HIP_FOLD_OUTWARD_RAD, SHOULDER_FOLD_OUTWARD_RAD)
     } else {
-        (TORSO_PITCH_INWARD_RAD, SHOULDER_PITCH_INWARD_RAD)
+        (HIP_FOLD_INWARD_RAD, SHOULDER_FOLD_INWARD_RAD)
     };
-    let neck_w = HEAD_PITCH_BUDGET_RAD;
+    let neck_w = NECK_FOLD_BUDGET_RAD;
     let sum = hip_w + shoulder_w + neck_w;
     (hip_w / sum, shoulder_w / sum, neck_w / sum)
 }

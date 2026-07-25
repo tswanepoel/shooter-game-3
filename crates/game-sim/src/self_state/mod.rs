@@ -1,4 +1,4 @@
-//! Player self: position, look, walk drive, and body joints.
+//! Player self: drive (facing, look offset, loco) and body joints.
 
 mod loco;
 mod pose;

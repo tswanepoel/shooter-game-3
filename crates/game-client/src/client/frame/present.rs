@@ -15,6 +15,7 @@ impl ClientInner {
         look: glam::Vec2,
         cam: CamIntent,
     ) {
+        // Body cascade → look on posed head → view mounts look (only FP path).
         let draw_local_self = self.mp.is_living();
         if draw_local_self {
             if let SelfPresentState::Ready(gpu) = &mut self.self_present {

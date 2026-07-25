@@ -57,7 +57,7 @@ impl GameClient {
         let renderer = Renderer::new(canvas.clone()).await?;
         let self_state = SelfState::default_loadout();
         let view = ViewController::new();
-        renderer.write_view_proj(view.view_matrix(&self_state));
+        renderer.write_view_proj(view.view_matrix());
 
         #[cfg(feature = "debug-tools")]
         let debug = DebugTools::new();

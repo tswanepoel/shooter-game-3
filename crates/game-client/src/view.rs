@@ -1,16 +1,16 @@
-//! Single render view: mount (self) or flycam (product spectate + debug F8).
+//! Single render view: mount look (posed head eye socket) or flycam (not view).
 
-use game_sim::{SelfState, OCULAR_ELEV_CAP_RAD};
+use game_sim::{SelfState, LOOK_ELEV_CAP_RAD};
 use glam::{Mat4, Vec3};
 
 /// Default flycam move speed (m/s). Client presentation, not world ground truth.
 const FLY_SPEED_M_S: f32 = 6.0;
 /// Sprint multiplier while Shift is held.
 const FLY_SPRINT_MULT: f32 = 3.0;
-/// Mouse look sensitivity (radians per pixel). Shared with mounted ocular.
+/// Mouse look sensitivity (radians per pixel). Shared with mounted drive.
 pub const LOOK_SENS_RAD_PER_PX: f32 = 0.00015;
-/// Flycam pitch matches mounted look (±90°). View matrix stays stable at the poles.
-/// Rest eye before mesh reports a posed face point (character-a / FACE_OFFSET).
+/// Flycam pitch matches look elev cap (±90°). View matrix stays stable at the poles.
+/// Bootstrap only until present samples look from the posed head.
 const DEFAULT_MOUNTED_EYE_M: Vec3 = Vec3::new(0.0, 1.52, 0.27);
 const DEFAULT_MOUNTED_FORWARD: Vec3 = Vec3::Z;
 /// Spectate entry eye (matches overview loft roughly).
@@ -33,8 +33,8 @@ impl FlyPose {
     fn from_self(self_state: &SelfState, eye: Vec3) -> Self {
         Self {
             position: eye,
-            yaw: self_state.ocular_yaw,
-            pitch: self_state.ocular_pitch,
+            yaw: self_state.look_yaw(),
+            pitch: self_state.look_pitch(),
         }
     }
 
@@ -117,12 +117,14 @@ pub fn overview_view_matrix() -> Mat4 {
     Mat4::look_at_rh(eye, target, Vec3::Y)
 }
 
-/// One view pose source for the renderer.
+/// Camera: mounted = concepts [view] (look on the self); flycam is free, not view.
 #[derive(Debug)]
 pub struct ViewController {
     mode: ViewMode,
     fly: FlyPose,
+    /// Last look position (eye socket) from present.
     mounted_eye: Vec3,
+    /// Last look orientation (head forward) from present.
     mounted_forward: Vec3,
 }
 
@@ -142,6 +144,7 @@ impl ViewController {
         }
     }
 
+    /// Mount view on look (eye socket + head forward). Only FP orientation path.
     pub fn set_mounted_look(&mut self, eye: Vec3, forward: Vec3) {
         self.mounted_eye = eye;
         self.mounted_forward = if forward.length_squared() > 1e-12 {
@@ -210,7 +213,7 @@ impl ViewController {
 
         self.fly.yaw -= look_px.x * LOOK_SENS_RAD_PER_PX;
         self.fly.pitch = (self.fly.pitch - look_px.y * LOOK_SENS_RAD_PER_PX)
-            .clamp(-OCULAR_ELEV_CAP_RAD, OCULAR_ELEV_CAP_RAD);
+            .clamp(-LOOK_ELEV_CAP_RAD, LOOK_ELEV_CAP_RAD);
 
         let forward = self.fly.forward();
         let flat_right = Vec3::new(forward.x, 0.0, forward.z)
@@ -248,8 +251,8 @@ impl ViewController {
         }
     }
 
-    pub fn view_matrix(&self, self_state: &SelfState) -> Mat4 {
-        let (eye, forward) = self.eye_and_forward(self_state);
+    pub fn view_matrix(&self) -> Mat4 {
+        let (eye, forward) = self.eye_and_forward();
         let yaw = match self.mode {
             ViewMode::Mounted => forward.x.atan2(forward.z),
             ViewMode::Flycam => self.fly.yaw,
@@ -257,7 +260,8 @@ impl ViewController {
         look_to_stable(eye, forward, yaw)
     }
 
-    pub fn eye_and_forward(&self, _self_state: &SelfState) -> (Vec3, Vec3) {
+    /// Mounted: last look from present. Flycam: free pose.
+    pub fn eye_and_forward(&self) -> (Vec3, Vec3) {
         match self.mode {
             ViewMode::Mounted => (self.mounted_eye, self.mounted_forward),
             ViewMode::Flycam => (self.fly.position, self.fly.forward()),
@@ -291,12 +295,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mount_uses_head_forward_plus_z() {
-        let v = ViewController::new();
-        let s = SelfState::default_loadout();
-        let (eye, forward) = v.eye_and_forward(&s);
-        assert!((eye - v.mounted_eye).length() < 1e-5);
-        assert!(forward.dot(Vec3::Z) > 0.99);
+    fn mount_uses_set_mounted_look_not_drive_angles() {
+        let mut v = ViewController::new();
+        let (eye0, forward0) = v.eye_and_forward();
+        assert!((eye0 - DEFAULT_MOUNTED_EYE_M).length() < 1e-5);
+        assert!(forward0.dot(Vec3::Z) > 0.99);
+        let mut s = SelfState::default_loadout();
+        s.apply_look(1.0 / 60.0, 1.0, 0.5);
+        let (_, still) = v.eye_and_forward();
+        assert!(still.dot(Vec3::Z) > 0.99);
+        let eye = Vec3::new(0.1, 1.5, 0.2);
+        let fwd = Vec3::new(0.0, 0.0, 1.0);
+        v.set_mounted_look(eye, fwd);
+        let (e, f) = v.eye_and_forward();
+        assert!((e - eye).length() < 1e-6);
+        assert!(f.dot(Vec3::Z) > 0.99);
         assert!(!v.is_flycam());
     }
 
@@ -312,7 +325,7 @@ mod tests {
             Some("flycam off (remounted)")
         );
         assert!(!v.is_flycam());
-        let (_, forward) = v.eye_and_forward(&s);
+        let (_, forward) = v.eye_and_forward();
         assert!(forward.dot(Vec3::Z) > 0.99);
     }
 
@@ -322,14 +335,14 @@ mod tests {
         let mut s = SelfState::default_loadout();
         s.apply_look(1.0 / 60.0, 0.4, -0.2);
         let fp_eye = Vec3::new(0.05, 1.44, 0.22);
-        let fp_fwd = s.look_forward();
+        let fp_fwd = Vec3::new(0.2, -0.1, 0.97).normalize();
         v.set_mounted_look(fp_eye, fp_fwd);
-        let (before_eye, before_fwd) = v.eye_and_forward(&s);
+        let (before_eye, before_fwd) = v.eye_and_forward();
         assert!((before_eye - fp_eye).length() < 1e-6);
-        assert!((before_fwd - fp_fwd.normalize()).length() < 1e-5);
+        assert!((before_fwd - fp_fwd).length() < 1e-5);
 
         v.enter_flycam(&s, fp_eye);
-        let (after_eye, _) = v.eye_and_forward(&s);
+        let (after_eye, _) = v.eye_and_forward();
         assert!(
             (after_eye - before_eye).length() < 1e-6,
             "fly eye jumped by {} m",
@@ -348,7 +361,7 @@ mod tests {
             ..Default::default()
         };
         v.update_flycam(1.0, &input, glam::Vec2::ZERO);
-        let (eye, _) = v.eye_and_forward(&s);
+        let (eye, _) = v.eye_and_forward();
         assert!(eye.z > z0 + 1.0);
     }
 
@@ -358,7 +371,7 @@ mod tests {
         let s = SelfState::default_loadout();
         v.enter_flycam(&s, v.mounted_eye());
         v.update_flycam(0.0, &FlyInput::default(), glam::Vec2::new(0.0, -400.0));
-        let y0 = v.eye_and_forward(&s).0.y;
+        let y0 = v.eye_and_forward().0.y;
         v.update_flycam(
             1.0,
             &FlyInput {
@@ -367,7 +380,7 @@ mod tests {
             },
             glam::Vec2::ZERO,
         );
-        let y1 = v.eye_and_forward(&s).0.y;
+        let y1 = v.eye_and_forward().0.y;
         assert!(
             y1 > y0 + 1.0,
             "expected look-relative climb, y0={y0} y1={y1}"
@@ -376,13 +389,11 @@ mod tests {
 
     #[test]
     fn view_matrix_stable_at_straight_up() {
-        let v = ViewController::new();
-        let mut s = SelfState::default_loadout();
-        s.ocular_pitch = std::f32::consts::FRAC_PI_2;
-        s.sync_pose();
-        let m = v.view_matrix(&s);
+        let mut v = ViewController::new();
+        v.set_mounted_look(DEFAULT_MOUNTED_EYE_M, Vec3::Y);
+        let m = v.view_matrix();
         assert!(m.is_finite());
-        let (_, forward) = v.eye_and_forward(&s);
+        let (_, forward) = v.eye_and_forward();
         assert!(forward.dot(Vec3::Y) > 0.99);
     }
 
@@ -390,18 +401,18 @@ mod tests {
     fn flycam_keeps_full_pitch_from_fp() {
         let mut v = ViewController::new();
         let mut s = SelfState::default_loadout();
-        s.ocular_pitch = -OCULAR_ELEV_CAP_RAD;
+        s.look_offset_pitch = -LOOK_ELEV_CAP_RAD;
         s.sync_pose();
         let eye = v.mounted_eye();
         v.enter_flycam(&s, eye);
         // Same clamp path as a free-look frame with no mouse delta.
         v.update_flycam(1.0 / 60.0, &FlyInput::default(), glam::Vec2::ZERO);
-        let (_, fwd) = v.eye_and_forward(&s);
+        let (_, fwd) = v.eye_and_forward();
         assert!(
             fwd.dot(-Vec3::Y) > 0.999,
             "flycam must keep straight-down from FP, fwd={fwd}"
         );
-        assert!((v.fly.pitch + OCULAR_ELEV_CAP_RAD).abs() < 1e-5);
+        assert!((v.fly.pitch + LOOK_ELEV_CAP_RAD).abs() < 1e-5);
     }
 
     #[test]
@@ -409,8 +420,7 @@ mod tests {
         let mut v = ViewController::new();
         v.enter_spectate_flycam();
         assert!(v.is_flycam());
-        let s = SelfState::default_loadout();
-        let (eye, _) = v.eye_and_forward(&s);
+        let (eye, _) = v.eye_and_forward();
         assert!(eye.y > 2.0);
     }
 }

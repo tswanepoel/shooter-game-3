@@ -5,8 +5,9 @@ use glam::Vec3;
 pub fn state_to_drive(state: &SelfState) -> DriveView {
     DriveView {
         position: NetVec3::new(state.position.x, state.position.y, state.position.z),
-        ocular_yaw: state.ocular_yaw,
-        ocular_pitch: state.ocular_pitch,
+        facing: state.facing,
+        look_offset_yaw: state.look_offset_yaw,
+        look_offset_pitch: state.look_offset_pitch,
         character: state.character,
         primary: state.primary,
         secondary: state.secondary,
@@ -55,7 +56,7 @@ pub fn apply_drive(state: &mut SelfState, drive: &DriveView) {
     state.sprint_latched = matches!(drive.locomotion, NetLocomotion::Sprint);
     state.emote = drive.emote;
     state.emote_age_s = drive.emote_age_s;
-    state.set_look(drive.ocular_yaw, drive.ocular_pitch);
+    state.set_drive_look(drive.facing, drive.look_offset_yaw, drive.look_offset_pitch);
 }
 
 #[cfg(test)]
@@ -78,8 +79,9 @@ mod tests {
         let back = drive_to_state(&d);
         assert!((back.position.x - 3.0).abs() < 1e-5);
         assert!((back.position.y - 0.5).abs() < 1e-5);
-        assert!((back.ocular_yaw - 1.2).abs() < 1e-5);
-        assert!((back.ocular_pitch - (-0.3)).abs() < 1e-5);
+        assert!((back.facing - 1.2).abs() < 1e-5);
+        assert!((back.look_offset_yaw).abs() < 1e-5);
+        assert!((back.look_offset_pitch - (-0.3)).abs() < 1e-5);
         assert_eq!(back.locomotion, LocomotionMode::Sprint);
         assert!((back.walk_phase - 0.4).abs() < 1e-5);
         assert_eq!(back.character, b'c');

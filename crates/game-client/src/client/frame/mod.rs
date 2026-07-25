@@ -47,6 +47,10 @@ impl ClientInner {
 
         let look = self.session.take_look_px();
         let session_ok = self.session.is_active();
+        #[cfg(feature = "debug-tools")]
+        {
+            self.last_look_px = look;
+        }
 
         let effects = self.mp.drain_frame_effects();
         if effects.release_pointer_lock && self.session.is_active() {
@@ -73,8 +77,7 @@ impl ClientInner {
             self.self_state.secondary = spawn.secondary;
             self.self_state.active = spawn.active;
             self.self_state.position = spawn.position;
-            self.self_state.ocular_yaw = spawn.yaw;
-            self.self_state.torso_yaw = spawn.yaw;
+            self.self_state.set_look(spawn.yaw, 0.0);
             self.self_state.alive = true;
             self.self_state.health = game_sim::HEALTH_MAX;
             self.self_state.regen_block_s = 0.0;
@@ -106,6 +109,10 @@ impl ClientInner {
         let cam = self.mp.cam_intent(debug_fly);
         let was_fly = self.view.is_flycam();
         let play_ok = session_ok && !console_open && !cam.is_fly() && !self.mp.blocks_play();
+        #[cfg(feature = "debug-tools")]
+        {
+            self.last_play_ok = play_ok;
+        }
         let fire_held = self.tick_play_controls(dt, look, play_ok);
 
         self.tick_combat(dt, fire_held);

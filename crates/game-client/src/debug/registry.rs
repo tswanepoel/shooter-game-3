@@ -61,6 +61,13 @@ impl DebugRegistry {
             },
         );
         self.cvars.insert(
+            "hud.look",
+            CVar {
+                value: CVarValue::Bool(true),
+                help: "client: mouse look px → yaw/pitch sample on top banner",
+            },
+        );
+        self.cvars.insert(
             "draw.tracers",
             CVar {
                 value: CVarValue::Bool(false),
@@ -93,6 +100,7 @@ impl DebugRegistry {
             "lineup" => self.cmd_lineup(&args),
             "nethud" => self.cmd_nethud(&args),
             "residualhud" | "kickhud" => self.cmd_residualhud(&args),
+            "lookhud" => self.cmd_lookhud(&args),
             "remount" => {
                 self.set_bool("cam.fly", false);
                 "cam.fly = 0 (remount)".into()
@@ -134,6 +142,7 @@ impl DebugRegistry {
             "  lineup [on|off|toggle]  blaster lineup (armed characters)".into(),
             "  nethud [on|off|toggle]  top FPS / tick banner".into(),
             "  residualhud [on|off|toggle]  fire residual fold / fall".into(),
+            "  lookhud [on|off|toggle]  mouse look px / yaw sample".into(),
             "  remount           leave flycam, restore self view".into(),
             "  screenshot|shot   capture frame (F9)".into(),
             "  mp join|leave|status  WebTransport shared tick + remotes".into(),
@@ -173,6 +182,10 @@ impl DebugRegistry {
 
     fn cmd_residualhud(&mut self, args: &[&str]) -> String {
         self.cmd_bool_toggle("hud.residual", args, "residualhud")
+    }
+
+    fn cmd_lookhud(&mut self, args: &[&str]) -> String {
+        self.cmd_bool_toggle("hud.look", args, "lookhud")
     }
 
     fn cmd_bool_toggle(&mut self, cvar: &str, args: &[&str], usage_name: &str) -> String {
@@ -309,5 +322,18 @@ mod tests {
         assert_eq!(r.get_bool("hud.residual"), Some(true));
         assert!(r.execute("help").contains("residualhud"));
         assert!(r.execute("help").contains("hud.residual"));
+    }
+
+    #[test]
+    fn lookhud_cvar_commands() {
+        let mut r = DebugRegistry::new();
+        r.register_defaults();
+        assert_eq!(r.get_bool("hud.look"), Some(true));
+        assert!(r.execute("lookhud off").contains("0"));
+        assert_eq!(r.get_bool("hud.look"), Some(false));
+        assert!(r.execute("lookhud").contains("1"));
+        assert_eq!(r.get_bool("hud.look"), Some(true));
+        assert!(r.execute("help").contains("lookhud"));
+        assert!(r.execute("help").contains("hud.look"));
     }
 }

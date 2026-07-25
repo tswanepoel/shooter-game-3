@@ -9,12 +9,14 @@ use super::types::{ActiveWeapon, LocomotionMode, WeaponClass};
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelfState {
     pub position: Vec3,
-    /// Look azimuth (radians). 0 faces **+Z**.
-    pub ocular_yaw: f32,
-    /// Look elevation (radians). Positive looks up. Clamped to ┬▒90┬░.
-    pub ocular_pitch: f32,
+    /// Placement root yaw. 0 faces **+Z**.
+    pub facing: f32,
+    /// Look azimuth relative to facing (radians). Currently forced 0 (facing tracks look).
+    pub look_offset_yaw: f32,
+    /// Look elevation relative to facing (radians). Positive up; clamped ±90°.
+    pub look_offset_pitch: f32,
     pub character: u8,
-    /// Primary slot blaster letter (`a`ΓÇª`r`), or empty (021).
+    /// Primary slot blaster letter (`a`…`r`), or empty (021).
     pub primary: Option<u8>,
     /// Secondary slot blaster letter; launcher/pistol only when set (021).
     pub secondary: Option<u8>,
@@ -25,14 +27,14 @@ pub struct SelfState {
     pub regen_block_s: f32,
     pub die_age_s: f32,
 
-    /// Look-relative forward wish (ΓêÆ1ΓÇª1). Positive is W.
+    /// Look-relative forward wish (−1…1). Positive is W.
     pub wish_forward: f32,
-    /// Look-relative strafe wish (ΓêÆ1ΓÇª1). Positive is D (right).
+    /// Look-relative strafe wish (−1…1). Positive is D (right).
     pub wish_strafe: f32,
     pub locomotion: LocomotionMode,
     /// Fraction through the locomotion cycle, [0, 1).
     pub walk_phase: f32,
-    /// Sprint stamina 0ΓÇª[`STAMINA_MAX`] (020).
+    /// Sprint stamina 0…[`STAMINA_MAX`] (020).
     pub stamina: f32,
     /// Sticky sprint wish from Shift tap (020); cleared on cancel, stop, or empty bar.
     pub sprint_latched: bool,
@@ -41,18 +43,16 @@ pub struct SelfState {
     pub air_vel_x: f32,
     pub air_vel_z: f32,
 
-    /// Facing yaw (tracks look yaw for now).
-    pub torso_yaw: f32,
-    /// Hip fold (look-offset + fire/hit residual).
-    pub torso_pitch: f32,
-    /// Right-shoulder fold (look-offset + fire/hit/sway residual).
-    pub shoulder_pitch: f32,
-    /// Right-shoulder twist (fire/hit/sway residual).
-    pub shoulder_yaw: f32,
-    /// Neck twist relative to torso.
-    pub head_yaw: f32,
-    /// Neck fold (look-offset + fire/hit residual).
-    pub head_pitch: f32,
+    /// Hip fold (look-offset share + residual). Present maps onto kit torso.
+    pub hip_fold: f32,
+    /// Right-shoulder fold (look-offset share + residual + sway).
+    pub shoulder_fold: f32,
+    /// Right-shoulder twist (residual + sway).
+    pub shoulder_twist: f32,
+    /// Neck twist relative to torso (look-offset yaw share).
+    pub neck_twist: f32,
+    /// Neck fold (look-offset share + residual). Present maps onto kit head.
+    pub neck_fold: f32,
 
     pub hip_fire_fold: f32,
     pub hip_hit_fold: f32,
@@ -71,7 +71,7 @@ pub struct SelfState {
     pub fire_fall_s: f32,
     pub hit_fall_s: f32,
 
-    /// Active emote wheel slot (`0`ΓÇª`3`), if any (039).
+    /// Active emote wheel slot (`0`…`3`), if any (039).
     pub emote: Option<u8>,
     /// Seconds since emote commit (039). Cleared with [`Self::clear_emote`].
     pub emote_age_s: f32,
@@ -87,8 +87,9 @@ impl SelfState {
     pub fn default_loadout() -> Self {
         Self {
             position: Vec3::ZERO,
-            ocular_yaw: 0.0,
-            ocular_pitch: 0.0,
+            facing: 0.0,
+            look_offset_yaw: 0.0,
+            look_offset_pitch: 0.0,
             character: b'a',
             primary: Some(b'p'),
             secondary: Some(b'b'),
@@ -106,12 +107,11 @@ impl SelfState {
             velocity_y: 0.0,
             air_vel_x: 0.0,
             air_vel_z: 0.0,
-            torso_yaw: 0.0,
-            torso_pitch: 0.0,
-            shoulder_pitch: 0.0,
-            shoulder_yaw: 0.0,
-            head_yaw: 0.0,
-            head_pitch: 0.0,
+            hip_fold: 0.0,
+            shoulder_fold: 0.0,
+            shoulder_twist: 0.0,
+            neck_twist: 0.0,
+            neck_fold: 0.0,
             hip_fire_fold: 0.0,
             hip_hit_fold: 0.0,
             shoulder_fire_fold: 0.0,
@@ -251,7 +251,7 @@ impl SelfState {
         Ok(())
     }
 
-    /// Toggle active slot: primary Γåö secondary. Empty slots stay in the cycle (unarmed).
+    /// Toggle active slot: primary ↔ secondary. Empty slots stay in the cycle (unarmed).
     /// Cancels emote (039) so the new hand is free immediately.
     pub fn cycle_weapon(&mut self, dir: i8) {
         if !self.alive || dir.signum() == 0 {

@@ -1,4 +1,5 @@
-//! Self body + blaster: one posed figure; local view on that head's eye socket.
+//! Self body + blaster: one posed figure.
+//! Look = pose at the eye socket on that head; view mounts look (concepts).
 
 use game_sim::{emote_clip_name, SelfState, EMOTE_CATALOG, FACE_OFFSET_HEAD_KIT};
 use glam::{Mat4, Vec3};
@@ -382,7 +383,7 @@ fn held_with_grip_bore(k2w: Mat4, arm_kit: Mat4, letter_index: usize, grip_bore_
     held * t * Mat4::from_translation(Vec3::new(0.0, 0.0, grip_bore_m)) * t.inverse()
 }
 
-/// Eye socket on posed head; forward is kit face (+Z).
+/// Concepts look: position at eye socket, orientation from posed head (+Z face).
 fn look_from_head(parts: &[CharPart], worlds: &[Mat4], k2w: Mat4) -> (Vec3, Vec3) {
     let head_kit = parts
         .iter()

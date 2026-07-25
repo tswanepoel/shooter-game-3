@@ -3,6 +3,13 @@ use glam::Vec3;
 use super::pose::{elevation_targets, residual_fold_split};
 use super::*;
 
+fn drive_look_dir(s: &SelfState) -> Vec3 {
+    let yaw = s.look_yaw();
+    let pitch = s.look_pitch();
+    let cp = pitch.cos();
+    Vec3::new(yaw.sin() * cp, pitch.sin(), yaw.cos() * cp)
+}
+
 #[test]
 fn default_faces_plus_z_at_origin() {
     let s = SelfState::default_loadout();
@@ -13,7 +20,7 @@ fn default_faces_plus_z_at_origin() {
     assert_eq!(s.active, ActiveWeapon::Primary);
     assert_eq!(s.active_blaster(), Some(b'p'));
     assert!(s.is_armed());
-    let f = s.ocular_forward();
+    let f = drive_look_dir(&s);
     assert!(f.dot(Vec3::Z) > 0.99);
     assert!((f.length() - 1.0).abs() < 1e-5);
     assert_eq!(s.locomotion, LocomotionMode::Stand);
@@ -23,31 +30,32 @@ fn default_faces_plus_z_at_origin() {
 fn look_snaps_body_pose_immediately() {
     let mut s = SelfState::default_loadout();
     s.apply_look(1.0 / 60.0, 1.0, 0.3);
-    assert!((s.torso_yaw - s.ocular_yaw).abs() < 1e-6);
-    assert!((s.head_yaw).abs() < 1e-6);
-    let (torso_tgt, shoulder_tgt) = elevation_targets(s.ocular_pitch);
-    assert!((s.torso_pitch - torso_tgt).abs() < 1e-6);
-    assert!((s.shoulder_pitch - shoulder_tgt).abs() < 1e-6);
+    assert!((s.facing - s.look_yaw()).abs() < 1e-6);
+    assert!((s.look_offset_yaw).abs() < 1e-6);
+    assert!((s.neck_twist).abs() < 1e-6);
+    let (hip_tgt, shoulder_tgt) = elevation_targets(s.look_offset_pitch);
+    assert!((s.hip_fold - hip_tgt).abs() < 1e-6);
+    assert!((s.shoulder_fold - shoulder_tgt).abs() < 1e-6);
 }
 
 #[test]
 fn elevation_at_full_look_up() {
     let mut s = SelfState::default_loadout();
-    s.ocular_pitch = OCULAR_ELEV_CAP_RAD;
+    s.look_offset_pitch = LOOK_ELEV_CAP_RAD;
     s.sync_pose();
-    assert!((s.torso_pitch - TORSO_PITCH_OUTWARD_RAD).abs() < 1e-5);
-    assert!((s.shoulder_pitch - SHOULDER_PITCH_OUTWARD_RAD).abs() < 1e-5);
-    let f = s.ocular_forward();
+    assert!((s.hip_fold - HIP_FOLD_OUTWARD_RAD).abs() < 1e-5);
+    assert!((s.shoulder_fold - SHOULDER_FOLD_OUTWARD_RAD).abs() < 1e-5);
+    let f = drive_look_dir(&s);
     assert!(f.dot(Vec3::Y) > 0.99, "forward={f}");
 }
 
 #[test]
-fn ocular_pitch_clamped_to_pm_90() {
+fn look_offset_pitch_clamped_to_pm_90() {
     let mut s = SelfState::default_loadout();
     s.apply_look(1.0 / 60.0, 0.0, 10.0);
-    assert!((s.ocular_pitch - OCULAR_ELEV_CAP_RAD).abs() < 1e-5);
+    assert!((s.look_offset_pitch - LOOK_ELEV_CAP_RAD).abs() < 1e-5);
     s.apply_look(1.0 / 60.0, 0.0, -20.0);
-    assert!((s.ocular_pitch + OCULAR_ELEV_CAP_RAD).abs() < 1e-5);
+    assert!((s.look_offset_pitch + LOOK_ELEV_CAP_RAD).abs() < 1e-5);
 }
 
 #[test]
@@ -56,7 +64,7 @@ fn reticle_lies_on_weapon_line_when_residual_zero() {
     let eye = Vec3::new(0.0, 1.5, 0.0);
     let r = s.reticle_world(eye).expect("armed");
     let along = (r - eye).normalize();
-    assert!(along.dot(s.ocular_forward()) > 0.99);
+    assert!(along.dot(drive_look_dir(&s)) > 0.99);
     assert!(((r - eye).length() - RETICLE_DEPTH_M).abs() < 1e-5);
     let wl = s.weapon_line().expect("armed");
     assert!(along.dot(wl) > 0.99);
@@ -76,10 +84,10 @@ fn reticle_follows_weapon_line_with_fire_residual() {
     let along = (r - eye).normalize();
     let wl = s.weapon_line().expect("armed");
     assert!(along.dot(wl) > 0.99);
-    assert!(along.dot(s.ocular_forward()) < 0.999);
-    assert!(s.shoulder_pitch > elevation_targets(s.ocular_pitch).1);
-    assert!(s.torso_pitch > elevation_targets(s.ocular_pitch).0);
-    assert!(s.head_pitch > 0.0);
+    assert!(along.dot(drive_look_dir(&s)) < 0.999);
+    assert!(s.shoulder_fold > elevation_targets(s.look_offset_pitch).1);
+    assert!(s.hip_fold > elevation_targets(s.look_offset_pitch).0);
+    assert!(s.neck_fold > 0.0);
 }
 
 #[test]
@@ -94,23 +102,32 @@ fn fire_impulse_splits_fold_across_hip_shoulder_neck() {
     assert!(s.shoulder_fire_fold > 0.0);
     assert!(s.neck_fire_fold > 0.0);
     assert!(s.shoulder_fire_fold > s.hip_fire_fold);
-    assert!(s.look_forward().y > s.ocular_forward().y);
+    let neck_rest = {
+        let mut r = SelfState::default_loadout();
+        r.compose_joints();
+        r.neck_fold
+    };
+    assert!(s.neck_fold > neck_rest);
 }
 
 #[test]
-fn look_forward_moves_with_hip_and_neck_residual() {
+fn hip_and_neck_residual_land_on_joints_not_shoulder_only() {
     let mut s = SelfState::default_loadout();
     s.hip_fire_fold = 2f32.to_radians();
     s.neck_fire_fold = 3f32.to_radians();
     s.compose_joints();
-    let look = s.look_forward();
-    let wish = s.ocular_forward();
-    assert!(look.dot(wish) < 0.999);
-    assert!(look.y > wish.y);
+    let (hip_tgt, shoulder_tgt) = elevation_targets(s.look_offset_pitch);
+    assert!((s.hip_fold - (hip_tgt + s.hip_fire_fold)).abs() < 1e-6);
+    assert!(s.neck_fold > hip_tgt);
+    // Shoulder-only residual must not move hip/neck joints.
     let mut s2 = SelfState::default_loadout();
     s2.shoulder_fire_fold = 10f32.to_radians();
     s2.compose_joints();
-    assert!(s2.look_forward().dot(s2.ocular_forward()) > 0.999);
+    assert!((s2.hip_fold - hip_tgt).abs() < 1e-6);
+    assert!((s2.shoulder_fold - (shoulder_tgt + s2.shoulder_fire_fold)).abs() < 1e-6);
+    let mut rest = SelfState::default_loadout();
+    rest.compose_joints();
+    assert!((s2.neck_fold - rest.neck_fold).abs() < 1e-6);
 }
 
 #[test]
@@ -119,11 +136,38 @@ fn weapon_line_ignores_neck_residual() {
     s.neck_fire_fold = 8f32.to_radians();
     s.compose_joints();
     let wl = s.weapon_line().expect("armed");
-    assert!(wl.dot(s.ocular_forward()) > 0.999);
+    assert!(wl.dot(drive_look_dir(&s)) > 0.999);
     s.hip_fire_fold = 4f32.to_radians();
     s.compose_joints();
     let wl2 = s.weapon_line().expect("armed");
     assert!(wl2.y > wl.y);
+}
+
+#[test]
+fn weapon_line_from_composed_joints_not_free_bag() {
+    let mut s = SelfState::default_loadout();
+    s.set_look(0.5, 0.2);
+    s.hip_fire_fold = 3f32.to_radians();
+    s.shoulder_fire_fold = 5f32.to_radians();
+    s.shoulder_fire_twist = 2f32.to_radians();
+    s.compose_joints();
+    let wl = s.weapon_line().expect("armed");
+    let yaw = s.facing + s.shoulder_twist;
+    let pitch = s.hip_fold + s.shoulder_fold;
+    let cp = pitch.cos();
+    let expected = Vec3::new(yaw.sin() * cp, pitch.sin(), yaw.cos() * cp);
+    assert!((wl - expected).length() < 1e-5);
+    assert!((pitch - s.look_offset_pitch).abs() > 1e-3);
+}
+
+#[test]
+fn wish_turns_with_look_ground_azimuth() {
+    let mut s = SelfState::default_loadout();
+    s.set_look(std::f32::consts::FRAC_PI_2, 0.0); // face +X
+    s.apply_move(1.0, 1.0, 0.0, false);
+    assert!((s.position.x - WALK_SPEED_M_S).abs() < 1e-4);
+    assert!(s.position.z.abs() < 1e-4);
+    assert!((s.facing - s.look_yaw()).abs() < 1e-6);
 }
 
 #[test]
@@ -149,13 +193,15 @@ fn diagonal_wish_normalizes_speed() {
 #[test]
 fn strafe_is_look_relative_and_keys_do_not_yaw() {
     let mut s = SelfState::default_loadout();
-    s.ocular_yaw = 0.0;
+    s.facing = 0.0;
+    s.look_offset_yaw = 0.0;
+    s.sync_pose();
     s.apply_move(1.0, 0.0, 1.0, false);
-    // Facing +Z, screen-right is ΓêÆX (RH look_to / forward ├ù up).
+    // Facing +Z, screen-right is −X (RH look_to / forward × up).
     assert!((s.position.x + WALK_SPEED_M_S).abs() < 1e-4);
     assert!(s.position.z.abs() < 1e-4);
-    assert!((s.torso_yaw - s.ocular_yaw).abs() < 1e-6);
-    assert_eq!(s.ocular_yaw, 0.0);
+    assert!((s.facing - s.look_yaw()).abs() < 1e-6);
+    assert_eq!(s.facing, 0.0);
 }
 
 #[test]
@@ -273,7 +319,7 @@ fn air_coasts_at_launch_direction_and_freezes_phase() {
     s.apply_move(0.1, 1.0, 0.0, false);
     let phase = s.walk_phase;
     s.try_jump();
-    // Strafe mid-air must not change path ΓÇö still +Z from launch.
+    // Strafe mid-air must not change path — still +Z from launch.
     s.apply_move(0.2, 0.0, 1.0, false);
     assert_eq!(s.locomotion, LocomotionMode::Air);
     assert!((s.walk_phase - phase).abs() < 1e-6, "phase must freeze");
@@ -490,7 +536,7 @@ fn primary_accepts_any_class() {
     assert!(s.set_primary(Some(b'e')).is_ok());
     assert!(s.set_primary(None).is_ok());
     assert_eq!(s.primary, None);
-    // Still on primary slot ΓÇö empty means unarmed, not a third mode.
+    // Still on primary slot — empty means unarmed, not a third mode.
     assert_eq!(s.active, ActiveWeapon::Primary);
     assert!(!s.is_armed());
 }
@@ -505,7 +551,7 @@ fn cycle_weapon_toggles_two_slots_only() {
     s.cycle_weapon(1);
     assert_eq!(s.active, ActiveWeapon::Primary);
     assert_eq!(s.active_blaster(), Some(b'p'));
-    // Both filled ΓåÆ always armed; no free third unarmed step.
+    // Both filled → always armed; no free third unarmed step.
     assert!(s.is_armed());
 
     s.set_secondary(None).unwrap();

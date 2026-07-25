@@ -169,14 +169,10 @@ impl FireState {
         self.sway.advance(
             dt,
             class_sway(def.class),
-            self_state.ocular_yaw,
-            self_state.ocular_pitch,
+            self_state.look_yaw(),
+            self_state.look_pitch(),
         );
         self_state.set_shoulder_sway(self.sway.pitch_rad, self.sway.yaw_rad);
-
-        let aim = self_state
-            .weapon_line()
-            .unwrap_or_else(|| self_state.ocular_forward());
 
         let press_edge = fire_held && !self.prev_held;
         self.fire_held = fire_held;
@@ -184,9 +180,13 @@ impl FireState {
 
         let fire_intent =
             press_edge || (fire_held && def.mode == FireMode::FullAuto) || self.burst_active();
+        // Clear emote before reading weapon line (holster hides the line).
         if fire_intent && self_state.is_emoting() {
             self_state.clear_emote();
         }
+        let Some(aim) = self_state.weapon_line() else {
+            return Vec::new();
+        };
         if fire_intent && self_state.sprint_latched {
             self_state.sprint_latched = false;
             if self_state.locomotion.is_sprint() {
