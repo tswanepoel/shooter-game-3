@@ -139,7 +139,7 @@ A path in the world that begins at a [position](#position) and runs along a [dir
 
 ### Figure
 
-The player character in the world.
+A body in the world.
 
 ### Head
 
@@ -189,17 +189,71 @@ A connection between parts of the [figure](#figure) that folds, twists, or both.
 
 Small ongoing fold and twist of a [joint](#joint).
 
+### Room
+
+A joinable gathering.
+
+### Member
+
+A person in a [room](#room) with a display name.
+
+### Character
+
+A body kit.
+
+### Player
+
+A [member](#member) who plays and embodies a [character](#character).
+
+### Spectator
+
+A [member](#member) who watches.
+
+### Map
+
+A playable place.
+
+### Team
+
+A side of [players](#player).
+
+### Score
+
+A count earned in play.
+
+### Free-for-all
+
+Every [player](#player) opposes every other [player](#player).  
+Ends by [player](#player) [score](#score) — first to the limit, or highest when time ends.
+
+### Team deathmatch
+
+Each [player](#player) is on a [team](#team). A [player](#player) opposes each [player](#player) on another [team](#team).  
+Ends by [team](#team) [score](#score) — first to the limit, or highest when time ends.
+
+### Match
+
+One bout of play in a [room](#room) on a [map](#map) as [free-for-all](#free-for-all) or [team deathmatch](#team-deathmatch). Starts and ends. [Players](#player) in it have a [figure](#figure) while alive.
+
+### Opponent
+
+A [player](#player) that another [player](#player) opposes.
+
 ### Fire
 
-Discharge by the [figure](#figure).
+A shot by the [figure](#figure).
 
 ### Hit
 
-Damaging impact on the [figure](#figure).
+Damaging impact on the [figure](#figure) from an [opponent](#opponent).
 
 ### Ammo
 
 A kind of round. It has mass.
+
+### Ammo drop
+
+[Ammo](#ammo) on the floor. Ends after a time or when its rounds are taken.
 
 ### Weapon class
 
@@ -214,6 +268,11 @@ How [fire](#fire) repeats: one shot per press, a held stream, or a fixed string 
 A weapon in the world.  
 It has a [weapon class](#weapon-class). It chooses [ammo](#ammo). It launches that [ammo](#ammo) at a speed of this blaster.  
 It has a [fire mode](#fire-mode).
+
+### Magazine
+
+Rounds of the [blaster](#blaster)’s [ammo](#ammo) held in that [blaster](#blaster), up to a capacity of that [blaster](#blaster).  
+Accepted [fire](#fire) spends from it. Empty blocks [fire](#fire).
 
 ### Fire impulse
 
@@ -301,6 +360,11 @@ The [figure](#figure) finishing [walk](#walk) strides toward a neutral [phase](#
 
 [Stand](#stand), [walk](#walk), [sprint](#sprint), [stopping](#stopping), or [air](#air), and [phase](#phase) when the [legs](#legs) are making strides.
 
+### Reserve ammo
+
+Rounds of [ammo](#ammo) a [player](#player) carries outside the [magazine](#magazine).  
+Replenished from an [ammo drop](#ammo-drop).
+
 ### Tick
 
 One discrete instant of the simulation.
@@ -319,7 +383,8 @@ An optional [blaster](#blaster) slot on the [figure](#figure) for launcher or pi
 
 ### Active slot
 
-Which of [primary slot](#primary-slot) or [secondary slot](#secondary-slot) is in the [figure](#figure)’s hand.
+Which of [primary slot](#primary-slot) or [secondary slot](#secondary-slot) is in the [figure](#figure)’s hand.  
+The [figure](#figure) may change which slot is active.
 
 ### Unarmed
 
@@ -337,7 +402,7 @@ A [position](#position) on the [blaster](#blaster) at a barrel tip.
 
 ### Projectile
 
-A body in flight from [fire](#fire). It carries [ammo](#ammo), velocity, and owner. It moves under gravity. It ends when its path length reaches its range.
+A body in flight from [fire](#fire). It carries [ammo](#ammo) and velocity. Owned by a [player](#player). It moves under gravity. It ends when its path length reaches its range.
 
 ### Discharge
 
@@ -366,24 +431,46 @@ A [ray](#ray) from [look](#look)’s [position](#position) along [weapon line](#
 ### Combat ray
 
 A [ray](#ray) from [look](#look)’s [position](#position) along [weapon line](#weapon-line) after [spread](#spread).  
-Each [projectile](#projectile) at spawn starts at that [position](#position) and runs along that [direction](#direction).
+Each [projectile](#projectile) when launched starts at that [position](#position) and runs along that [direction](#direction).
 
 ### Health
 
 A resource of the [figure](#figure).  
 Refills while the [figure](#figure) is not taking [hit](#hit).
 
+### Corpse
+
+A dead [figure](#figure). May spawn an [ammo drop](#ammo-drop). Ends after a time.
+
 ### Death
 
-[Health](#health) empty. Living acts stop.
-
-### Impact
-
-A [hit](#hit) on a [body part](#body-part). Drains [health](#health). The drain comes from [ammo](#ammo) mass, speed at contact, and which [body part](#body-part).
+[Health](#health) empty. Living acts stop. Spawns a [corpse](#corpse).
 
 ### Hit claim
 
 A record that a [projectile](#projectile) met a [body part](#body-part) of a [figure](#figure), with [ammo](#ammo) and speed at contact.
+
+### Impact
+
+A [hit](#hit) on a [body part](#body-part) from a [hit claim](#hit-claim). Drains [health](#health). The drain comes from [ammo](#ammo) mass, speed at contact, and which [body part](#body-part).
+
+### Loadout
+
+The [blaster](#blaster) choices for a [player](#player)’s [primary slot](#primary-slot) and [secondary slot](#secondary-slot).
+
+### Spawn
+
+A [player](#player)’s [figure](#figure) entering play alive on a [map](#map). Applies that [player](#player)’s [loadout](#loadout). May run again after [death](#death).
+
+### Reload
+
+Fills the [magazine](#magazine) from [reserve ammo](#reserve-ammo).
+
+### Kill
+
+A record that a [player](#player) caused an [opponent](#opponent)’s [death](#death).  
+Under [free-for-all](#free-for-all), raises the killer’s [score](#score).  
+Under [team deathmatch](#team-deathmatch), raises the killer’s [team](#team) [score](#score).
 
 ### Emote
 
