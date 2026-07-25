@@ -5,7 +5,7 @@ use glam::{Mat4, Vec3};
 use wasm_bindgen::JsValue;
 
 use crate::body_hit::{self, PartHit};
-use crate::mesh_unlit::{self, AnimClip, CharPart, MeshVertex, UnlitMeshGpu, UnlitMeshLayout};
+use crate::mesh::{self, AnimClip, CharPart, MeshVertex, UnlitMeshGpu, UnlitMeshLayout};
 
 pub struct MountedView {
     pub look_origin: Vec3,
@@ -46,7 +46,7 @@ impl SelfGpu {
         self_state: &SelfState,
     ) -> Result<Self, JsValue> {
         let layout = UnlitMeshLayout::create(device, surface_format, sample_count);
-        let pack = mesh_unlit::load_kenney_core().await?;
+        let pack = mesh::load_kenney_core().await?;
         let gpu = layout.upload_ctx(device, queue);
 
         let ch = self_state.character as char;
@@ -59,17 +59,14 @@ impl SelfGpu {
             .map_err(|e| JsValue::from_str(&e))?;
 
         let (parts, min_y) =
-            mesh_unlit::extract_character_parts(char_glb).map_err(|e| JsValue::from_str(&e))?;
-        let walk_clip =
-            mesh_unlit::extract_clip(char_glb, "walk").map_err(|e| JsValue::from_str(&e))?;
+            mesh::extract_character_parts(char_glb).map_err(|e| JsValue::from_str(&e))?;
+        let walk_clip = mesh::extract_clip(char_glb, "walk").map_err(|e| JsValue::from_str(&e))?;
         let sprint_clip =
-            mesh_unlit::extract_clip(char_glb, "sprint").map_err(|e| JsValue::from_str(&e))?;
-        let die_clip =
-            mesh_unlit::extract_clip(char_glb, "die").map_err(|e| JsValue::from_str(&e))?;
+            mesh::extract_clip(char_glb, "sprint").map_err(|e| JsValue::from_str(&e))?;
+        let die_clip = mesh::extract_clip(char_glb, "die").map_err(|e| JsValue::from_str(&e))?;
         let mut emote_clips = Vec::with_capacity(EMOTE_CATALOG.len());
         for def in &EMOTE_CATALOG {
-            let clip =
-                mesh_unlit::extract_clip(char_glb, def.clip).map_err(|e| JsValue::from_str(&e))?;
+            let clip = mesh::extract_clip(char_glb, def.clip).map_err(|e| JsValue::from_str(&e))?;
             emote_clips.push(clip);
         }
 
@@ -81,8 +78,8 @@ impl SelfGpu {
         let emote = emote_pair(self_state, &emote_clips);
         let die = die_pair(self_state, &die_clip);
         let (worlds, arm_kit) =
-            mesh_unlit::pose_character_kit(&parts, self_state, Some(loco), emote, die);
-        let k2w = mesh_unlit::kit_to_world(self_state.placement_matrix(), min_y);
+            mesh::pose_character_kit(&parts, self_state, Some(loco), emote, die);
+        let k2w = mesh::kit_to_world(self_state.placement_matrix(), min_y);
 
         let mut char_cpu: Vec<(Vec<MeshVertex>, Vec<u32>, [f32; 4])> = Vec::new();
         let mut part_prim = vec![None; parts.len()];
@@ -93,14 +90,14 @@ impl SelfGpu {
             let world = k2w * worlds[i];
             let mut verts = part.local_verts.clone();
             for v in &mut verts {
-                mesh_unlit::transform_vertex(v, world);
+                mesh::transform_vertex(v, world);
             }
             part_prim[i] = Some(char_cpu.len());
             char_cpu.push((verts, part.indices.clone(), part.base_color));
         }
 
         let char_batch =
-            mesh_unlit::upload_batch(&gpu, char_png, char_cpu, Mat4::IDENTITY, "self-character")
+            mesh::upload_batch(&gpu, char_png, char_cpu, Mat4::IDENTITY, "self-character")
                 .map_err(|e| JsValue::from_str(&e))?;
 
         let mut batches = vec![char_batch];
@@ -114,7 +111,7 @@ impl SelfGpu {
                 continue;
             }
             seen.push(letter);
-            let bi = mesh_unlit::letter_index(letter).map_err(|e| JsValue::from_str(&e))?;
+            let bi = mesh::letter_index(letter).map_err(|e| JsValue::from_str(&e))?;
             let bl = letter as char;
             let blaster_glb = pack
                 .get(&format!("blaster-{bl}.mesh"))
@@ -123,11 +120,11 @@ impl SelfGpu {
                 .get("blaster.colormap")
                 .map_err(|e| JsValue::from_str(&e))?;
             let blaster_prims =
-                mesh_unlit::extract_primitives(blaster_glb).map_err(|e| JsValue::from_str(&e))?;
+                mesh::extract_primitives(blaster_glb).map_err(|e| JsValue::from_str(&e))?;
 
             let show = self_state.presents_armed() && self_state.active_blaster() == Some(letter);
             let root = if show {
-                mesh_unlit::held_blaster_root(k2w, arm_kit, bi)
+                mesh::held_blaster_root(k2w, arm_kit, bi)
             } else {
                 Mat4::from_scale(Vec3::ZERO)
             };
@@ -138,12 +135,12 @@ impl SelfGpu {
                 local.push(verts.clone());
                 let mut world_verts = verts;
                 for v in &mut world_verts {
-                    mesh_unlit::transform_vertex(v, root);
+                    mesh::transform_vertex(v, root);
                 }
                 cpu.push((world_verts, indices, color));
             }
             let batch_idx = batches.len();
-            let batch = mesh_unlit::upload_batch(
+            let batch = mesh::upload_batch(
                 &gpu,
                 colormap,
                 cpu,
@@ -183,7 +180,7 @@ impl SelfGpu {
 
     /// Present-pose arm matrix and kit→world (for held attach / fire origins).
     fn present_arm(&self, self_state: &SelfState) -> (Mat4, Mat4) {
-        let k2w = mesh_unlit::kit_to_world(self_state.placement_matrix(), self.min_y);
+        let k2w = mesh::kit_to_world(self_state.placement_matrix(), self.min_y);
         let loco = if self_state.locomotion.is_sprint() {
             &self.sprint_clip
         } else {
@@ -192,7 +189,7 @@ impl SelfGpu {
         let emote = emote_pair(self_state, &self.emote_clips);
         let die = die_pair(self_state, &self.die_clip);
         let (_, arm_kit) =
-            mesh_unlit::pose_character_kit(&self.parts, self_state, Some(loco), emote, die);
+            mesh::pose_character_kit(&self.parts, self_state, Some(loco), emote, die);
         (k2w, arm_kit)
     }
 
@@ -200,24 +197,24 @@ impl SelfGpu {
         let Some(letter) = self_state.active_blaster() else {
             return Vec::new();
         };
-        let Ok(bi) = mesh_unlit::letter_index(letter) else {
+        let Ok(bi) = mesh::letter_index(letter) else {
             return Vec::new();
         };
         let (k2w, arm_kit) = self.present_arm(self_state);
         let held = held_with_grip_bore(k2w, arm_kit, bi, self_state.grip_bore_m);
-        mesh_unlit::muzzle_world_points(held, bi).collect()
+        mesh::muzzle_world_points(held, bi).collect()
     }
 
     pub fn flash_muzzle_worlds(&self, self_state: &SelfState, muzzle_indices: &[u8]) -> Vec<Vec3> {
         let Some(letter) = self_state.active_blaster() else {
             return Vec::new();
         };
-        let Ok(bi) = mesh_unlit::letter_index(letter) else {
+        let Ok(bi) = mesh::letter_index(letter) else {
             return Vec::new();
         };
         let (k2w, arm_kit) = self.present_arm(self_state);
         let held = held_with_grip_bore(k2w, arm_kit, bi, self_state.grip_bore_m);
-        let locals = mesh_unlit::muzzle_locals(bi);
+        let locals = mesh::muzzle_locals(bi);
         muzzle_indices
             .iter()
             .filter_map(|&i| {
@@ -238,12 +235,12 @@ impl SelfGpu {
         let Some(letter) = self_state.active_blaster() else {
             return Vec::new();
         };
-        let Ok(bi) = mesh_unlit::letter_index(letter) else {
+        let Ok(bi) = mesh::letter_index(letter) else {
             return Vec::new();
         };
         let (k2w, arm_kit) = self.present_arm(self_state);
         let held = held_with_grip_bore(k2w, arm_kit, bi, grip_bore_m);
-        let locals = mesh_unlit::muzzle_locals(bi);
+        let locals = mesh::muzzle_locals(bi);
         muzzle_indices
             .iter()
             .filter_map(|&i| {
@@ -293,7 +290,7 @@ impl SelfGpu {
         grip_bore_m: f32,
         first_person: bool,
     ) {
-        let k2w = mesh_unlit::kit_to_world(self_state.placement_matrix(), self.min_y);
+        let k2w = mesh::kit_to_world(self_state.placement_matrix(), self.min_y);
 
         let loco = if self_state.locomotion.is_sprint() {
             &self.sprint_clip
@@ -303,7 +300,7 @@ impl SelfGpu {
         let emote = emote_pair(self_state, &self.emote_clips);
         let die = die_pair(self_state, &self.die_clip);
         let (present_worlds, arm_kit) =
-            mesh_unlit::pose_character_kit(&self.parts, self_state, Some(loco), emote, die);
+            mesh::pose_character_kit(&self.parts, self_state, Some(loco), emote, die);
 
         for (i, part) in self.parts.iter().enumerate() {
             let Some(prim) = self.part_prim[i] else {
@@ -318,7 +315,7 @@ impl SelfGpu {
             };
             let mut verts = part.local_verts.clone();
             for v in &mut verts {
-                mesh_unlit::transform_vertex(v, world);
+                mesh::transform_vertex(v, world);
             }
             self.mesh.write_prim_verts(queue, 0, prim, &verts);
         }
@@ -334,7 +331,7 @@ impl SelfGpu {
             for (pi, local) in b.local.iter().enumerate() {
                 let mut verts = local.clone();
                 for v in &mut verts {
-                    mesh_unlit::transform_vertex(v, root);
+                    mesh::transform_vertex(v, root);
                 }
                 self.mesh.write_prim_verts(queue, b.batch, pi, &verts);
             }
@@ -369,11 +366,11 @@ impl SelfGpu {
 }
 
 fn held_with_grip_bore(k2w: Mat4, arm_kit: Mat4, letter_index: usize, grip_bore_m: f32) -> Mat4 {
-    let held = mesh_unlit::held_blaster_root(k2w, arm_kit, letter_index);
+    let held = mesh::held_blaster_root(k2w, arm_kit, letter_index);
     if grip_bore_m.abs() < 1e-8 {
         return held;
     }
-    let grip = mesh_unlit::weapon_grip(letter_index).transform_point3(Vec3::ZERO);
+    let grip = mesh::weapon_grip(letter_index).transform_point3(Vec3::ZERO);
     let t = Mat4::from_translation(grip);
     held * t * Mat4::from_translation(Vec3::new(0.0, 0.0, grip_bore_m)) * t.inverse()
 }

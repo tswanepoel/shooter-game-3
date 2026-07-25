@@ -7,7 +7,7 @@
 use glam::{Mat4, Vec3};
 use wasm_bindgen::JsValue;
 
-use crate::mesh_unlit::{self, UnlitMeshGpu, UnlitMeshLayout};
+use crate::mesh::{self, UnlitMeshGpu, UnlitMeshLayout};
 
 const LETTERS: &[u8] = b"abcdefghijklmnopqr";
 
@@ -33,7 +33,7 @@ impl LineupGpu {
         sample_count: u32,
     ) -> Result<Self, JsValue> {
         let layout = UnlitMeshLayout::create(device, surface_format, sample_count);
-        let pack = mesh_unlit::load_kenney_core().await?;
+        let pack = mesh::load_kenney_core().await?;
         let gpu = layout.upload_ctx(device, queue);
 
         let n = LETTERS.len();
@@ -44,18 +44,18 @@ impl LineupGpu {
             let placement = Mat4::from_translation(Vec3::new(x, 0.0, LINEUP_Z_M));
 
             let (char_batch, blaster_batch, held_blaster) =
-                mesh_unlit::upload_held_pair(&gpu, &pack, letter, letter, placement, "lineup")
+                mesh::upload_held_pair(&gpu, &pack, letter, letter, placement, "lineup")
                     .map_err(|e| JsValue::from_str(&format!("lineup {}: {e}", letter as char)))?;
             batches.push(char_batch);
             batches.push(blaster_batch);
 
             // Magenta balls at every muzzle (012): blaster-local under held root (037).
-            for muzzle_world in mesh_unlit::muzzle_world_points(held_blaster, i) {
+            for muzzle_world in mesh::muzzle_world_points(held_blaster, i) {
                 let marker_root = Mat4::from_translation(muzzle_world)
                     * Mat4::from_scale(Vec3::splat(MUZZLE_MARKER_RADIUS_M));
-                let marker_batch = mesh_unlit::upload_solid_batch(
+                let marker_batch = mesh::upload_solid_batch(
                     &gpu,
-                    mesh_unlit::unit_sphere_prim(12, 8),
+                    mesh::unit_sphere_prim(12, 8),
                     marker_root,
                     MUZZLE_MARKER_COLOR,
                     "lineup-muzzle-marker",

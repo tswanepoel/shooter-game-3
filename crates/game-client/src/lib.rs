@@ -11,7 +11,7 @@ mod hit_marker;
 mod input;
 #[cfg(feature = "debug-tools")]
 mod lineup;
-mod mesh_unlit;
+mod mesh;
 mod mp;
 mod pack;
 mod remote_present;
