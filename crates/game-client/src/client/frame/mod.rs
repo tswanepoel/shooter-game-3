@@ -56,7 +56,17 @@ impl ClientInner {
         }
         if let Some(spawn) = effects.pending_spawn {
             let character = self.mp.character();
-            let kit_changed = self.self_state.character != character;
+            // SelfGpu only uploads blaster batches at load. Spawn applies staged
+            // loadout; always re-kick so local present matches (remotes already
+            // reload via RemoteKitKey). Idle also aborts a stale in-flight load.
+            let need_present_reload = match &self.self_present {
+                SelfPresentState::Ready(gpu) => {
+                    self.self_state.character != character
+                        || !gpu.covers_loadout(spawn.primary, spawn.secondary)
+                }
+                SelfPresentState::Loading | SelfPresentState::Failed(_) => true,
+                SelfPresentState::Idle => false,
+            };
             self.self_state = SelfState::default_loadout();
             self.self_state.character = character;
             self.self_state.primary = spawn.primary;
@@ -73,7 +83,7 @@ impl ClientInner {
             self.projectiles = ProjectileWorld::new();
             self.health_by_id.clear();
             self.ui.set_status(String::new());
-            if kit_changed {
+            if need_present_reload {
                 self.self_present = SelfPresentState::Idle;
             }
         }

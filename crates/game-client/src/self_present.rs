@@ -350,10 +350,17 @@ impl SelfGpu {
         self.apply_present(queue, self_state, first_person);
     }
 
-    /// Whether both loadout letters are already GPU-resident (dev equip).
-    #[cfg(feature = "debug-tools")]
+    /// Whether a loadout letter is already GPU-resident (spawn / dev equip).
     pub fn has_blaster_letter(&self, letter: u8) -> bool {
         self.blasters.iter().any(|b| b.letter == letter)
+    }
+
+    /// True when every filled loadout slot has a resident blaster batch.
+    pub fn covers_loadout(&self, primary: Option<u8>, secondary: Option<u8>) -> bool {
+        [primary, secondary]
+            .into_iter()
+            .flatten()
+            .all(|letter| self.has_blaster_letter(letter))
     }
 
     pub fn write_view_proj(&self, queue: &wgpu::Queue, view_proj: Mat4) {

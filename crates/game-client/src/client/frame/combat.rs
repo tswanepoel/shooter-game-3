@@ -103,9 +103,20 @@ impl ClientInner {
                 .or_insert_with(|| PlayerHealth::read_from_self(&self.self_state));
         }
         for (id, _) in &remote_samples {
-            self.health_by_id
-                .entry(*id)
-                .or_insert_with(PlayerHealth::full);
+            let living = self.mp.peer_living(*id);
+            self.health_by_id.entry(*id).or_insert_with(|| {
+                if living {
+                    PlayerHealth::full()
+                } else {
+                    // Unknown corpse (e.g. after local health clear): hold die end.
+                    PlayerHealth {
+                        health: 0.0,
+                        regen_block_s: 0.0,
+                        alive: false,
+                        die_age_s: game_sim::DIE_DURATION_S,
+                    }
+                }
+            });
         }
         if self.mp.in_room() {
             let mut keep: HashMap<PlayerId, ()> =
@@ -114,6 +125,23 @@ impl ClientInner {
                 keep.insert(id, ());
             }
             self.health_by_id.retain(|id, _| keep.contains_key(id));
+            // Roster living is membership truth (053 respawn). Local health must
+            // clear die pose when a peer re-enters; otherwise remotes stay at die
+            // last frame while drive walks (corpse snake).
+            for (id, _) in &remote_samples {
+                let living = self.mp.peer_living(*id);
+                let Some(h) = self.health_by_id.get_mut(id) else {
+                    continue;
+                };
+                if living && !h.alive {
+                    *h = PlayerHealth::full();
+                } else if !living && h.alive {
+                    h.health = 0.0;
+                    h.regen_block_s = 0.0;
+                    h.alive = false;
+                    h.die_age_s = 0.0;
+                }
+            }
         }
 
         let remote_hit_states: Vec<(PlayerId, SelfState)> = remote_samples

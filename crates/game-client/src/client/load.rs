@@ -44,10 +44,21 @@ pub(crate) fn maybe_kick_self_load(inner: &Rc<RefCell<ClientInner>>) {
     wasm_bindgen_futures::spawn_local(async move {
         let result = SelfGpu::load(&device, &queue, format, MSAA_SAMPLE_COUNT, &self_state).await;
         let mut c = inner.borrow_mut();
+        // Spawn / character / equip may have set Idle to abort this load.
+        if !matches!(c.self_present, SelfPresentState::Loading) {
+            return;
+        }
         match result {
             Ok(gpu) => {
-                web_sys::console::log_1(&"self: body and blaster ready".into());
-                c.self_present = SelfPresentState::Ready(gpu);
+                // Drop if kit no longer matches (stale load vs spawn loadout).
+                let still = c.self_state.character == self_state.character
+                    && gpu.covers_loadout(c.self_state.primary, c.self_state.secondary);
+                if still {
+                    web_sys::console::log_1(&"self: body and blaster ready".into());
+                    c.self_present = SelfPresentState::Ready(gpu);
+                } else {
+                    c.self_present = SelfPresentState::Idle;
+                }
             }
             Err(err) => {
                 let msg = err.as_string().unwrap_or_else(|| format!("{err:?}"));
