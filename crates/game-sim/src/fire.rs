@@ -1,22 +1,14 @@
-//! Weapon fire gates, modes, and projectile motion (038/042/047).
+//! Weapon fire gates, modes, and projectile motion (038/042/048).
+//!
+//! Cadence and discharge live here. Fire / hit / sway residual live on [`SelfState`].
 
-use glam::{Quat, Vec3};
+use glam::Vec3;
 
 use crate::weapons::{
     class_sway, weapon_def, FireMode, MuzzlePolicy, WeaponDef, WeaponSway, PROJECTILE_GRAVITY,
     SPRINT_FIRE_BASE_S,
 };
 use crate::{ActiveWeapon, AmmoKind, SelfState, WeaponClass};
-
-// Kick fatigue (047): raw heat → weight^curve → multiplies settle_s.
-const KICK_FATIGUE_RISE: f32 = 0.26;
-const KICK_FATIGUE_RECOVER_S: f32 = 0.35;
-const KICK_FATIGUE_SETTLE_MULT: f32 = 40.0;
-const KICK_FATIGUE_CURVE: f32 = 8.0;
-
-fn kick_fatigue_weight(raw: f32) -> f32 {
-    raw.clamp(0.0, 1.0).powf(KICK_FATIGUE_CURVE)
-}
 
 /// One projectile in flight (anemic bag; motion rules live on [`ProjectileWorld`]).
 ///
@@ -84,19 +76,7 @@ pub struct Discharge {
     pub fired_muzzles: Vec<u8>,
 }
 
-/// Pitch degrees of flinch per unit of applied impact damage (043).
-/// ~0.6° on a typical light-foam hit (dmg ≈ 11); under a pistol kick.
-const FLINCH_PITCH_DEG_PER_DMG: f32 = 0.055;
-/// Yaw degrees of flinch per unit damage (random sign).
-const FLINCH_YAW_DEG_PER_DMG: f32 = 0.022;
-/// Cap stacked flinch pitch (degrees) so one heavy hit does not whip aim.
-const FLINCH_PITCH_CAP_DEG: f32 = 1.6;
-/// Cap stacked flinch yaw (degrees).
-const FLINCH_YAW_CAP_DEG: f32 = 0.65;
-/// Flinch settle time (seconds).
-const FLINCH_SETTLE_S: f32 = 0.12;
-
-/// Fire cadence / gates, aim kick, resting sway, and hit flinch for one self.
+/// Fire cadence and gates.
 #[derive(Debug, Clone)]
 pub struct FireState {
     ready_s: f32,
@@ -110,13 +90,8 @@ pub struct FireState {
     armed_letter: Option<u8>,
     next_id: u64,
     rng: u32,
-    kick: KickPose,
-    kick_settle_s: f32,
-    /// Raw spray heat 0…1 (curved before it scales settle).
-    kick_fatigue: f32,
+    /// Sway oscillator; writes fold/twist onto the figure each tick.
     sway: SwayState,
-    flinch: KickPose,
-    flinch_settle_s: f32,
 }
 
 impl Default for FireState {
@@ -139,12 +114,7 @@ impl FireState {
             armed_letter: None,
             next_id: 1,
             rng: 0xC0FFEE42,
-            kick: KickPose::default(),
-            kick_settle_s: 0.08,
-            kick_fatigue: 0.0,
             sway: SwayState::new(0xA11_5A4E),
-            flinch: KickPose::default(),
-            flinch_settle_s: FLINCH_SETTLE_S,
         }
     }
 
@@ -157,76 +127,10 @@ impl FireState {
         self.burst_active()
     }
 
-    /// Fire kick only (no resting sway / flinch).
-    pub fn kick(&self) -> KickPose {
-        self.kick
-    }
-
-    /// Resting sway pitch/yaw (no kick, no flinch, no grip shove).
-    pub fn sway(&self) -> KickPose {
-        self.sway.as_pose()
-    }
-
-    /// Hit flinch only (no kick / sway).
-    pub fn flinch(&self) -> KickPose {
-        self.flinch
-    }
-
-    /// Curved fatigue weight 0…1 (scales kick settle; HUD).
-    pub fn kick_fatigue_weight(&self) -> f32 {
-        kick_fatigue_weight(self.kick_fatigue)
-    }
-
-    /// Effective kick settle_s this frame (base × fatigue scale).
-    pub fn kick_settle_eff_s(&self) -> f32 {
-        let w = kick_fatigue_weight(self.kick_fatigue);
-        self.kick_settle_s * (1.0 + w * (KICK_FATIGUE_SETTLE_MULT - 1.0))
-    }
-
-    /// Kick + full sway + flinch (shots and reticle).
-    pub fn aim_pose(&self) -> KickPose {
-        KickPose {
-            pitch_rad: self.kick.pitch_rad + self.sway.pitch_rad + self.flinch.pitch_rad,
-            yaw_rad: self.kick.yaw_rad + self.sway.yaw_rad + self.flinch.yaw_rad,
-            back_m: self.kick.back_m,
-        }
-    }
-
-    /// Kick + flinch full + reduced sway for the held mesh.
-    pub fn mesh_pose(&self) -> KickPose {
-        const SWAY_MESH: f32 = 0.28;
-        KickPose {
-            pitch_rad: self.kick.pitch_rad
-                + self.sway.pitch_rad * SWAY_MESH
-                + self.flinch.pitch_rad,
-            yaw_rad: self.kick.yaw_rad + self.sway.yaw_rad * SWAY_MESH + self.flinch.yaw_rad,
-            back_m: self.kick.back_m,
-        }
-    }
-
-    /// Add aim flinch from **applied** impact damage (043 shared rule).
-    ///
-    /// `damage` is the health drop amount (mass × speed × scale). Zero / negative
-    /// adds nothing. Pitch spikes up; yaw gets a random left/right kick within cap.
-    pub fn add_flinch(&mut self, damage: f32) {
-        if damage <= 0.0 {
-            return;
-        }
+    /// Hand-off a hit impulse from applied impact damage.
+    pub fn add_hit_impulse(&mut self, self_state: &mut SelfState, damage: f32) {
         let yaw_sign = if self.next_rand01() < 0.5 { -1.0 } else { 1.0 };
-        let pitch = (damage * FLINCH_PITCH_DEG_PER_DMG)
-            .min(FLINCH_PITCH_CAP_DEG)
-            .to_radians();
-        let yaw = (damage * FLINCH_YAW_DEG_PER_DMG)
-            .min(FLINCH_YAW_CAP_DEG)
-            .to_radians()
-            * yaw_sign;
-        self.flinch.pitch_rad =
-            (self.flinch.pitch_rad + pitch).min(FLINCH_PITCH_CAP_DEG.to_radians());
-        self.flinch.yaw_rad = (self.flinch.yaw_rad + yaw).clamp(
-            -FLINCH_YAW_CAP_DEG.to_radians(),
-            FLINCH_YAW_CAP_DEG.to_radians(),
-        );
-        self.flinch_settle_s = FLINCH_SETTLE_S;
+        self_state.apply_hit_impulse(damage, yaw_sign);
     }
 
     /// Pay letter ready after equip / swap / spawn onto a letter.
@@ -276,10 +180,10 @@ impl FireState {
         (x as f32) / (u32::MAX as f32)
     }
 
-    /// Advance timers / kick / sway / flinch; maybe discharge.
+    /// Advance timers / residual fall / sway; maybe discharge.
     ///
-    /// Projectiles spawn at `look_origin` along look + kick + sway + flinch
-    /// (pre-kick for this shot). `muzzle_worlds` select flash muzzles only; may be empty.
+    /// Projectiles spawn at `look_origin` along weapon line after spread
+    /// (pre-impulse for this shot). `muzzle_worlds` are flash only.
     pub fn tick(
         &mut self,
         dt: f32,
@@ -295,16 +199,10 @@ impl FireState {
         self.cooldown_s = (self.cooldown_s - dt).max(0.0);
 
         let string_active = fire_held || self.burst_left > 0;
-        if !string_active && self.kick_fatigue > 0.0 {
-            let recover = KICK_FATIGUE_RECOVER_S.max(1e-4);
-            self.kick_fatigue = (self.kick_fatigue - dt / recover).max(0.0);
-        }
-        self.kick.settle(dt, self.kick_settle_eff_s().max(1e-4));
-        self.flinch.settle(dt, self.flinch_settle_s);
+        self_state.tick_aim_residual(dt, string_active);
 
         if !self_state.alive {
             self.sway.clear();
-            self.kick_fatigue = 0.0;
             self.fire_held = false;
             self.prev_held = false;
             self.burst_left = 0;
@@ -317,7 +215,7 @@ impl FireState {
 
         let Some(letter) = letter else {
             self.sway.clear();
-            self.kick_fatigue = 0.0;
+            self_state.clear_aim_residual();
             self.fire_held = false;
             self.prev_held = false;
             self.burst_left = 0;
@@ -326,6 +224,7 @@ impl FireState {
         };
         let Some(def) = weapon_def(letter) else {
             self.sway.clear();
+            self_state.set_shoulder_sway(0.0, 0.0);
             return Vec::new();
         };
 
@@ -335,8 +234,11 @@ impl FireState {
             self_state.ocular_yaw,
             self_state.ocular_pitch,
         );
+        self_state.set_shoulder_sway(self.sway.pitch_rad, self.sway.yaw_rad);
 
-        let aim = aim_from_self(self_state, self.aim_pose());
+        let aim = self_state
+            .weapon_line()
+            .unwrap_or_else(|| self_state.ocular_forward());
 
         let press_edge = fire_held && !self.prev_held;
         self.fire_held = fire_held;
@@ -365,7 +267,9 @@ impl FireState {
         // Burst continuation (string always finishes).
         if self.burst_active() {
             if self.gates_clear() {
-                if let Some(d) = self.spawn_discharge(def, owner, look_origin, aim, muzzle_worlds) {
+                if let Some(d) =
+                    self.spawn_discharge(def, owner, look_origin, aim, muzzle_worlds, self_state)
+                {
                     self.burst_left = self.burst_left.saturating_sub(1);
                     self.cooldown_s = def.shot_interval_s();
                     out.push(d);
@@ -393,18 +297,28 @@ impl FireState {
             match def.mode {
                 FireMode::Burst => {
                     self.burst_left = def.burst_count;
-                    if let Some(d) =
-                        self.spawn_discharge(def, owner, look_origin, aim, muzzle_worlds)
-                    {
+                    if let Some(d) = self.spawn_discharge(
+                        def,
+                        owner,
+                        look_origin,
+                        aim,
+                        muzzle_worlds,
+                        self_state,
+                    ) {
                         self.burst_left = self.burst_left.saturating_sub(1);
                         self.cooldown_s = def.shot_interval_s();
                         out.push(d);
                     }
                 }
                 FireMode::Semi | FireMode::FullAuto => {
-                    if let Some(d) =
-                        self.spawn_discharge(def, owner, look_origin, aim, muzzle_worlds)
-                    {
+                    if let Some(d) = self.spawn_discharge(
+                        def,
+                        owner,
+                        look_origin,
+                        aim,
+                        muzzle_worlds,
+                        self_state,
+                    ) {
                         self.cooldown_s = def.shot_interval_s();
                         out.push(d);
                     }
@@ -422,6 +336,7 @@ impl FireState {
         look_origin: Vec3,
         aim: Vec3,
         muzzle_worlds: &[Vec3],
+        self_state: &mut SelfState,
     ) -> Option<Discharge> {
         let aim = {
             let len = aim.length();
@@ -476,9 +391,8 @@ impl FireState {
         } else {
             -1.0
         };
-        self.kick.add_kick(def, yaw_sign);
-        self.kick_settle_s = def.kick.settle_s.max(1e-4);
-        self.kick_fatigue = (self.kick_fatigue + KICK_FATIGUE_RISE).min(1.0);
+        // Fire impulse after spawn so this shot uses pre-impulse weapon line.
+        self_state.apply_fire_impulse(def, yaw_sign);
 
         Some(Discharge {
             weapon: def.letter,
@@ -558,23 +472,6 @@ pub fn equip_blaster_letter(state: &mut SelfState, letter: u8) -> Result<bool, &
     Ok(before != after)
 }
 
-/// Unit aim from look + aim offset (kick / sway / flinch). Camera stays on look.
-pub fn aim_from_self(state: &SelfState, offset: KickPose) -> Vec3 {
-    let yaw = state.ocular_yaw + offset.yaw_rad;
-    let pitch = (state.ocular_pitch + offset.pitch_rad)
-        .clamp(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2);
-    let cp = pitch.cos();
-    Vec3::new(yaw.sin() * cp, pitch.sin(), yaw.cos() * cp)
-}
-
-/// Pitch/yaw aim offset plus optional grip shove for the held mesh.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct KickPose {
-    pub pitch_rad: f32,
-    pub yaw_rad: f32,
-    pub back_m: f32,
-}
-
 /// Multi-band resting sway (breath + tremor + mean-reverting drift).
 #[derive(Debug, Clone)]
 struct SwayState {
@@ -614,14 +511,6 @@ impl SwayState {
         self.drift_yaw = 0.0;
         self.damp = 1.0;
         self.has_look = false;
-    }
-
-    fn as_pose(&self) -> KickPose {
-        KickPose {
-            pitch_rad: self.pitch_rad,
-            yaw_rad: self.yaw_rad,
-            back_m: 0.0,
-        }
     }
 
     fn next_gauss(&mut self) -> f32 {
@@ -687,48 +576,6 @@ impl SwayState {
         let scale = self.damp;
         self.pitch_rad = (breath_p + tremor_p + self.drift_pitch) * scale;
         self.yaw_rad = (breath_y + tremor_y + self.drift_yaw) * scale;
-    }
-}
-
-impl KickPose {
-    /// `yaw_sign` is ±1 for left/right scatter.
-    pub fn add_kick(&mut self, def: &WeaponDef, yaw_sign: f32) {
-        let k = def.kick;
-        let sign = if yaw_sign >= 0.0 { 1.0 } else { -1.0 };
-        self.pitch_rad += k.pitch_deg.to_radians();
-        self.yaw_rad += k.yaw_deg.to_radians() * sign;
-        self.back_m += k.back_m;
-    }
-
-    pub fn settle(&mut self, dt: f32, settle_s: f32) {
-        if settle_s <= 1e-6 {
-            *self = Self::default();
-            return;
-        }
-        let t = (dt / settle_s).clamp(0.0, 1.0);
-        self.pitch_rad *= 1.0 - t;
-        self.yaw_rad *= 1.0 - t;
-        self.back_m *= 1.0 - t;
-        if self.pitch_rad.abs() < 1e-5 {
-            self.pitch_rad = 0.0;
-        }
-        if self.yaw_rad.abs() < 1e-5 {
-            self.yaw_rad = 0.0;
-        }
-        if self.back_m.abs() < 1e-6 {
-            self.back_m = 0.0;
-        }
-    }
-
-    pub fn matrix(self) -> glam::Mat4 {
-        let rot = Quat::from_rotation_y(self.yaw_rad) * Quat::from_rotation_x(self.pitch_rad);
-        glam::Mat4::from_rotation_translation(rot, Vec3::new(0.0, 0.0, self.back_m))
-    }
-
-    /// Kick about grip G: `T(g) · K · T(−g)`. Bore is −Z so back shove is +Z local.
-    pub fn matrix_about_grip(self, grip_local: Vec3) -> glam::Mat4 {
-        let t = glam::Mat4::from_translation(grip_local);
-        t * self.matrix() * t.inverse()
     }
 }
 
@@ -927,7 +774,6 @@ mod tests {
         s.set_primary(Some(b'b')).unwrap();
         fire.pay_ready(b'b');
         fire.ready_s = 0.0;
-        // Zero spread via forcing letter e is wrong; use b and check speed magnitude.
         let def = weapon_def(b'b').unwrap();
         let d = fire.tick(0.0, &mut s, true, 0, eye(), &muzzles());
         assert_eq!(d.len(), 1);
@@ -996,49 +842,51 @@ mod tests {
     }
 
     #[test]
-    fn kick_about_grip_keeps_grip_under_pure_rotation() {
-        let grip = Vec3::new(0.0, -0.14, 1.21);
-        let j = KickPose {
-            pitch_rad: 0.2,
-            yaw_rad: -0.1,
-            back_m: 0.0,
-        };
-        let m = j.matrix_about_grip(grip);
-        let out = m.transform_point3(grip);
+    fn grip_bore_travels_with_fire_residual() {
+        let mut s = armed_self();
+        let def = weapon_def(b'b').unwrap();
+        assert_eq!(s.grip_bore_m, 0.0);
+        s.apply_fire_impulse(def, 1.0);
+        assert!(s.grip_bore_m > 0.0, "bore={}", s.grip_bore_m);
+        assert!(s.fire_fold_total() > 0.0);
+        assert!(s.hip_fire_fold > 0.0 && s.shoulder_fire_fold > 0.0 && s.neck_fire_fold > 0.0);
+        let bore_after = s.grip_bore_m;
+        for _ in 0..120 {
+            s.tick_aim_residual(1.0 / 60.0, false);
+        }
         assert!(
-            (out - grip).length() < 1e-5,
-            "grip moved under pure rot: {out} vs {grip}"
+            s.grip_bore_m < bore_after * 0.05,
+            "bore did not fall: {}",
+            s.grip_bore_m
         );
-        // Mesh origin should move (orbit grip).
-        let origin = m.transform_point3(Vec3::ZERO);
-        assert!(origin.length() > 1e-3);
     }
 
     #[test]
-    fn fire_adds_kick_and_settles() {
+    fn fire_adds_body_residual_and_settles() {
         let mut fire = FireState::new();
         let mut s = armed_self();
         s.set_primary(Some(b'b')).unwrap();
         fire.pay_ready(b'b');
         fire.ready_s = 0.0;
         let m = muzzles();
-        assert_eq!(fire.kick().pitch_rad, 0.0);
+        assert_eq!(s.fire_fold_total(), 0.0);
         let d = fire.tick(0.0, &mut s, true, 0, eye(), &m);
         assert_eq!(d.len(), 1);
-        let pitch_after = fire.kick().pitch_rad;
-        assert!(pitch_after > 0.0, "kick pitch={pitch_after}");
+        let fold_after = s.fire_fold_total();
+        assert!(fold_after > 0.0, "fire fold={fold_after}");
+        assert!(s.hip_fire_fold > 0.0 && s.neck_fire_fold > 0.0);
         for _ in 0..120 {
             let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, eye(), &m);
         }
         assert!(
-            fire.kick().pitch_rad < pitch_after * 0.05,
-            "kick did not settle: {}",
-            fire.kick().pitch_rad
+            s.fire_fold_total() < fold_after * 0.05,
+            "fire residual did not settle: {}",
+            s.fire_fold_total()
         );
     }
 
     #[test]
-    fn full_auto_kick_stacks_climb() {
+    fn full_auto_fire_residual_stacks_climb() {
         let mut fire = FireState::new();
         let mut s = armed_self();
         s.set_primary(Some(b'c')).unwrap();
@@ -1052,17 +900,17 @@ mod tests {
         for _ in 0..45 {
             let d = fire.tick(dt, &mut s, true, 0, eye(), &m);
             shots += d.len() as u32;
-            peak = peak.max(fire.kick().pitch_rad);
+            peak = peak.max(s.fire_fold_total());
         }
         assert!(shots >= 4, "expected several SMG shots, got {shots}");
         assert!(
             peak > one * 1.5,
-            "kick should climb under spray: peak={peak} one={one} shots={shots}"
+            "fire residual should climb under spray: peak={peak} one={one} shots={shots}"
         );
     }
 
     #[test]
-    fn kick_fatigue_rises_on_fire_and_recovers() {
+    fn fire_heat_rises_on_fire_and_recovers() {
         let mut fire = FireState::new();
         let mut s = armed_self();
         s.set_primary(Some(b'c')).unwrap();
@@ -1070,71 +918,74 @@ mod tests {
         fire.ready_s = 0.0;
         let m = muzzles();
         let dt = 1.0 / 60.0;
-        assert_eq!(fire.kick_fatigue_weight(), 0.0);
+        assert_eq!(s.fire_heat_weight(), 0.0);
         for _ in 0..30 {
             let _ = fire.tick(dt, &mut s, true, 0, eye(), &m);
         }
         assert!(
-            fire.kick_fatigue > 0.5,
-            "expected raw heat under spray, got {}",
-            fire.kick_fatigue
+            s.fire_heat_weight() > 0.0 || s.fire_fall_eff_s() > 0.05,
+            "expected heat under spray, w={} fall={}",
+            s.fire_heat_weight(),
+            s.fire_fall_eff_s()
         );
+        // After spray, heat should be elevated enough that fall is slower than base.
+        let fall_hot = s.fire_fall_eff_s();
         for _ in 0..60 {
             let _ = fire.tick(dt, &mut s, false, 0, eye(), &m);
         }
         assert!(
-            fire.kick_fatigue < 0.15 && fire.kick_fatigue_weight() < 0.05,
-            "fatigue should recover after string, raw={} w={}",
-            fire.kick_fatigue,
-            fire.kick_fatigue_weight()
+            s.fire_heat_weight() < 0.05,
+            "heat should recover after string, w={}",
+            s.fire_heat_weight()
         );
+        assert!(fall_hot > weapon_def(b'c').unwrap().kick.settle_s);
     }
 
     #[test]
-    fn shots_use_look_plus_kick() {
+    fn shots_use_weapon_line_from_fire_residual() {
         let mut fire = FireState::new();
         let mut s = armed_self();
         s.set_primary(Some(b'b')).unwrap();
-        // Zero spread so velocity is pure aim.
         fire.pay_ready(b'b');
         fire.ready_s = 0.0;
-        fire.kick.pitch_rad = 10f32.to_radians();
-        fire.kick_settle_s = 1000.0;
+        s.hip_fire_fold = 3f32.to_radians();
+        s.shoulder_fire_fold = 7f32.to_radians();
+        s.neck_fire_fold = 5f32.to_radians();
+        s.compose_joints();
+        s.fire_fall_s = 1000.0;
+        let expected = s.weapon_line().expect("armed");
         let d = fire.tick(0.0, &mut s, true, 0, eye(), &muzzles());
         let vel = d[0].projectiles[0].velocity.normalize();
-        let expected = aim_from_self(
-            &s,
-            KickPose {
-                pitch_rad: 10f32.to_radians(),
-                ..KickPose::default()
-            },
-        );
         assert!(
             vel.dot(expected) > 0.995,
             "vel={vel} expected≈{expected} dot={}",
             vel.dot(expected)
         );
-        assert!(vel.y > 0.1, "kick pitch should lift aim, vel.y={}", vel.y);
+        assert!(
+            vel.y > 0.1,
+            "fire residual fold should lift aim, vel.y={}",
+            vel.y
+        );
     }
 
     #[test]
-    fn armed_hold_advances_sway() {
+    fn armed_hold_advances_sway_on_shoulder() {
         let mut fire = FireState::new();
         let mut s = armed_self();
         s.set_primary(Some(b'b')).unwrap();
         fire.pay_ready(b'b');
         fire.ready_s = 0.0;
-        assert_eq!(fire.sway().pitch_rad, 0.0);
-        assert_eq!(fire.sway().yaw_rad, 0.0);
+        assert_eq!(s.shoulder_sway_fold, 0.0);
+        assert_eq!(s.shoulder_sway_twist, 0.0);
         for _ in 0..90 {
             let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, eye(), &muzzles());
         }
-        let mag = fire.sway().pitch_rad.abs() + fire.sway().yaw_rad.abs();
+        let mag = s.shoulder_sway_fold.abs() + s.shoulder_sway_twist.abs();
         assert!(mag > 1e-5, "sway should move while armed hold, mag={mag}");
     }
 
     #[test]
-    fn unarmed_clears_sway() {
+    fn unarmed_clears_sway_and_residual() {
         let mut fire = FireState::new();
         let mut s = armed_self();
         s.set_primary(Some(b'p')).unwrap();
@@ -1143,37 +994,38 @@ mod tests {
         for _ in 0..60 {
             let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, eye(), &[]);
         }
-        assert!(fire.sway().pitch_rad.abs() + fire.sway().yaw_rad.abs() > 0.0);
+        assert!(s.shoulder_sway_fold.abs() + s.shoulder_sway_twist.abs() > 0.0);
         s.set_primary(None).unwrap();
         s.set_secondary(None).unwrap();
         let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, eye(), &[]);
-        assert_eq!(fire.sway().pitch_rad, 0.0);
-        assert_eq!(fire.sway().yaw_rad, 0.0);
+        assert_eq!(s.shoulder_sway_fold, 0.0);
+        assert_eq!(s.shoulder_sway_twist, 0.0);
+        assert_eq!(s.fire_fold_total(), 0.0);
+        assert_eq!(s.hip_fire_fold, 0.0);
+        assert_eq!(s.neck_fire_fold, 0.0);
+        assert!(s.weapon_line().is_none());
     }
 
     #[test]
-    fn shots_use_look_plus_kick_plus_sway() {
+    fn shots_use_weapon_line_with_sway() {
         let mut fire = FireState::new();
         let mut s = armed_self();
         s.set_primary(Some(b'b')).unwrap();
         fire.pay_ready(b'b');
         fire.ready_s = 0.0;
-        // Build resting sway, freeze kick settle so it stays zero.
         for _ in 0..120 {
             let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, eye(), &[]);
         }
-        fire.kick = KickPose::default();
-        let pose = fire.aim_pose();
+        assert_eq!(s.fire_fold_total(), 0.0);
+        s.compose_joints();
+        let expected = s.weapon_line().expect("armed");
         assert!(
-            pose.pitch_rad.abs() + pose.yaw_rad.abs() > 1e-5,
-            "expected nonzero sway in aim_pose"
+            s.shoulder_sway_fold.abs() + s.shoulder_sway_twist.abs() > 1e-5,
+            "expected nonzero sway on shoulder"
         );
-        // Force zero spread weapon path: b has spread — compare direction before scatter
-        // by zeroing spread effect via matching aim_pose at fire instant (dt=0 keeps sway).
         let d = fire.tick(0.0, &mut s, true, 0, eye(), &muzzles());
         let vel = d[0].projectiles[0].velocity.normalize();
-        let expected = aim_from_self(&s, pose);
-        // Spread on pistol is small; should still align roughly with aim_pose.
+        // Spread on pistol is small; should still align roughly with weapon line.
         assert!(
             vel.dot(expected) > 0.98,
             "vel={vel} expected≈{expected} dot={}",
@@ -1182,77 +1034,68 @@ mod tests {
     }
 
     #[test]
-    fn flinch_from_damage_and_settles() {
+    fn hit_impulse_from_damage_and_settles() {
         let mut fire = FireState::new();
         let mut s = armed_self();
         s.set_primary(Some(b'b')).unwrap();
         fire.pay_ready(b'b');
         fire.ready_s = 0.0;
-        assert_eq!(fire.flinch().pitch_rad, 0.0);
+        assert_eq!(s.hit_fold_total(), 0.0);
         let dmg = crate::impact_damage(AmmoKind::LightFoam, 400.0, crate::HitBodyPart::Torso);
         assert!(dmg > 0.0);
-        fire.add_flinch(dmg);
-        let pitch = fire.flinch().pitch_rad;
-        assert!(pitch > 0.0, "flinch pitch={pitch}");
-        // Stronger impact → stronger flinch (within cap).
-        let mut fire2 = FireState::new();
-        fire2.add_flinch(crate::impact_damage(
-            AmmoKind::Grenade,
-            400.0,
-            crate::HitBodyPart::Torso,
-        ));
-        assert!(fire2.flinch().pitch_rad > pitch);
-        // Zero damage: no flinch.
-        let mut fire0 = FireState::new();
-        fire0.add_flinch(0.0);
-        assert_eq!(fire0.flinch().pitch_rad, 0.0);
+        fire.add_hit_impulse(&mut s, dmg);
+        let fold = s.hit_fold_total();
+        assert!(fold > 0.0, "hit fold={fold}");
+        assert!(s.hip_hit_fold > 0.0 && s.shoulder_hit_fold > 0.0 && s.neck_hit_fold > 0.0);
+        // Stronger impact → stronger residual (within cap).
+        let mut s2 = armed_self();
+        fire.add_hit_impulse(
+            &mut s2,
+            crate::impact_damage(AmmoKind::Grenade, 400.0, crate::HitBodyPart::Torso),
+        );
+        assert!(s2.hit_fold_total() > fold);
+        // Zero damage: no impulse.
+        let mut s0 = armed_self();
+        fire.add_hit_impulse(&mut s0, 0.0);
+        assert_eq!(s0.hit_fold_total(), 0.0);
         // Settles.
         for _ in 0..120 {
             let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, eye(), &muzzles());
         }
         assert!(
-            fire.flinch().pitch_rad < pitch * 0.05,
-            "flinch did not settle: {}",
-            fire.flinch().pitch_rad
+            s.hit_fold_total() < fold * 0.05,
+            "hit residual did not settle: {}",
+            s.hit_fold_total()
         );
     }
 
     #[test]
-    fn shots_use_look_plus_flinch() {
+    fn shots_use_weapon_line_with_hit_residual() {
         let mut fire = FireState::new();
         let mut s = armed_self();
         s.set_primary(Some(b'b')).unwrap();
         fire.pay_ready(b'b');
         fire.ready_s = 0.0;
-        fire.add_flinch(crate::impact_damage(
-            AmmoKind::LightFoam,
-            400.0,
-            crate::HitBodyPart::Torso,
-        ));
-        // Hold flinch; zero kick settle interference.
-        fire.kick = KickPose::default();
-        fire.kick_settle_s = 1000.0;
-        fire.flinch_settle_s = 1000.0;
-        let pose = fire.aim_pose();
-        assert!(pose.pitch_rad > 0.0);
+        fire.add_hit_impulse(
+            &mut s,
+            crate::impact_damage(AmmoKind::LightFoam, 400.0, crate::HitBodyPart::Torso),
+        );
+        s.hip_fire_fold = 0.0;
+        s.shoulder_fire_fold = 0.0;
+        s.shoulder_fire_twist = 0.0;
+        s.neck_fire_fold = 0.0;
+        s.hit_fall_s = 1000.0;
+        s.compose_joints();
+        let expected = s.weapon_line().expect("armed");
+        assert!(s.hit_fold_total() > 0.0);
         let d = fire.tick(0.0, &mut s, true, 0, eye(), &muzzles());
         let vel = d[0].projectiles[0].velocity.normalize();
-        // aim_pose before this shot includes pre-shot flinch; spawn also adds kick after.
-        // Compare to aim used at discharge: flinch only (kick added post-spawn for next shot).
-        let expected = aim_from_self(
-            &s,
-            KickPose {
-                pitch_rad: pose.pitch_rad,
-                yaw_rad: pose.yaw_rad,
-                back_m: 0.0,
-            },
-        );
         assert!(
             vel.dot(expected) > 0.98,
             "vel={vel} expected≈{expected} dot={}",
             vel.dot(expected)
         );
-        assert!(vel.y > 0.0, "flinch pitch should lift aim, vel.y={}", vel.y);
+        assert!(vel.y > 0.0, "hit fold should lift aim, vel.y={}", vel.y);
     }
 
     #[test]
@@ -1266,7 +1109,7 @@ mod tests {
             let mut peak = 0.0f32;
             for _ in 0..600 {
                 let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, eye(), &[]);
-                let m = fire.sway().pitch_rad.abs() + fire.sway().yaw_rad.abs();
+                let m = s.shoulder_sway_fold.abs() + s.shoulder_sway_twist.abs();
                 peak = peak.max(m);
             }
             peak
@@ -1289,7 +1132,7 @@ mod tests {
         for _ in 0..90 {
             let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, eye(), &[]);
         }
-        let still = fire.sway().pitch_rad.abs() + fire.sway().yaw_rad.abs();
+        let still = s.shoulder_sway_fold.abs() + s.shoulder_sway_twist.abs();
         assert!(still > 1e-5);
         // Whip look hard for a stretch.
         for i in 0..30 {
@@ -1297,10 +1140,19 @@ mod tests {
             s.ocular_pitch = (i as f32 * 0.05).sin() * 0.2;
             let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, eye(), &[]);
         }
-        let moving = fire.sway().pitch_rad.abs() + fire.sway().yaw_rad.abs();
+        let moving = s.shoulder_sway_fold.abs() + s.shoulder_sway_twist.abs();
         assert!(
             moving < still * 0.5,
             "look-rate should damp sway: still={still} moving={moving}"
         );
+    }
+
+    #[test]
+    fn unarmed_has_no_weapon_line() {
+        let mut s = armed_self();
+        s.set_primary(None).unwrap();
+        s.set_secondary(None).unwrap();
+        assert!(s.weapon_line().is_none());
+        assert!(s.reticle_world(eye()).is_none());
     }
 }

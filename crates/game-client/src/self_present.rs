@@ -1,10 +1,9 @@
-//! Self body + blaster presentation (013/015/016/017/021/039).
+//! Self body + blaster presentation (013/015/016/017/021/039/048).
 //!
-//! Present pose draws the body (walk included). Look pose mounts the view (017).
-//! Loadout may hold primary + secondary meshes; only the active letter is shown.
-//! Emote holsters the active blaster and plays kit gesture clips (039).
+//! Present draws the body. Look pose mounts the view. Active blaster only when
+//! present-armed. Emote holsters the hold/blaster (039).
 
-use game_sim::{emote_clip_name, KickPose, SelfState, EMOTE_CATALOG, FACE_OFFSET_HEAD_KIT};
+use game_sim::{emote_clip_name, SelfState, EMOTE_CATALOG, FACE_OFFSET_HEAD_KIT};
 use glam::{Mat4, Vec3};
 use wasm_bindgen::JsValue;
 
@@ -13,9 +12,8 @@ use crate::mesh_unlit::{
     self, AnimClip, CharPart, KitPose, MeshVertex, UnlitMeshGpu, UnlitMeshLayout,
 };
 
-/// Mounted first-person mount from the look pose (017).
+/// First-person mount from the look pose.
 pub struct MountedView {
-    /// Face point on the look pose — view and aim start here.
     pub look_origin: Vec3,
     pub reticle_world: Option<Vec3>,
 }
@@ -189,13 +187,7 @@ impl SelfGpu {
             },
         };
         // Full body at load (remotes share this path); local FP hides head next apply.
-        s.apply_state(
-            queue,
-            self_state,
-            KickPose::default(),
-            KickPose::default(),
-            false,
-        );
+        s.apply_state(queue, self_state, false);
         Ok(s)
     }
 
@@ -220,7 +212,6 @@ impl SelfGpu {
         (k2w, arm_kit)
     }
 
-    /// Active blaster muzzle worlds (held chain, no kick).
     pub fn fire_muzzle_worlds(&self, self_state: &SelfState) -> Vec<Vec3> {
         let Some(letter) = self_state.active_blaster() else {
             return Vec::new();
@@ -229,14 +220,35 @@ impl SelfGpu {
             return Vec::new();
         };
         let (k2w, arm_kit) = self.present_arm(self_state);
-        let held = mesh_unlit::held_blaster_root(k2w, arm_kit, bi);
+        let held = held_with_grip_bore(k2w, arm_kit, bi, self_state.grip_bore_m);
         mesh_unlit::muzzle_world_points(held, bi).collect()
     }
 
-    pub fn flash_muzzle_worlds(
+    pub fn flash_muzzle_worlds(&self, self_state: &SelfState, muzzle_indices: &[u8]) -> Vec<Vec3> {
+        let Some(letter) = self_state.active_blaster() else {
+            return Vec::new();
+        };
+        let Ok(bi) = mesh_unlit::letter_index(letter) else {
+            return Vec::new();
+        };
+        let (k2w, arm_kit) = self.present_arm(self_state);
+        let held = held_with_grip_bore(k2w, arm_kit, bi, self_state.grip_bore_m);
+        let locals = mesh_unlit::muzzle_locals(bi);
+        muzzle_indices
+            .iter()
+            .filter_map(|&i| {
+                let i = i as usize;
+                locals
+                    .get(i)
+                    .map(|p| held.transform_point3(Vec3::from_array(*p)))
+            })
+            .collect()
+    }
+
+    pub fn flash_muzzle_worlds_with_bore(
         &self,
         self_state: &SelfState,
-        kick: KickPose,
+        grip_bore_m: f32,
         muzzle_indices: &[u8],
     ) -> Vec<Vec3> {
         let Some(letter) = self_state.active_blaster() else {
@@ -246,7 +258,7 @@ impl SelfGpu {
             return Vec::new();
         };
         let (k2w, arm_kit) = self.present_arm(self_state);
-        let held = held_with_kick(k2w, arm_kit, bi, kick);
+        let held = held_with_grip_bore(k2w, arm_kit, bi, grip_bore_m);
         let locals = mesh_unlit::muzzle_locals(bi);
         muzzle_indices
             .iter()
@@ -279,15 +291,21 @@ impl SelfGpu {
         )
     }
 
-    /// Body + active blaster from drive (walk/sprint/jump/stand/emote).
-    ///
-    /// `first_person`: hide the head shell so the mounted eye isn't inside it
-    /// (nod / look would otherwise show interior faces). Remotes pass `false`.
+    /// Body + active blaster from drive. `first_person` hides the head shell.
     pub fn apply_present(
         &mut self,
         queue: &wgpu::Queue,
         self_state: &SelfState,
-        kick: KickPose,
+        first_person: bool,
+    ) {
+        self.apply_present_with_bore(queue, self_state, self_state.grip_bore_m, first_person);
+    }
+
+    pub fn apply_present_with_bore(
+        &mut self,
+        queue: &wgpu::Queue,
+        self_state: &SelfState,
+        grip_bore_m: f32,
         first_person: bool,
     ) {
         let k2w = mesh_unlit::kit_to_world(self_state.placement_matrix(), self.min_y);
@@ -330,7 +348,7 @@ impl SelfGpu {
         let active = self_state.active_blaster();
         for b in &self.blasters {
             let root = if show_gun && active == Some(b.letter) {
-                held_with_kick(k2w, arm_kit, b.letter_index, kick)
+                held_with_grip_bore(k2w, arm_kit, b.letter_index, grip_bore_m)
             } else {
                 Mat4::from_scale(Vec3::ZERO)
             };
@@ -344,8 +362,7 @@ impl SelfGpu {
         }
     }
 
-    /// Look pose: mount and aim (locomotion held at stand). Local self only.
-    pub fn apply_look_view(&mut self, self_state: &SelfState, kick: KickPose) {
+    pub fn apply_look_view(&mut self, self_state: &SelfState) {
         let k2w = mesh_unlit::kit_to_world(self_state.placement_matrix(), self.min_y);
         let (look_worlds, _) = mesh_unlit::pose_character_kit(
             &self.parts,
@@ -356,7 +373,7 @@ impl SelfGpu {
             KitPose::Look,
         );
         let look_origin = look_origin_world(&self.parts, &look_worlds, k2w);
-        let reticle_world = self_state.reticle_world(look_origin, kick);
+        let reticle_world = self_state.reticle_world(look_origin);
 
         self.view = MountedView {
             look_origin,
@@ -364,17 +381,10 @@ impl SelfGpu {
         };
     }
 
-    /// `mesh` = held blaster offset; `aim` = reticle / look-pose aim sample.
-    pub fn apply_state(
-        &mut self,
-        queue: &wgpu::Queue,
-        self_state: &SelfState,
-        mesh: KickPose,
-        aim: KickPose,
-        first_person: bool,
-    ) {
-        self.apply_present(queue, self_state, mesh, first_person);
-        self.apply_look_view(self_state, aim);
+    /// Present body + look mount from one sim figure state.
+    pub fn apply_state(&mut self, queue: &wgpu::Queue, self_state: &SelfState, first_person: bool) {
+        self.apply_present(queue, self_state, first_person);
+        self.apply_look_view(self_state);
     }
 
     /// Whether both loadout letters are already GPU-resident (dev equip).
@@ -392,13 +402,16 @@ impl SelfGpu {
     }
 }
 
-fn held_with_kick(k2w: Mat4, arm_kit: Mat4, letter_index: usize, kick: KickPose) -> Mat4 {
+fn held_with_grip_bore(k2w: Mat4, arm_kit: Mat4, letter_index: usize, grip_bore_m: f32) -> Mat4 {
     let held = mesh_unlit::held_blaster_root(k2w, arm_kit, letter_index);
+    if grip_bore_m.abs() < 1e-8 {
+        return held;
+    }
     let grip = mesh_unlit::weapon_grip(letter_index).transform_point3(Vec3::ZERO);
-    held * kick.matrix_about_grip(grip)
+    let t = Mat4::from_translation(grip);
+    held * t * Mat4::from_translation(Vec3::new(0.0, 0.0, grip_bore_m)) * t.inverse()
 }
 
-/// Face point on a kit pose in world space (look origin when pose is Look).
 fn look_origin_world(parts: &[CharPart], worlds: &[Mat4], k2w: Mat4) -> Vec3 {
     let head_kit = parts
         .iter()

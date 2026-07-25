@@ -57,7 +57,7 @@ impl DebugRegistry {
             "hud.kick",
             CVar {
                 value: CVarValue::Bool(true),
-                help: "client: kick fatigue / pitch on top banner (047)",
+                help: "client: fire residual heat / fold on top banner",
             },
         );
         self.cvars.insert(
@@ -133,7 +133,7 @@ impl DebugRegistry {
             "  flycam|fly [on|off|toggle]  debug flycam (F8)".into(),
             "  lineup [on|off|toggle]  blaster lineup (armed characters)".into(),
             "  nethud [on|off|toggle]  top FPS / tick banner".into(),
-            "  kickhud [on|off|toggle]  kick fatigue / pitch (047)".into(),
+            "  kickhud [on|off|toggle]  fire residual heat / fold".into(),
             "  remount           leave flycam, restore self view".into(),
             "  screenshot|shot   capture frame (F9)".into(),
             "  mp join|leave|status  WebTransport shared tick + remotes".into(),

@@ -838,11 +838,9 @@ impl ClientInner {
                 self.projectiles.spawn(p.clone());
             }
             let seed_pts = match &self.self_present {
-                SelfPresentState::Ready(gpu) => gpu.flash_muzzle_worlds(
-                    &self.self_state,
-                    self.fire.mesh_pose(),
-                    &d.fired_muzzles,
-                ),
+                SelfPresentState::Ready(gpu) => {
+                    gpu.flash_muzzle_worlds(&self.self_state, &d.fired_muzzles)
+                }
                 _ => muzzle_worlds.clone(),
             };
             self.renderer
@@ -958,7 +956,7 @@ impl ClientInner {
                 &mut self.health_by_id,
             );
             if dmg > 0.0 {
-                self.fire.add_flinch(dmg);
+                self.fire.add_hit_impulse(&mut self.self_state, dmg);
             }
         }
         if !hits.is_empty() {
@@ -986,7 +984,7 @@ impl ClientInner {
                 &mut self.health_by_id,
             );
             if dmg > 0.0 {
-                self.fire.add_flinch(dmg);
+                self.fire.add_hit_impulse(&mut self.self_state, dmg);
             }
         }
 
@@ -1012,13 +1010,7 @@ impl ClientInner {
             let first_person = !self.view.is_flycam();
             #[cfg(not(feature = "debug-tools"))]
             let first_person = true;
-            gpu.apply_state(
-                &self.renderer.queue,
-                &self.self_state,
-                self.fire.mesh_pose(),
-                self.fire.aim_pose(),
-                first_person,
-            );
+            gpu.apply_state(&self.renderer.queue, &self.self_state, first_person);
             self.view.set_mounted_eye(gpu.view.look_origin);
         }
 
@@ -1029,14 +1021,14 @@ impl ClientInner {
                 .samples()
                 .map(|(id, s)| (id, s.drive.clone()))
                 .collect();
-            let kicks: std::collections::HashMap<_, _> = samples
+            let residuals: std::collections::HashMap<_, _> = samples
                 .iter()
-                .map(|(id, _)| (*id, self.renderer.fire_fx.remote_kick(*id)))
+                .map(|(id, _)| (*id, self.renderer.fire_fx.remote_present_residual(*id)))
                 .collect();
             self.remote_present.apply_all(
                 &self.renderer.queue,
                 samples.into_iter(),
-                |id| kicks.get(&id).copied().unwrap_or_default(),
+                |id| residuals.get(&id).copied().unwrap_or_default(),
                 |id| {
                     self.health_by_id
                         .get(&id)
@@ -1095,16 +1087,15 @@ impl ClientInner {
         );
 
         {
-            let self_kick = self.fire.mesh_pose();
             let remote_states: std::collections::HashMap<_, _> = self
                 .mp
                 .remotes()
                 .samples()
                 .map(|(id, s)| (id, mp::drive_to_state(&s.drive)))
                 .collect();
-            let remote_kicks: std::collections::HashMap<_, _> = remote_states
+            let remote_residuals: std::collections::HashMap<_, _> = remote_states
                 .keys()
-                .map(|&id| (id, self.renderer.fire_fx.remote_kick(id)))
+                .map(|&id| (id, self.renderer.fire_fx.remote_present_residual(id)))
                 .collect();
             let self_state = &self.self_state;
             let self_present = &self.self_present;
@@ -1114,15 +1105,19 @@ impl ClientInner {
                 .rebind_positions(|owner, mi| match owner {
                     None => match self_present {
                         SelfPresentState::Ready(gpu) => gpu
-                            .flash_muzzle_worlds(self_state, self_kick, &[mi])
+                            .flash_muzzle_worlds(self_state, &[mi])
                             .into_iter()
                             .next(),
                         _ => None,
                     },
                     Some(id) => {
-                        let state = remote_states.get(&id)?;
-                        let kick = remote_kicks.get(&id).copied().unwrap_or_default();
-                        remote_present.flash_muzzle_world(id, state, kick, mi)
+                        let mut state = remote_states.get(&id)?.clone();
+                        let res = remote_residuals.get(&id).copied().unwrap_or_default();
+                        state.shoulder_fire_fold = res.fold_rad;
+                        state.shoulder_fire_twist = res.twist_rad;
+                        state.grip_bore_m = res.grip_bore_m;
+                        state.compose_joints();
+                        remote_present.flash_muzzle_world(id, &state, res.grip_bore_m, mi)
                     }
                 });
         }
@@ -1159,7 +1154,6 @@ impl ClientInner {
 
         let draw_reticle = reticle_pos.is_some() && !flycam;
         let hit_alpha = self.hit_marker.alpha();
-        // Same world aim point as reticle / shots (look + kick + sway).
         let draw_hit_marker = hit_alpha > 0.0 && reticle_pos.is_some() && !flycam;
         self.renderer.hit_marker_gpu.update(
             &self.renderer.queue,
@@ -1241,13 +1235,12 @@ impl ClientInner {
                         parts.push(line);
                     }
                     if kick {
-                        let k = self.fire.kick();
                         parts.push(format!(
-                            "fat {:.2}  kP {:.2}°  kY {:.2}°  set {:.0}ms",
-                            self.fire.kick_fatigue_weight(),
-                            k.pitch_rad.to_degrees(),
-                            k.yaw_rad.to_degrees(),
-                            self.fire.kick_settle_eff_s() * 1000.0,
+                            "heat {:.2}  fF {:.2}°  fT {:.2}°  fall {:.0}ms",
+                            self.self_state.fire_heat_weight(),
+                            self.self_state.fire_fold_total().to_degrees(),
+                            self.self_state.shoulder_fire_twist.to_degrees(),
+                            self.self_state.fire_fall_eff_s() * 1000.0,
                         ));
                     }
                     Some(parts.join("  |  "))

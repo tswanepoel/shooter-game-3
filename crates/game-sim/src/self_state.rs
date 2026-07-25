@@ -1,22 +1,49 @@
-//! Player self: position, look, walk drive, and look-synced body joints.
-//!
-//! Presentation builds look pose (mount/aim) and present pose (drawn body) from this drive (017).
+//! Player self: position, look, walk drive, and body joints.
 
 use glam::{Mat4, Quat, Vec3};
+
+use crate::weapons::WeaponDef;
 
 /// Look elevation hard cap: straight up / straight down (015).
 pub const OCULAR_ELEV_CAP_RAD: f32 = std::f32::consts::FRAC_PI_2;
 
-/// Settled torso pitch at full look-down (inward).
+/// Hip look-offset fold at full look-down (inward).
 pub const TORSO_PITCH_INWARD_RAD: f32 = 15.0_f32.to_radians();
-/// Settled torso pitch at full look-up (outward).
+/// Hip look-offset fold at full look-up (outward).
 pub const TORSO_PITCH_OUTWARD_RAD: f32 = 7.5_f32.to_radians();
-/// Settled shoulder pitch at full look-down (inward).
+/// Right-shoulder look-offset fold at full look-down (inward).
 pub const SHOULDER_PITCH_INWARD_RAD: f32 = 75.0_f32.to_radians();
-/// Settled shoulder pitch at full look-up (outward).
+/// Right-shoulder look-offset fold at full look-up (outward).
 pub const SHOULDER_PITCH_OUTWARD_RAD: f32 = 82.5_f32.to_radians();
 
 const HEAD_PITCH_BUDGET_RAD: f32 = 50.0_f32.to_radians();
+
+const FIRE_HEAT_RISE: f32 = 0.26;
+const FIRE_HEAT_RECOVER_S: f32 = 0.35;
+const FIRE_HEAT_FALL_MULT: f32 = 40.0;
+const FIRE_HEAT_CURVE: f32 = 8.0;
+
+const HIT_FOLD_DEG_PER_DMG: f32 = 0.055;
+const HIT_TWIST_DEG_PER_DMG: f32 = 0.022;
+const HIT_FOLD_CAP_DEG: f32 = 1.6;
+const HIT_TWIST_CAP_DEG: f32 = 0.65;
+const HIT_FALL_S: f32 = 0.12;
+
+fn fire_heat_weight(raw: f32) -> f32 {
+    raw.clamp(0.0, 1.0).powf(FIRE_HEAT_CURVE)
+}
+
+fn fall_toward_zero(value: f32, dt: f32, fall_s: f32) -> f32 {
+    if fall_s <= 1e-6 {
+        return 0.0;
+    }
+    let t = (dt / fall_s).clamp(0.0, 1.0);
+    let mut v = value * (1.0 - t);
+    if v.abs() < 1e-5 {
+        v = 0.0;
+    }
+    v
+}
 
 /// Default range along look for aim markers when max range is unknown (metres).
 pub const DEFAULT_BORE_RANGE_M: f32 = 100.0;
@@ -163,14 +190,37 @@ pub struct SelfState {
     pub air_vel_x: f32,
     pub air_vel_z: f32,
 
-    /// Body absolute yaw (presentation; matches look in sim).
+    /// Facing yaw (tracks look yaw for now).
     pub torso_yaw: f32,
+    /// Hip fold (look-offset + fire/hit residual).
     pub torso_pitch: f32,
+    /// Right-shoulder fold (look-offset + fire/hit/sway residual).
     pub shoulder_pitch: f32,
-    /// Head relative yaw (cosmetic), body space.
+    /// Right-shoulder twist (fire/hit/sway residual).
+    pub shoulder_yaw: f32,
+    /// Neck twist relative to torso.
     pub head_yaw: f32,
-    /// Head relative pitch (cosmetic).
+    /// Neck fold (look-offset + fire/hit residual).
     pub head_pitch: f32,
+
+    pub hip_fire_fold: f32,
+    pub hip_hit_fold: f32,
+    pub shoulder_fire_fold: f32,
+    pub shoulder_fire_twist: f32,
+    pub shoulder_hit_fold: f32,
+    pub shoulder_hit_twist: f32,
+    pub shoulder_sway_fold: f32,
+    pub shoulder_sway_twist: f32,
+    pub neck_fire_fold: f32,
+    pub neck_hit_fold: f32,
+    /// Grip socket bore travel from fire impulse (m along bore, + back).
+    pub grip_bore_m: f32,
+
+    /// Base fire residual fall time (s).
+    pub fire_fall_s: f32,
+    /// Raw fire heat 0…1; slows fire residual fall while fire is held.
+    fire_heat: f32,
+    pub hit_fall_s: f32,
 
     /// Active emote wheel slot (`0`…`3`), if any (039).
     pub emote: Option<u8>,
@@ -210,8 +260,23 @@ impl SelfState {
             torso_yaw: 0.0,
             torso_pitch: 0.0,
             shoulder_pitch: 0.0,
+            shoulder_yaw: 0.0,
             head_yaw: 0.0,
             head_pitch: 0.0,
+            hip_fire_fold: 0.0,
+            hip_hit_fold: 0.0,
+            shoulder_fire_fold: 0.0,
+            shoulder_fire_twist: 0.0,
+            shoulder_hit_fold: 0.0,
+            shoulder_hit_twist: 0.0,
+            shoulder_sway_fold: 0.0,
+            shoulder_sway_twist: 0.0,
+            neck_fire_fold: 0.0,
+            neck_hit_fold: 0.0,
+            grip_bore_m: 0.0,
+            fire_fall_s: 0.08,
+            fire_heat: 0.0,
+            hit_fall_s: HIT_FALL_S,
             emote: None,
             emote_age_s: 0.0,
         }
@@ -278,6 +343,7 @@ impl SelfState {
             self.clear_emote();
             self.wish_forward = 0.0;
             self.wish_strafe = 0.0;
+            self.clear_aim_residual();
             if !self.locomotion.is_air() {
                 self.locomotion = LocomotionMode::Stand;
                 self.walk_phase = 0.0;
@@ -384,14 +450,35 @@ impl SelfState {
         self.locomotion = LocomotionMode::Air;
     }
 
-    /// Unit look direction (yaw + pitch). Aim / camera forward.
+    /// Drive look direction (ocular yaw + pitch).
     pub fn ocular_forward(&self) -> Vec3 {
-        let cp = self.ocular_pitch.cos();
-        Vec3::new(
-            self.ocular_yaw.sin() * cp,
-            self.ocular_pitch.sin(),
-            self.ocular_yaw.cos() * cp,
-        )
+        dir_yaw_pitch(self.ocular_yaw, self.ocular_pitch)
+    }
+
+    /// Look direction after hip + neck residual (view rides this).
+    pub fn look_forward(&self) -> Vec3 {
+        dir_yaw_pitch(self.look_yaw(), self.look_pitch())
+    }
+
+    pub fn look_yaw(&self) -> f32 {
+        self.ocular_yaw + self.head_yaw
+    }
+
+    pub fn look_pitch(&self) -> f32 {
+        (self.ocular_pitch
+            + self.hip_fire_fold
+            + self.hip_hit_fold
+            + self.neck_fire_fold
+            + self.neck_hit_fold)
+            .clamp(-OCULAR_ELEV_CAP_RAD, OCULAR_ELEV_CAP_RAD)
+    }
+
+    pub fn fire_fold_total(&self) -> f32 {
+        self.hip_fire_fold + self.shoulder_fire_fold + self.neck_fire_fold
+    }
+
+    pub fn hit_fold_total(&self) -> f32 {
+        self.hip_hit_fold + self.shoulder_hit_fold + self.neck_hit_fold
     }
 
     /// Horizontal look forward on XZ (unit, y = 0).
@@ -596,29 +683,173 @@ impl SelfState {
         }
     }
 
-    /// Snap body presentation pose to current look (no lag in sim).
     pub fn sync_pose(&mut self) {
-        let (torso_tgt, shoulder_tgt) = elevation_targets(self.ocular_pitch);
-        self.torso_yaw = self.ocular_yaw;
-        self.torso_pitch = torso_tgt;
-        self.shoulder_pitch = shoulder_tgt;
-        // Torso yaw matches look; head yaw relative is zero.
-        self.head_yaw = 0.0;
-        self.head_pitch = (self.ocular_pitch - self.torso_pitch)
-            .clamp(-HEAD_PITCH_BUDGET_RAD, HEAD_PITCH_BUDGET_RAD);
+        self.compose_joints();
     }
 
-    /// World point on the aim ray (look + aim offset: kick and/or sway).
-    pub fn reticle_world(&self, look_origin: Vec3, offset: crate::KickPose) -> Option<Vec3> {
-        if !(self.alive && self.presents_armed()) {
+    pub fn compose_joints(&mut self) {
+        let (hip_look, shoulder_look) = elevation_targets(self.ocular_pitch);
+        let neck_look =
+            (self.ocular_pitch - hip_look).clamp(-HEAD_PITCH_BUDGET_RAD, HEAD_PITCH_BUDGET_RAD);
+        self.torso_yaw = self.ocular_yaw;
+        self.torso_pitch = hip_look + self.hip_fire_fold + self.hip_hit_fold;
+        self.shoulder_pitch = shoulder_look
+            + self.shoulder_fire_fold
+            + self.shoulder_hit_fold
+            + self.shoulder_sway_fold;
+        self.shoulder_yaw =
+            self.shoulder_fire_twist + self.shoulder_hit_twist + self.shoulder_sway_twist;
+        // Facing tracks look: no neck look-offset twist.
+        self.head_yaw = 0.0;
+        self.head_pitch = neck_look + self.neck_fire_fold + self.neck_hit_fold;
+    }
+
+    /// Blaster direction after drive + hip + right shoulder. `None` when not present-armed.
+    pub fn weapon_line(&self) -> Option<Vec3> {
+        if !self.presents_armed() {
             return None;
         }
-        let dir = crate::aim_from_self(self, offset);
+        Some(self.weapon_line_dir())
+    }
+
+    fn weapon_line_dir(&self) -> Vec3 {
+        let fold = self.hip_fire_fold
+            + self.hip_hit_fold
+            + self.shoulder_fire_fold
+            + self.shoulder_hit_fold
+            + self.shoulder_sway_fold;
+        let twist = self.shoulder_fire_twist + self.shoulder_hit_twist + self.shoulder_sway_twist;
+        let yaw = self.ocular_yaw + twist;
+        let pitch = (self.ocular_pitch + fold).clamp(-OCULAR_ELEV_CAP_RAD, OCULAR_ELEV_CAP_RAD);
+        dir_yaw_pitch(yaw, pitch)
+    }
+
+    /// Look origin along weapon line at reticle depth.
+    pub fn reticle_world(&self, look_origin: Vec3) -> Option<Vec3> {
+        let dir = self.weapon_line()?;
         if dir.length_squared() < 1e-12 {
             return None;
         }
         Some(look_origin + dir * RETICLE_DEPTH_M)
     }
+
+    pub fn fire_heat_weight(&self) -> f32 {
+        fire_heat_weight(self.fire_heat)
+    }
+
+    pub fn fire_fall_eff_s(&self) -> f32 {
+        let w = fire_heat_weight(self.fire_heat);
+        self.fire_fall_s * (1.0 + w * (FIRE_HEAT_FALL_MULT - 1.0))
+    }
+
+    pub fn apply_fire_impulse(&mut self, def: &WeaponDef, yaw_sign: f32) {
+        if !self.alive {
+            return;
+        }
+        let k = def.kick;
+        let sign = if yaw_sign >= 0.0 { 1.0 } else { -1.0 };
+        let fold = k.pitch_deg.to_radians();
+        let twist = k.yaw_deg.to_radians() * sign;
+        let (hip, shoulder, neck) = residual_fold_split(fold);
+        self.hip_fire_fold += hip;
+        self.shoulder_fire_fold += shoulder;
+        self.neck_fire_fold += neck;
+        self.shoulder_fire_twist += twist;
+        self.grip_bore_m += k.back_m;
+        self.fire_fall_s = k.settle_s.max(1e-4);
+        self.fire_heat = (self.fire_heat + FIRE_HEAT_RISE).min(1.0);
+        self.compose_joints();
+    }
+
+    /// Hit impulse from applied impact damage. Zero / negative is a no-op.
+    pub fn apply_hit_impulse(&mut self, damage: f32, yaw_sign: f32) {
+        if !self.alive || damage <= 0.0 {
+            return;
+        }
+        let sign = if yaw_sign >= 0.0 { 1.0 } else { -1.0 };
+        let fold = (damage * HIT_FOLD_DEG_PER_DMG)
+            .min(HIT_FOLD_CAP_DEG)
+            .to_radians();
+        let twist = (damage * HIT_TWIST_DEG_PER_DMG)
+            .min(HIT_TWIST_CAP_DEG)
+            .to_radians()
+            * sign;
+        let (hip, shoulder, neck) = residual_fold_split(fold);
+        let (hip_c, shoulder_c, neck_c) = residual_fold_split(HIT_FOLD_CAP_DEG.to_radians());
+        self.hip_hit_fold = (self.hip_hit_fold + hip).clamp(-hip_c.abs(), hip_c.abs());
+        self.shoulder_hit_fold =
+            (self.shoulder_hit_fold + shoulder).clamp(-shoulder_c.abs(), shoulder_c.abs());
+        self.neck_hit_fold = (self.neck_hit_fold + neck).clamp(-neck_c.abs(), neck_c.abs());
+        self.shoulder_hit_twist = (self.shoulder_hit_twist + twist).clamp(
+            -HIT_TWIST_CAP_DEG.to_radians(),
+            HIT_TWIST_CAP_DEG.to_radians(),
+        );
+        self.hit_fall_s = HIT_FALL_S;
+        self.compose_joints();
+    }
+
+    pub fn set_shoulder_sway(&mut self, fold: f32, twist: f32) {
+        self.shoulder_sway_fold = fold;
+        self.shoulder_sway_twist = twist;
+        self.compose_joints();
+    }
+
+    pub fn clear_aim_residual(&mut self) {
+        self.hip_fire_fold = 0.0;
+        self.hip_hit_fold = 0.0;
+        self.shoulder_fire_fold = 0.0;
+        self.shoulder_fire_twist = 0.0;
+        self.shoulder_hit_fold = 0.0;
+        self.shoulder_hit_twist = 0.0;
+        self.shoulder_sway_fold = 0.0;
+        self.shoulder_sway_twist = 0.0;
+        self.neck_fire_fold = 0.0;
+        self.neck_hit_fold = 0.0;
+        self.grip_bore_m = 0.0;
+        self.fire_heat = 0.0;
+        self.compose_joints();
+    }
+
+    /// Fall residual. Fire fall slows while `string_active`.
+    pub fn tick_aim_residual(&mut self, dt: f32, string_active: bool) {
+        let dt = dt.max(0.0);
+        if !self.alive {
+            self.clear_aim_residual();
+            return;
+        }
+
+        if !string_active && self.fire_heat > 0.0 {
+            let recover = FIRE_HEAT_RECOVER_S.max(1e-4);
+            self.fire_heat = (self.fire_heat - dt / recover).max(0.0);
+        }
+
+        let fire_s = self.fire_fall_eff_s().max(1e-4);
+        self.hip_fire_fold = fall_toward_zero(self.hip_fire_fold, dt, fire_s);
+        self.shoulder_fire_fold = fall_toward_zero(self.shoulder_fire_fold, dt, fire_s);
+        self.shoulder_fire_twist = fall_toward_zero(self.shoulder_fire_twist, dt, fire_s);
+        self.neck_fire_fold = fall_toward_zero(self.neck_fire_fold, dt, fire_s);
+        self.grip_bore_m = {
+            let v = fall_toward_zero(self.grip_bore_m, dt, fire_s);
+            if v.abs() < 1e-6 {
+                0.0
+            } else {
+                v
+            }
+        };
+
+        let hit_s = self.hit_fall_s.max(1e-4);
+        self.hip_hit_fold = fall_toward_zero(self.hip_hit_fold, dt, hit_s);
+        self.shoulder_hit_fold = fall_toward_zero(self.shoulder_hit_fold, dt, hit_s);
+        self.shoulder_hit_twist = fall_toward_zero(self.shoulder_hit_twist, dt, hit_s);
+        self.neck_hit_fold = fall_toward_zero(self.neck_hit_fold, dt, hit_s);
+
+        self.compose_joints();
+    }
+}
+
+fn dir_yaw_pitch(yaw: f32, pitch: f32) -> Vec3 {
+    let cp = pitch.cos();
+    Vec3::new(yaw.sin() * cp, pitch.sin(), yaw.cos() * cp)
 }
 
 fn elevation_targets(ocular_pitch: f32) -> (f32, f32) {
@@ -628,6 +859,26 @@ fn elevation_targets(ocular_pitch: f32) -> (f32, f32) {
     } else {
         (t * TORSO_PITCH_INWARD_RAD, t * SHOULDER_PITCH_INWARD_RAD)
     }
+}
+
+/// Look-elevation fold weights (hip, shoulder, neck). Sum to 1.
+fn residual_fold_shares(sign: f32) -> (f32, f32, f32) {
+    let (hip_w, shoulder_w) = if sign >= 0.0 {
+        (TORSO_PITCH_OUTWARD_RAD, SHOULDER_PITCH_OUTWARD_RAD)
+    } else {
+        (TORSO_PITCH_INWARD_RAD, SHOULDER_PITCH_INWARD_RAD)
+    };
+    let neck_w = HEAD_PITCH_BUDGET_RAD;
+    let sum = hip_w + shoulder_w + neck_w;
+    (hip_w / sum, shoulder_w / sum, neck_w / sum)
+}
+
+fn residual_fold_split(total: f32) -> (f32, f32, f32) {
+    if total.abs() < 1e-12 {
+        return (0.0, 0.0, 0.0);
+    }
+    let (sh, ss, sn) = residual_fold_shares(total);
+    (total * sh, total * ss, total * sn)
 }
 
 #[cfg(test)]
@@ -682,31 +933,79 @@ mod tests {
     }
 
     #[test]
-    fn reticle_lies_on_look_ray() {
+    fn reticle_lies_on_weapon_line_when_residual_zero() {
         let s = SelfState::default_loadout();
         let eye = Vec3::new(0.0, 1.5, 0.0);
-        let r = s
-            .reticle_world(eye, crate::KickPose::default())
-            .expect("armed");
+        let r = s.reticle_world(eye).expect("armed");
         let along = (r - eye).normalize();
         assert!(along.dot(s.ocular_forward()) > 0.99);
         assert!(((r - eye).length() - RETICLE_DEPTH_M).abs() < 1e-5);
+        let wl = s.weapon_line().expect("armed");
+        assert!(along.dot(wl) > 0.99);
     }
 
     #[test]
-    fn reticle_follows_look_plus_kick() {
-        let s = SelfState::default_loadout();
+    fn reticle_follows_weapon_line_with_fire_residual() {
+        let mut s = SelfState::default_loadout();
         let eye = Vec3::new(0.0, 1.5, 0.0);
-        let kick = crate::KickPose {
-            pitch_rad: 5f32.to_radians(),
-            yaw_rad: 0.0,
-            back_m: 0.0,
-        };
-        let r = s.reticle_world(eye, kick).expect("armed");
+        let fold = 5f32.to_radians();
+        let (h, sh, n) = residual_fold_split(fold);
+        s.hip_fire_fold = h;
+        s.shoulder_fire_fold = sh;
+        s.neck_fire_fold = n;
+        s.compose_joints();
+        let r = s.reticle_world(eye).expect("armed");
         let along = (r - eye).normalize();
-        let aim = crate::aim_from_self(&s, kick);
-        assert!(along.dot(aim) > 0.99);
+        let wl = s.weapon_line().expect("armed");
+        assert!(along.dot(wl) > 0.99);
         assert!(along.dot(s.ocular_forward()) < 0.999);
+        assert!(s.shoulder_pitch > elevation_targets(s.ocular_pitch).1);
+        assert!(s.torso_pitch > elevation_targets(s.ocular_pitch).0);
+        assert!(s.head_pitch > 0.0);
+    }
+
+    #[test]
+    fn fire_impulse_splits_fold_across_hip_shoulder_neck() {
+        let mut s = SelfState::default_loadout();
+        let def = crate::weapons::weapon_def(b'b').unwrap();
+        let total = def.kick.pitch_deg.to_radians();
+        s.apply_fire_impulse(def, 1.0);
+        let sum = s.fire_fold_total();
+        assert!((sum - total).abs() < 1e-5, "sum={sum} total={total}");
+        assert!(s.hip_fire_fold > 0.0);
+        assert!(s.shoulder_fire_fold > 0.0);
+        assert!(s.neck_fire_fold > 0.0);
+        assert!(s.shoulder_fire_fold > s.hip_fire_fold);
+        assert!(s.look_forward().y > s.ocular_forward().y);
+    }
+
+    #[test]
+    fn look_forward_moves_with_hip_and_neck_residual() {
+        let mut s = SelfState::default_loadout();
+        s.hip_fire_fold = 2f32.to_radians();
+        s.neck_fire_fold = 3f32.to_radians();
+        s.compose_joints();
+        let look = s.look_forward();
+        let wish = s.ocular_forward();
+        assert!(look.dot(wish) < 0.999);
+        assert!(look.y > wish.y);
+        let mut s2 = SelfState::default_loadout();
+        s2.shoulder_fire_fold = 10f32.to_radians();
+        s2.compose_joints();
+        assert!(s2.look_forward().dot(s2.ocular_forward()) > 0.999);
+    }
+
+    #[test]
+    fn weapon_line_ignores_neck_residual() {
+        let mut s = SelfState::default_loadout();
+        s.neck_fire_fold = 8f32.to_radians();
+        s.compose_joints();
+        let wl = s.weapon_line().expect("armed");
+        assert!(wl.dot(s.ocular_forward()) > 0.999);
+        s.hip_fire_fold = 4f32.to_radians();
+        s.compose_joints();
+        let wl2 = s.weapon_line().expect("armed");
+        assert!(wl2.y > wl.y);
     }
 
     #[test]
@@ -1096,9 +1395,8 @@ mod tests {
         s.cycle_weapon(1);
         assert_eq!(s.active, ActiveWeapon::Secondary);
         assert!(!s.is_armed());
-        assert!(s
-            .reticle_world(Vec3::new(0.0, 1.5, 0.0), crate::KickPose::default())
-            .is_none());
+        assert!(s.reticle_world(Vec3::new(0.0, 1.5, 0.0)).is_none());
+        assert!(s.weapon_line().is_none());
         s.cycle_weapon(-1);
         assert_eq!(s.active, ActiveWeapon::Primary);
         assert!(s.is_armed());

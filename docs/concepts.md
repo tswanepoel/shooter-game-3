@@ -217,7 +217,7 @@ It has a [fire mode](#fire-mode).
 
 ### Fire impulse
 
-Fold, twist, and bore shove emitted when the [figure](#figure) [fires](#fire) with a [blaster](#blaster).  
+Fold, twist, and a short travel along the [blaster](#blaster)’s [orientation](#orientation) emitted when the [figure](#figure) [fires](#fire) with a [blaster](#blaster).  
 Size is of that [blaster](#blaster).
 
 ### Hit impulse
@@ -231,14 +231,18 @@ The trunk of the [figure](#figure).
 ### Hip
 
 The folding [joint](#joint) between the [legs](#legs) and the [torso](#torso).  
-Its fold is a proportion of [look offset](#look-offset).
+Its fold is a proportion of [look offset](#look-offset).  
+The same proportion applies to fold from [fire impulse](#fire-impulse) and fold from [hit impulse](#hit-impulse).  
+Fold from [fire impulse](#fire-impulse) and from [hit impulse](#hit-impulse) falls over time. Fall from [fire impulse](#fire-impulse) slows while [fire](#fire) is held.
 
 ### Right shoulder
 
 The folding and twisting [joint](#joint) between the [torso](#torso) and the [right arm](#right-arm).  
-Its fold is a proportion of [look offset](#look-offset), plus fold from [fire impulse](#fire-impulse), plus fold from [hit impulse](#hit-impulse), plus [sway](#sway).  
-Its twist is twist from [fire impulse](#fire-impulse), plus twist from [hit impulse](#hit-impulse), plus [sway](#sway).  
-Fold and twist from [fire impulse](#fire-impulse) and from [hit impulse](#hit-impulse) fall over time. That fall slows while [fire](#fire) is held.
+Its fold is a proportion of [look offset](#look-offset).  
+The same proportion applies to fold from [fire impulse](#fire-impulse) and fold from [hit impulse](#hit-impulse).  
+Its twist is twist from [fire impulse](#fire-impulse), plus twist from [hit impulse](#hit-impulse).  
+Its fold and twist also take [sway](#sway).  
+Fold and twist from [fire impulse](#fire-impulse) and from [hit impulse](#hit-impulse) fall over time. Fall from [fire impulse](#fire-impulse) slows while [fire](#fire) is held.
 
 ### Right hand socket
 
@@ -247,7 +251,9 @@ A [position](#position) on the [right arm](#right-arm) that follows the arm’s 
 ### Neck
 
 The folding and twisting [joint](#joint) between the [torso](#torso) and the [head](#head).  
-Its fold and twist are proportions of [look offset](#look-offset).
+Its fold and twist are proportions of [look offset](#look-offset).  
+The same proportions apply to fold and twist from [fire impulse](#fire-impulse) and from [hit impulse](#hit-impulse).  
+Fold and twist from [fire impulse](#fire-impulse) and from [hit impulse](#hit-impulse) fall over time. Fall from [fire impulse](#fire-impulse) slows while [fire](#fire) is held.
 
 ### Body part
 
@@ -323,7 +329,7 @@ The [active slot](#active-slot) has no [blaster](#blaster).
 
 A [position](#position) on the [blaster](#blaster) at the handle that follows the blaster’s [orientation](#orientation).  
 When the blaster is with the [figure](#figure), this socket meets the [right hand socket](#right-hand-socket).  
-[Fire impulse](#fire-impulse) may move this socket a short way along the blaster’s bore. That travel falls over time with fold and twist from [fire impulse](#fire-impulse) on the [right shoulder](#right-shoulder).
+[Fire impulse](#fire-impulse) may move this socket a short way along the blaster’s [orientation](#orientation). That travel falls over time with fold and twist from [fire impulse](#fire-impulse).
 
 ### Muzzle
 

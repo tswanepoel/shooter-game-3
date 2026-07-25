@@ -1,8 +1,8 @@
-//! Baked weapon fire table (038/040/041/042/047).
+//! Baked weapon fire table (038/040/041/042/047/048).
 //!
-//! Blaster owns initial velocity and which ammo kind it fires (via class → ammo).
-//! Ammo mass lives on [`crate::AmmoKind`] / [`crate::ammo_def`], not here.
-//! Kick dirt + base settle live here; fatigue scaling of settle is in `fire` (047).
+//! Blaster owns initial velocity and ammo kind (via class). Ammo mass is on
+//! [`crate::AmmoKind`]. Fire-impulse size and base fall live here; heat scaling
+//! of fall is on the figure.
 
 use crate::{ammo_for_class, AmmoKind, WeaponClass};
 
@@ -28,6 +28,7 @@ pub enum MuzzlePolicy {
     Alternate,
 }
 
+/// Fire impulse size for a blaster (fold/twist deg, grip bore m, base fall s).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct WeaponKick {
     pub pitch_deg: f32,

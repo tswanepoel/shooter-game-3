@@ -3,11 +3,12 @@
 use std::collections::HashMap;
 
 use game_net::{DriveView, PlayerId};
-use game_sim::{KickPose, SelfState};
+use game_sim::SelfState;
 use glam::Vec3;
 use wasm_bindgen::JsValue;
 
 use crate::body_hit::PartHit;
+use crate::fire_fx::RemotePresentResidual;
 use crate::mp::{drive_to_state, RemoteKitKey};
 use crate::self_present::SelfGpu;
 
@@ -83,7 +84,7 @@ impl RemotePresent {
         &mut self,
         queue: &wgpu::Queue,
         samples: impl Iterator<Item = (PlayerId, DriveView)>,
-        kick_for: impl Fn(PlayerId) -> KickPose,
+        residual_for: impl Fn(PlayerId) -> RemotePresentResidual,
         death_for: impl Fn(PlayerId) -> (bool, f32),
     ) {
         for (id, drive) in samples {
@@ -105,7 +106,12 @@ impl RemotePresent {
                     state.walk_phase = 0.0;
                 }
             }
-            gpu.apply_present(queue, &state, kick_for(id), false);
+            let res = residual_for(id);
+            state.shoulder_fire_fold = res.fold_rad;
+            state.shoulder_fire_twist = res.twist_rad;
+            state.grip_bore_m = res.grip_bore_m;
+            state.compose_joints();
+            gpu.apply_present(queue, &state, false);
         }
     }
 
@@ -121,13 +127,13 @@ impl RemotePresent {
         &self,
         id: PlayerId,
         state: &SelfState,
-        kick: KickPose,
+        grip_bore_m: f32,
         muzzle_index: u8,
     ) -> Option<glam::Vec3> {
         let Slot::Ready { gpu, .. } = self.slots.get(&id)? else {
             return None;
         };
-        gpu.flash_muzzle_worlds(state, kick, &[muzzle_index])
+        gpu.flash_muzzle_worlds_with_bore(state, grip_bore_m, &[muzzle_index])
             .into_iter()
             .next()
     }

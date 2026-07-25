@@ -1,7 +1,6 @@
-//! Hit marker present flash (044): X on the **aim reticle** when you claim a hit.
+//! Hit marker present flash (044): X on the reticle when you claim a hit.
 //!
-//! Same world point as reticle / shots (look + kick + sway + flinch). Not fixed
-//! geometric screen centre. Present-only — not sim / net.
+//! Same world point as reticle / shots (weapon line). Present-only.
 
 use game_sim::{CAMERA_VERTICAL_FOV_RAD, RETICLE_SIZE_PX};
 use glam::{Mat4, Vec3};
@@ -213,7 +212,7 @@ impl HitMarkerGpu {
         }
     }
 
-    /// `center` is the same aim reticle world point as shots use (look + kick + sway).
+    /// `center` is the reticle world point (weapon line).
     pub fn update(
         &mut self,
         queue: &wgpu::Queue,

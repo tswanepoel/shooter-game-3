@@ -231,7 +231,7 @@ impl ViewController {
     pub fn view_matrix(&self, self_state: &SelfState) -> Mat4 {
         let (eye, forward) = self.eye_and_forward(self_state);
         let yaw = match self.mode {
-            ViewMode::Mounted => self_state.ocular_yaw,
+            ViewMode::Mounted => self_state.look_yaw(),
             #[cfg(feature = "debug-tools")]
             ViewMode::Flycam => self.fly.yaw,
         };
@@ -240,7 +240,7 @@ impl ViewController {
 
     pub fn eye_and_forward(&self, self_state: &SelfState) -> (Vec3, Vec3) {
         match self.mode {
-            ViewMode::Mounted => (self.mounted_eye, self_state.ocular_forward()),
+            ViewMode::Mounted => (self.mounted_eye, self_state.look_forward()),
             #[cfg(feature = "debug-tools")]
             ViewMode::Flycam => (self.fly.position, self.fly.forward()),
         }

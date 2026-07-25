@@ -3,8 +3,50 @@
 use std::collections::HashMap;
 
 use game_net::PlayerId;
-use game_sim::{weapon_def, KickPose, Projectile, WeaponDef};
+use game_sim::{weapon_def, Projectile, WeaponDef};
 use glam::{Mat4, Vec3};
+
+/// Peer present residual (not combat). Soft fold/twist + grip bore.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RemotePresentResidual {
+    pub fold_rad: f32,
+    pub twist_rad: f32,
+    pub grip_bore_m: f32,
+}
+
+impl RemotePresentResidual {
+    fn add_fire(&mut self, def: &WeaponDef, yaw_sign: f32) {
+        let k = def.kick;
+        let sign = if yaw_sign >= 0.0 { 1.0 } else { -1.0 };
+        self.fold_rad += k.pitch_deg.to_radians();
+        self.twist_rad += k.yaw_deg.to_radians() * sign;
+        self.grip_bore_m += k.back_m;
+    }
+
+    fn settle(&mut self, dt: f32, settle_s: f32) {
+        if settle_s <= 1e-6 {
+            *self = Self::default();
+            return;
+        }
+        let t = (dt / settle_s).clamp(0.0, 1.0);
+        self.fold_rad *= 1.0 - t;
+        self.twist_rad *= 1.0 - t;
+        self.grip_bore_m *= 1.0 - t;
+        if self.fold_rad.abs() < 1e-5 {
+            self.fold_rad = 0.0;
+        }
+        if self.twist_rad.abs() < 1e-5 {
+            self.twist_rad = 0.0;
+        }
+        if self.grip_bore_m.abs() < 1e-6 {
+            self.grip_bore_m = 0.0;
+        }
+    }
+
+    fn is_quiet(self) -> bool {
+        self.fold_rad.abs() + self.twist_rad.abs() + self.grip_bore_m.abs() <= 1e-5
+    }
+}
 
 /// Flash sphere radius (m).
 const FLASH_RADIUS_M: f32 = 0.03;
@@ -76,11 +118,10 @@ struct Flash {
     pos: Vec3,
 }
 
-/// Muzzle flash + peer mesh kick + optional tracers.
+/// Muzzle flash + peer present residual + optional tracers.
 pub struct FireFx {
     flashes: Vec<Flash>,
-    /// Peer mesh kick (local self kick is sim state).
-    remote_kicks: HashMap<PlayerId, (KickPose, f32)>,
+    remote_present: HashMap<PlayerId, (RemotePresentResidual, f32)>,
     pub show_tracers: bool,
     pipeline: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
@@ -197,7 +238,7 @@ impl FireFx {
 
         Self {
             flashes: Vec::new(),
-            remote_kicks: HashMap::new(),
+            remote_present: HashMap::new(),
             show_tracers: false,
             pipeline,
             bind_group,
@@ -239,10 +280,10 @@ impl FireFx {
             });
         }
         let entry = self
-            .remote_kicks
+            .remote_present
             .entry(id)
-            .or_insert((KickPose::default(), def.kick.settle_s));
-        entry.0.add_kick(def, yaw_sign);
+            .or_insert((RemotePresentResidual::default(), def.kick.settle_s));
+        entry.0.add_fire(def, yaw_sign);
         entry.1 = def.kick.settle_s.max(1e-4);
     }
 
@@ -264,10 +305,10 @@ impl FireFx {
         self.note_remote_discharge(id, def, muzzle_indices, seed_worlds, yaw);
     }
 
-    pub fn remote_kick(&self, id: PlayerId) -> KickPose {
-        self.remote_kicks
+    pub fn remote_present_residual(&self, id: PlayerId) -> RemotePresentResidual {
+        self.remote_present
             .get(&id)
-            .map(|(kick, _)| *kick)
+            .map(|(r, _)| *r)
             .unwrap_or_default()
     }
 
@@ -288,12 +329,10 @@ impl FireFx {
             f.age += dt;
         }
         self.flashes.retain(|f| f.age < FLASH_LIFE_S);
-        for (kick, settle) in self.remote_kicks.values_mut() {
-            kick.settle(dt, *settle);
+        for (res, settle) in self.remote_present.values_mut() {
+            res.settle(dt, *settle);
         }
-        self.remote_kicks.retain(|_, (kick, _)| {
-            kick.pitch_rad.abs() + kick.yaw_rad.abs() + kick.back_m.abs() > 1e-5
-        });
+        self.remote_present.retain(|_, (res, _)| !res.is_quiet());
     }
 
     pub fn update_draw(

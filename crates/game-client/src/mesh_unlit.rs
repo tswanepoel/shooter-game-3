@@ -1330,7 +1330,7 @@ pub fn pose_character_kit(
                 local *= Mat4::from_quat(Quat::from_rotation_x(-self_state.torso_pitch));
             }
             "arm-right" if hold_right => {
-                // Armed hold + aim owns the right arm (walk arm swing is presentation for left).
+                // Armed hold owns the right arm (left keeps walk swing).
                 let (_s, _r, t) = local.to_scale_rotation_translation();
                 let scale = {
                     let sx = local.x_axis.truncate().length();
@@ -1339,6 +1339,7 @@ pub fn pose_character_kit(
                     Vec3::new(sx, sy, sz)
                 };
                 local = Mat4::from_scale_rotation_translation(scale, HOLDING_RIGHT_ROT, t)
+                    * Mat4::from_quat(Quat::from_rotation_y(self_state.shoulder_yaw))
                     * Mat4::from_quat(Quat::from_rotation_x(-self_state.shoulder_pitch));
             }
             "head" if !emoting => {
