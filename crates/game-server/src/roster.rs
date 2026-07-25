@@ -6,7 +6,7 @@ use game_net::{
     display_name_key, encode_s2c_frame, is_known_character, NetImpactHit, NetRole, NetVec3,
     PlayerId, RosterEntry, ServerToClient,
 };
-use game_sim::{impact_damage, AmmoKind, HitBodyPart, HEALTH_MAX};
+use game_sim::{impact_damage, AmmoKind, HitBodyPart, WeaponClass, HEALTH_MAX};
 use tokio::sync::mpsc;
 use tracing::warn;
 use wtransport::Connection;
@@ -31,8 +31,9 @@ impl CombatState {
         }
     }
 
-    pub fn try_first_spawn(&mut self) -> bool {
-        if self.has_entered {
+    /// Enter or re-enter the map when not living (first spawn or post-death).
+    pub fn try_enter_map(&mut self) -> bool {
+        if self.living {
             return false;
         }
         self.living = true;
@@ -153,11 +154,17 @@ impl Roster {
             .unwrap_or(false)
     }
 
-    pub fn try_spawn(&mut self, id: PlayerId) -> bool {
+    pub fn try_spawn(&mut self, id: PlayerId, primary: Option<u8>, secondary: Option<u8>) -> bool {
         let Some(peer) = self.peers.get_mut(&id) else {
             return false;
         };
-        try_spawn_member(&peer.role, peer.character, &mut peer.combat)
+        try_spawn_member(
+            &peer.role,
+            peer.character,
+            &mut peer.combat,
+            primary,
+            secondary,
+        )
     }
 
     pub fn set_role(&mut self, id: PlayerId, role: NetRole) -> bool {
@@ -254,11 +261,36 @@ pub fn apply_character(character: &mut u8, combat: &CombatState, new_character: 
     true
 }
 
-pub fn try_spawn_member(role: &NetRole, character: u8, combat: &mut CombatState) -> bool {
+/// Class rules for staged loadout (021 / 053). Empty slots are legal.
+pub fn loadout_legal(primary: Option<u8>, secondary: Option<u8>) -> bool {
+    if let Some(p) = primary {
+        if WeaponClass::from_letter(p).is_none() {
+            return false;
+        }
+    }
+    if let Some(s) = secondary {
+        match WeaponClass::from_letter(s) {
+            Some(c) if c.allowed_in_secondary() => {}
+            _ => return false,
+        }
+    }
+    true
+}
+
+pub fn try_spawn_member(
+    role: &NetRole,
+    character: u8,
+    combat: &mut CombatState,
+    primary: Option<u8>,
+    secondary: Option<u8>,
+) -> bool {
     if *role != NetRole::Player || !is_known_character(character) {
         return false;
     }
-    combat.try_first_spawn()
+    if !loadout_legal(primary, secondary) {
+        return false;
+    }
+    combat.try_enter_map()
 }
 
 pub fn ammo_from_wire(ammo: u8) -> Option<AmmoKind> {
@@ -288,13 +320,28 @@ mod tests {
     use game_net::{display_name_key, normalize_display_name, NetImpactHit, DEFAULT_ROOM_CODE};
 
     #[test]
-    fn first_spawn_once() {
+    fn enter_map_blocks_while_living_allows_after_death() {
         let mut combat = CombatState::fresh();
         combat.health = 0.0;
-        assert!(combat.try_first_spawn());
+        assert!(combat.try_enter_map());
         assert!(combat.living && combat.has_entered);
         assert!((combat.health - HEALTH_MAX).abs() < 1e-3);
-        assert!(!combat.try_first_spawn());
+        assert!(!combat.try_enter_map());
+        combat.living = false;
+        combat.health = 0.0;
+        assert!(combat.try_enter_map());
+        assert!(combat.living);
+        assert!((combat.health - HEALTH_MAX).abs() < 1e-3);
+    }
+
+    #[test]
+    fn loadout_legal_class_rules() {
+        assert!(loadout_legal(None, None));
+        assert!(loadout_legal(Some(b'p'), Some(b'b')));
+        assert!(loadout_legal(Some(b'd'), Some(b'a')));
+        assert!(!loadout_legal(Some(b'z'), None));
+        assert!(!loadout_legal(None, Some(b'p'))); // smg not secondary
+        assert!(!loadout_legal(Some(b'p'), Some(b'd')));
     }
 
     #[test]
@@ -441,10 +488,49 @@ mod tests {
     #[test]
     fn try_spawn_member_gates() {
         let mut combat = CombatState::fresh();
-        assert!(!try_spawn_member(&NetRole::Spectator, b'a', &mut combat));
-        assert!(!try_spawn_member(&NetRole::Player, b'z', &mut combat));
-        assert!(try_spawn_member(&NetRole::Player, b'a', &mut combat));
+        assert!(!try_spawn_member(
+            &NetRole::Spectator,
+            b'a',
+            &mut combat,
+            Some(b'p'),
+            Some(b'b'),
+        ));
+        assert!(!try_spawn_member(
+            &NetRole::Player,
+            b'z',
+            &mut combat,
+            Some(b'p'),
+            Some(b'b'),
+        ));
+        assert!(!try_spawn_member(
+            &NetRole::Player,
+            b'a',
+            &mut combat,
+            Some(b'p'),
+            Some(b'd'),
+        ));
+        assert!(try_spawn_member(
+            &NetRole::Player,
+            b'a',
+            &mut combat,
+            Some(b'p'),
+            Some(b'b'),
+        ));
         assert!(combat.living && combat.has_entered);
-        assert!(!try_spawn_member(&NetRole::Player, b'a', &mut combat));
+        assert!(!try_spawn_member(
+            &NetRole::Player,
+            b'a',
+            &mut combat,
+            Some(b'p'),
+            Some(b'b'),
+        ));
+        combat.living = false;
+        assert!(try_spawn_member(
+            &NetRole::Player,
+            b'a',
+            &mut combat,
+            None,
+            None,
+        ));
     }
 }

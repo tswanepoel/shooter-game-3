@@ -207,6 +207,10 @@ impl ClientInner {
             h.tick_regen(dt);
         }
 
+        if self.mp.is_living() && !self.self_state.alive {
+            self.mp.return_to_bench_after_death(&self.self_state);
+        }
+
         self.renderer.fire_fx.tick(dt);
 
         self.mp.on_frame(dt, &self.self_state);

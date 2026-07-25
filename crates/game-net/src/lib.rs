@@ -6,8 +6,8 @@ pub const TICK_HZ: u32 = 180;
 
 pub const TICK_DURATION_SECS: f64 = 1.0 / TICK_HZ as f64;
 
-/// v9: role + character on roster; SetRole / SetCharacter (052).
-pub const PROTOCOL_VERSION: u16 = 9;
+/// Alpha wire; bumped when variants change (no distributed compat promise).
+pub const PROTOCOL_VERSION: u16 = 10;
 
 /// Default room code (051 MVP). Client pre-fills this; server accepts only this value.
 pub const DEFAULT_ROOM_CODE: &str = "dev";
@@ -150,8 +150,12 @@ pub enum ClientToServer {
     SetCharacter {
         character: u8,
     },
-    /// Reliable control stream only.
-    Spawn,
+    /// Reliable control stream only. Loadout applies on accept (053).
+    Spawn {
+        primary: Option<u8>,
+        secondary: Option<u8>,
+        active: NetActiveWeapon,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -371,7 +375,11 @@ mod tests {
 
     #[test]
     fn spawn_role_character_and_roster_roundtrip() {
-        let spawn = ClientToServer::Spawn;
+        let spawn = ClientToServer::Spawn {
+            primary: Some(b'p'),
+            secondary: None,
+            active: NetActiveWeapon::Primary,
+        };
         let b = encode_c2s(&spawn).unwrap();
         assert_eq!(decode_c2s(&b).unwrap(), spawn);
 

@@ -8,6 +8,17 @@ Depends on **051** (room, FFA, score, spawn), **052** (character commit for play
 
 **Loadout** and **spawn** are explicit player choices. After death the member stays in the match, may edit loadout, and **Spawn**s again. Score from **051** persists across lives in the same membership.
 
+## Product decisions (ship)
+
+| Topic | Choice |
+| --- | --- |
+| Character on bench | **Frozen** after **052** confirm for this membership (no re-pick on loadout/death bench). |
+| Wire | **`Spawn { primary, secondary, active }`** — loadout rides the spawn request; peers learn it from drive after enter, not in advance. |
+| Staging | Bench edits are local until Spawn; editing cancels an in-flight spawn resend. |
+| Defaults | **None.** Empty primary/secondary and active primary until the player picks. Empty slots are legal (unarmed when active empty). |
+| Placement | Server random ground pose (**023** spirit); no min-distance retry in this feature. |
+| Protocol | Alpha; version number is not a compatibility promise. |
+
 ## Presentation
 
 Loadout grid, slot assignment, and Spawn controls are **GPU-rendered** in the client — same canvas stack as join and character pickers.
@@ -17,10 +28,10 @@ Loadout grid, slot assignment, and Spawn controls are **GPU-rendered** in the cl
 | State | Surface |
 | --- | --- |
 | Player, character committed, waiting to enter | Loadout picker + **Spawn** |
-| Player, death accepted in present | After living acts have stopped and `die` present has begun, open the same loadout + **Spawn** bench. Corpse present may remain until next spawn of that player or a short timeout already used by present. Bench is available as soon as death is accepted. |
+| Player, death accepted | Same loadout + **Spawn** bench. Staged loadout starts as **what they had at death** (editable). |
 | Living player | Active-slot wheel only (**021**). |
 
-Spectators stay on the **052** spectate path. First-time join after **052** character confirm lands on this bench (replacing **051**’s bare Spawn step). Defaults pre-select primary `p`, secondary `b`, active primary so Spawn can be immediate.
+Spectators stay on the **052** spectate path. First-time join after **052** character confirm lands on this bench (replacing **051**’s bare Spawn step).
 
 ## Loadout picker
 
@@ -29,10 +40,10 @@ Spectators stay on the **052** spectate path. First-time join after **052** char
 | Fact | Draft |
 | --- | --- |
 | Primary | Optional. Any **weapon class** / letter allowed by **021**. |
-| Secondary | Optional. **Launcher** or **pistol** only (**021**). |
-| Active | Slot in hand at spawn: primary or secondary. Default primary when that slot is filled; else secondary when filled; else unarmed. |
-| Empty slots | Allowed; active empty means unarmed at spawn. |
-| UI | GPU list or two columns: letter or “empty” per slot. Illegal secondary picks stay unassigned (highlight feedback). |
+| Secondary | Optional. **Launcher** or **pistol** only (**021**). UI only offers legal letters. |
+| Active | Slot in hand at spawn: primary or secondary. Empty active slot means unarmed at spawn. |
+| Empty slots | Allowed. |
+| UI | GPU two rows: letter or empty per slot; active hand toggle. |
 | Catalog | Same letter map as **021**. Presentation may use kit labels; sim identity is letter ids. |
 | Staging | Loadout is **staged** on the bench until **Spawn**. Bench edits apply on the next spawn. |
 
@@ -45,12 +56,12 @@ Server re-validates class rules on spawn and accepts only legal loadouts.
 | Fact | Draft |
 | --- | --- |
 | Control | Explicit GPU **Spawn** on the bench. |
-| Placement | Server-chosen ground pose on the empty map (**023** spirit: random position on y = 0, yaw). Prefer a simple distance retry away from other living bodies when cheap. |
+| Placement | Server-chosen ground pose on the empty map (random position on y = 0, yaw). |
 | Apply | Figure alive at full **health**; loadout slots and active as staged; fire supply as **038** / **042**. |
 | Camera | On success, mount **view** on the self (**050** / look-mounted path). |
 | Input | Living controls (walk, look, fire, …) while living. |
 
-Server accepts spawn when the member is a player with a known character, staged loadout is legal, and they are waiting to enter (including after death).
+Server accepts spawn when the member is a player with a known character, staged loadout is legal, and they are **not living** (waiting to enter, including after death).
 
 ## Death → bench
 
@@ -60,9 +71,9 @@ Return path:
 
 1. Lethal outcome applies; kill/score rules from **051** run once.  
 2. Member remains in the room and match; score is unchanged by dying.  
-3. Client opens the loadout + **Spawn** bench. Staged loadout defaults to **what they had at death** (editable). Character stays the **052** commit for this membership.  
+3. Client opens the loadout + **Spawn** bench as soon as local death is accepted. Staged loadout = loadout at death. Character stays the **052** commit.  
 4. Player presses **Spawn** when ready.  
-5. New living figure; corpse present ends or is replaced per the present rule above.
+5. New living figure under authority.
 
 Membership may spawn for the whole time they remain in the match.
 
@@ -72,10 +83,11 @@ Score is per membership in the match (**051**). Kills after a later spawn add to
 
 ## Wire / authority
 
-- C→S: staged loadout (primary letter or empty, secondary letter or empty, active slot) and **Spawn** request.  
-- Server validates class rules, character known, player role, waiting-to-enter → spawns figure, broadcasts presence/pose.  
-- S→C: living flag / figure spawn so peers create remote present; death already claimed via **043**.  
-- Each spawn creates a new living figure under authority.
+- C→S: **`Spawn { primary, secondary, active }`** (reliable).  
+- Server validates class rules, character known, player role, not living → sets living, full health, broadcasts roster, sends **YouSpawned** pose.  
+- Client applies staged loadout + pose on **YouSpawned** and enters Living.  
+- Peers learn loadout from subsequent **DriveSample** / **PeerDrive** (not pre-announced on the bench).  
+- Each spawn creates a new living figure under authority; death clears living so the next Spawn may succeed.
 
 ## Relation to 051 / 052
 
@@ -86,13 +98,11 @@ Score is per membership in the match (**051**). Kills after a later spawn add to
 | **052** character before play | Required before first bench; character held across lives |
 | **052** spectate | Spectate path unchanged |
 
-Ship **051**/**052** first with the simpler spawn step if needed; fold that step into this bench so one spawn UI remains.
-
 ## Acceptance criteria
 
 - Player with committed character sees an in-engine **loadout** picker (primary / secondary / active) and **Spawn**, with **021** class rules enforced.  
-- Defaults remain `p` + `b` + active primary so immediate Spawn works.  
+- No pre-selected weapons; empty slots allowed.  
 - Spawn applies loadout and character, places a living figure on the empty map under server authority, and mounts the play view.  
 - On death, living acts stop as **043**; player returns to the loadout + Spawn bench; score is kept; next Spawn creates a new living figure.  
-- Server accepts only legal loadouts.  
+- Server accepts only legal loadouts and allows re-entry after death.  
 - Loadout and Spawn UI are GPU-rendered in the client.

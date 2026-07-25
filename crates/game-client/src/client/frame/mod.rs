@@ -59,9 +59,16 @@ impl ClientInner {
             let kit_changed = self.self_state.character != character;
             self.self_state = SelfState::default_loadout();
             self.self_state.character = character;
+            self.self_state.primary = spawn.primary;
+            self.self_state.secondary = spawn.secondary;
+            self.self_state.active = spawn.active;
             self.self_state.position = spawn.position;
             self.self_state.ocular_yaw = spawn.yaw;
             self.self_state.torso_yaw = spawn.yaw;
+            self.self_state.alive = true;
+            self.self_state.health = game_sim::HEALTH_MAX;
+            self.self_state.regen_block_s = 0.0;
+            self.self_state.die_age_s = 0.0;
             self.fire = FireState::new();
             self.projectiles = ProjectileWorld::new();
             self.health_by_id.clear();

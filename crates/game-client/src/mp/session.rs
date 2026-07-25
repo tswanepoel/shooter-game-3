@@ -177,13 +177,25 @@ fn handle_s2c(shared: &Rc<RefCell<Shared>>, msg: ServerToClient, t4: f64) {
         }
         ServerToClient::YouSpawned { position, yaw, .. } => {
             let mut s = shared.borrow_mut();
+            let loadout = super::apply::PendingSpawnLoadout {
+                primary: s.staged_primary,
+                secondary: s.staged_secondary,
+                active: s.staged_active,
+            };
             let Shared {
                 phase,
                 spawn_requested,
                 pending_spawn,
                 ..
             } = &mut *s;
-            apply_you_spawned(phase, spawn_requested, pending_spawn, position, yaw);
+            apply_you_spawned(
+                phase,
+                spawn_requested,
+                pending_spawn,
+                position,
+                yaw,
+                loadout,
+            );
         }
         ServerToClient::Roster { entries, .. } => {
             let mut s = shared.borrow_mut();

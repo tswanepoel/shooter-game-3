@@ -1,8 +1,9 @@
 //! Single egui pipeline for product chrome and optional debug shell.
 
 use game_net::{character_catalog, NetRole, RosterEntry, DEFAULT_CHARACTER};
+use game_sim::{ActiveWeapon, WeaponClass};
 
-use crate::mp::{self, MpPhase, DEFAULT_ROOM_CODE};
+use crate::mp::{self, MpPhase, StagedLoadout, DEFAULT_ROOM_CODE};
 
 #[cfg(feature = "debug-tools")]
 use crate::debug::DebugShell;
@@ -23,8 +24,20 @@ pub struct ProductActions {
     pub spectate: bool,
     pub confirm_character: Option<u8>,
     pub back_to_role: bool,
+    pub stage_primary: Option<Option<u8>>,
+    pub stage_secondary: Option<Option<u8>>,
+    pub stage_active: Option<ActiveWeapon>,
     pub spawn: bool,
     pub leave: bool,
+}
+
+/// Per-frame product inputs for the overlay (phase, roster, loadout bench).
+pub struct ProductSession<'a> {
+    pub phase: MpPhase,
+    pub roster: &'a [RosterEntry],
+    pub connecting: bool,
+    pub character: u8,
+    pub staged: StagedLoadout,
 }
 
 pub struct UiOverlay {
@@ -122,21 +135,19 @@ impl UiOverlay {
         &mut self,
         raw_input: egui::RawInput,
         pixels_per_point: f32,
-        phase: MpPhase,
-        roster: &[RosterEntry],
-        connecting: bool,
+        session: ProductSession<'_>,
         mut debug: DebugDraw<'_>,
     ) -> (Option<egui::FullOutput>, ProductActions) {
         self.egui_ctx.set_pixels_per_point(pixels_per_point);
 
+        let phase = session.phase;
         let show_score = phase.in_room();
         let mut actions = ProductActions::default();
         let status = self.status.clone();
-        let pick = self.pick_character;
 
         let full = self.egui_ctx.run(raw_input, |ctx| {
             if show_score {
-                draw_score(ctx, roster, phase, &mut actions);
+                draw_score(ctx, session.roster, phase, &mut actions);
             }
 
             match phase {
@@ -145,7 +156,7 @@ impl UiOverlay {
                         ctx,
                         &mut self.room_code,
                         &mut self.display_name,
-                        connecting,
+                        session.connecting,
                         &status,
                         &mut actions,
                     );
@@ -154,7 +165,9 @@ impl UiOverlay {
                 MpPhase::Character => {
                     draw_character(ctx, &mut self.pick_character, &mut actions);
                 }
-                MpPhase::Ready => draw_ready(ctx, pick, &mut actions),
+                MpPhase::Ready => {
+                    draw_loadout(ctx, session.character, session.staged, &mut actions)
+                }
                 MpPhase::Spectating => draw_spectate_chrome(ctx, &mut actions),
                 MpPhase::Living => {}
             }
@@ -380,13 +393,82 @@ fn draw_character(ctx: &egui::Context, pick: &mut u8, actions: &mut ProductActio
     });
 }
 
-fn draw_ready(ctx: &egui::Context, pick: u8, actions: &mut ProductActions) {
-    full_frame_shell(ctx, "Ready", |ui| {
+fn draw_loadout(
+    ctx: &egui::Context,
+    character: u8,
+    staged: StagedLoadout,
+    actions: &mut ProductActions,
+) {
+    full_frame_shell(ctx, "Loadout", |ui| {
         ui.label(format!(
-            "Character {} · default loadout (p / b)",
-            pick as char
+            "Character {} · pick primary / secondary / hand, then Spawn",
+            character as char
         ));
-        ui.add_space(20.0);
+        ui.add_space(12.0);
+
+        ui.label(egui::RichText::new("Primary").strong());
+        ui.horizontal_wrapped(|ui| {
+            let empty_sel = staged.primary.is_none();
+            if ui.selectable_label(empty_sel, "  empty  ").clicked() {
+                actions.stage_primary = Some(None);
+            }
+            for letter in b'a'..=b'r' {
+                let sel = staged.primary == Some(letter);
+                let label = format!("  {}  ", letter as char);
+                if ui.selectable_label(sel, label).clicked() {
+                    actions.stage_primary = Some(Some(letter));
+                }
+            }
+        });
+
+        ui.add_space(10.0);
+        ui.label(egui::RichText::new("Secondary (launcher / pistol)").strong());
+        ui.horizontal_wrapped(|ui| {
+            let empty_sel = staged.secondary.is_none();
+            if ui.selectable_label(empty_sel, "  empty  ").clicked() {
+                actions.stage_secondary = Some(None);
+            }
+            for letter in b'a'..=b'r' {
+                let Some(class) = WeaponClass::from_letter(letter) else {
+                    continue;
+                };
+                if !class.allowed_in_secondary() {
+                    continue;
+                }
+                let sel = staged.secondary == Some(letter);
+                let label = format!("  {}  ", letter as char);
+                if ui.selectable_label(sel, label).clicked() {
+                    actions.stage_secondary = Some(Some(letter));
+                }
+            }
+        });
+
+        ui.add_space(10.0);
+        ui.label(egui::RichText::new("Active hand").strong());
+        ui.horizontal(|ui| {
+            let p = staged.active == ActiveWeapon::Primary;
+            let s = staged.active == ActiveWeapon::Secondary;
+            if ui.selectable_label(p, "  Primary  ").clicked() {
+                actions.stage_active = Some(ActiveWeapon::Primary);
+            }
+            if ui.selectable_label(s, "  Secondary  ").clicked() {
+                actions.stage_active = Some(ActiveWeapon::Secondary);
+            }
+        });
+
+        ui.add_space(8.0);
+        let summary = format!(
+            "Staged: primary {} · secondary {} · hand {}",
+            slot_label(staged.primary),
+            slot_label(staged.secondary),
+            match staged.active {
+                ActiveWeapon::Primary => "primary",
+                ActiveWeapon::Secondary => "secondary",
+            }
+        );
+        ui.label(summary);
+
+        ui.add_space(16.0);
         if ui
             .add(
                 egui::Button::new(egui::RichText::new("  Spawn  ").size(20.0))
@@ -398,9 +480,6 @@ fn draw_ready(ctx: &egui::Context, pick: u8, actions: &mut ProductActions) {
         }
         ui.add_space(16.0);
         ui.horizontal(|ui| {
-            if ui.button("Change character").clicked() {
-                actions.play = true;
-            }
             if ui.button("Spectate").clicked() {
                 actions.spectate = true;
             }
@@ -409,6 +488,12 @@ fn draw_ready(ctx: &egui::Context, pick: u8, actions: &mut ProductActions) {
             }
         });
     });
+}
+
+fn slot_label(letter: Option<u8>) -> String {
+    letter
+        .map(|c| (c as char).to_string())
+        .unwrap_or_else(|| "empty".into())
 }
 
 fn draw_spectate_chrome(ctx: &egui::Context, actions: &mut ProductActions) {

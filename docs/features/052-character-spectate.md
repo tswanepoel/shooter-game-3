@@ -14,10 +14,10 @@ After successful join (**Welcome**) and before living **spawn** (or as the stand
 
 1. Member is in the room’s FFA match (session live).  
 2. Client shows a **role** step: **Play** or **Spectate**.  
-3a. **Play** → **character picker** → confirm character → proceed toward spawn (defaults from **051** until **053**).  
+3a. **Play** → **character picker** → confirm character → **053** loadout + Spawn bench.  
 3b. **Spectate** → enter spectator view.
 
-From spectate, a GPU control may return to the role step to become a player (pick character, then spawn). Spectate is also reachable from pre-spawn and from living (score chrome). **Death** keeps the client in the living product phase with a corpse present until **053** owns the loadout/spawn bench; score and membership continue.
+From spectate, a GPU control may return to the role step to become a player (pick character, then spawn). Spectate is also reachable from pre-spawn and from living (score chrome). **Death** returns the player to the **053** loadout/spawn bench; score and membership continue.
 
 ## Character
 
@@ -30,7 +30,7 @@ A **character** is a body kit. The picker lists kits the client can present (Ken
 | Default | **051**’s current self kit highlighted on first open. |
 | Confirm | Explicit confirm (or double-activate) commits the selection. |
 | Identity | Committed character id goes to the server on the member’s player intent. Peers present that kit on the figure after spawn. |
-| Change | Character may be changed on this picker while waiting to spawn (and on **053** bench if that surface reuses the picker). Living figures keep the kit they spawned with until the next spawn. |
+| Change | Character is chosen on this picker before first bench entry; **053** freezes it for the membership (no re-pick on the loadout bench). Living figures keep the kit they spawned with. |
 
 Presentation of other players uses each peer’s committed character id. Server accepts known ids; unknown commit is rejected and the prior or default kit remains.
 
@@ -51,7 +51,7 @@ A **spectator** is a member who watches. They stay in the **room** and **match**
 
 With character committed and role = player:
 
-- **051** defaults still apply for loadout and the single **Spawn** confirm until **053**.  
+- After character confirm, **053** owns the loadout + **Spawn** bench (character stays committed for the membership).  
 - Camera while waiting to spawn stays the neutral overview from **051** (or a calm hold on the picker).  
 - On spawn, figure uses the committed **character** kit for self and for how remotes draw this player.
 

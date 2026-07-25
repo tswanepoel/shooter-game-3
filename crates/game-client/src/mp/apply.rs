@@ -26,12 +26,14 @@ pub fn apply_roster(
 }
 
 /// Local pose + phase. Roster living arrives on the next snapshot.
+/// `loadout` is the staged bench choice applied on this spawn.
 pub fn apply_you_spawned(
     phase: &mut MpPhase,
     spawn_requested: &mut bool,
     pending_spawn: &mut Option<PendingSpawn>,
     position: NetVec3,
     yaw: f32,
+    loadout: PendingSpawnLoadout,
 ) -> bool {
     if *phase != MpPhase::Ready || !phase.can_go(MpPhase::Living) {
         return false;
@@ -41,8 +43,18 @@ pub fn apply_you_spawned(
     *pending_spawn = Some(PendingSpawn {
         position: glam::Vec3::new(position.x, position.y, position.z),
         yaw,
+        primary: loadout.primary,
+        secondary: loadout.secondary,
+        active: loadout.active,
     });
     true
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PendingSpawnLoadout {
+    pub primary: Option<u8>,
+    pub secondary: Option<u8>,
+    pub active: game_sim::ActiveWeapon,
 }
 
 #[cfg(test)]
@@ -103,23 +115,35 @@ mod tests {
         let mut phase = MpPhase::Lobby;
         let mut spawn_requested = true;
         let mut pending = None;
+        let empty = PendingSpawnLoadout {
+            primary: None,
+            secondary: None,
+            active: game_sim::ActiveWeapon::Primary,
+        };
         assert!(!apply_you_spawned(
             &mut phase,
             &mut spawn_requested,
             &mut pending,
             NetVec3::new(1.0, 0.0, 2.0),
             0.5,
+            empty,
         ));
         assert_eq!(phase, MpPhase::Lobby);
         assert!(pending.is_none());
 
         phase = MpPhase::Ready;
+        let loadout = PendingSpawnLoadout {
+            primary: Some(b'p'),
+            secondary: Some(b'b'),
+            active: game_sim::ActiveWeapon::Primary,
+        };
         assert!(apply_you_spawned(
             &mut phase,
             &mut spawn_requested,
             &mut pending,
             NetVec3::new(1.0, 0.0, 2.0),
             0.5,
+            loadout,
         ));
         assert_eq!(phase, MpPhase::Living);
         assert!(!spawn_requested);
@@ -127,6 +151,8 @@ mod tests {
             let p = pending.as_ref().expect("pose");
             assert!((p.position.x - 1.0).abs() < 1e-5);
             assert!((p.yaw - 0.5).abs() < 1e-5);
+            assert_eq!(p.primary, Some(b'p'));
+            assert_eq!(p.secondary, Some(b'b'));
         }
 
         assert!(!apply_you_spawned(
@@ -135,6 +161,7 @@ mod tests {
             &mut pending,
             NetVec3::new(0.0, 0.0, 0.0),
             0.0,
+            loadout,
         ));
     }
 

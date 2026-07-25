@@ -6,7 +6,7 @@ use wasm_bindgen::prelude::*;
 use crate::lineup::LineupState;
 use crate::mp::{self, CamIntent};
 use crate::self_present::SelfPresentState;
-use crate::ui_overlay::{DebugDraw, OverlayGpu};
+use crate::ui_overlay::{DebugDraw, OverlayGpu, ProductSession};
 use crate::view::overview_view_matrix;
 
 #[cfg(feature = "debug-tools")]
@@ -232,9 +232,18 @@ impl ClientInner {
             #[cfg(not(feature = "debug-tools"))]
             let debug_draw = DebugDraw::none();
 
-            let (full, actions) = self
-                .ui
-                .run(raw, ppp, phase, &roster, connecting, debug_draw);
+            let (full, actions) = self.ui.run(
+                raw,
+                ppp,
+                ProductSession {
+                    phase,
+                    roster: &roster,
+                    connecting,
+                    character: self.mp.character(),
+                    staged: self.mp.staged_loadout(),
+                },
+                debug_draw,
+            );
 
             if let Some((room, name)) = actions.join {
                 self.ui.set_status("joining…");
@@ -259,6 +268,15 @@ impl ClientInner {
                     }
                     self.ui.sync_pick_character(committed);
                 }
+            }
+            if let Some(p) = actions.stage_primary {
+                let _ = self.mp.stage_primary(p);
+            }
+            if let Some(s) = actions.stage_secondary {
+                let _ = self.mp.stage_secondary(s);
+            }
+            if let Some(a) = actions.stage_active {
+                self.mp.stage_active(a);
             }
             if actions.spawn {
                 self.mp.request_spawn();

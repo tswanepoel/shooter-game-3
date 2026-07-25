@@ -1,4 +1,4 @@
-//! WebTransport multiplayer session (room join, role, character, spawn, score — 051/052).
+//! WebTransport multiplayer session (room join, role, character, loadout, spawn — 051–053).
 
 mod apply;
 mod clock;
@@ -16,11 +16,11 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use game_net::{
-    encode_c2s, is_known_character, normalize_display_name, ClientToServer, NetImpactHit,
-    NetProjectileSpawn, NetRole, NetVec3, PlayerId, RosterEntry, DEFAULT_CHARACTER,
+    encode_c2s, is_known_character, normalize_display_name, ClientToServer, NetActiveWeapon,
+    NetImpactHit, NetProjectileSpawn, NetRole, NetVec3, PlayerId, RosterEntry, DEFAULT_CHARACTER,
     DEFAULT_ROOM_CODE as ROOM_CODE, TICK_HZ,
 };
-use game_sim::{weapon_def, AmmoKind, ImpactHit, Projectile, SelfState};
+use game_sim::{weapon_def, ActiveWeapon, AmmoKind, ImpactHit, Projectile, SelfState, WeaponClass};
 use js_sys::{Reflect, Uint8Array};
 use wasm_bindgen::JsCast;
 use web_sys::WritableStreamDefaultWriter;
@@ -40,9 +40,9 @@ pub enum MpPhase {
     Connecting,
     Role,
     Character,
+    /// Loadout + Spawn bench (053). First entry and post-death.
     Ready,
     Spectating,
-    /// Death stays here until **053** owns the bench.
     Living,
 }
 
@@ -83,7 +83,6 @@ impl MpPhase {
                 | (Character, Role)
                 | (Character, Spectating)
                 | (Character, Lobby)
-                | (Ready, Character)
                 | (Ready, Living)
                 | (Ready, Spectating)
                 | (Ready, Role)
@@ -91,6 +90,7 @@ impl MpPhase {
                 | (Spectating, Character)
                 | (Spectating, Role)
                 | (Spectating, Lobby)
+                | (Living, Ready)
                 | (Living, Spectating)
                 | (Living, Lobby)
         )
@@ -136,6 +136,17 @@ pub struct PeerImpactHitBatch {
 pub struct PendingSpawn {
     pub position: glam::Vec3,
     pub yaw: f32,
+    pub primary: Option<u8>,
+    pub secondary: Option<u8>,
+    pub active: ActiveWeapon,
+}
+
+/// Staged bench loadout (empty until player chooses; no defaults).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StagedLoadout {
+    pub primary: Option<u8>,
+    pub secondary: Option<u8>,
+    pub active: ActiveWeapon,
 }
 
 pub struct FrameEffects {
@@ -167,6 +178,9 @@ pub(crate) struct Shared {
     pub(crate) join_name: String,
     pub(crate) character: u8,
     pub(crate) role: NetRole,
+    pub(crate) staged_primary: Option<u8>,
+    pub(crate) staged_secondary: Option<u8>,
+    pub(crate) staged_active: ActiveWeapon,
 }
 
 impl Shared {
@@ -194,6 +208,9 @@ impl Shared {
             join_name: String::new(),
             character: DEFAULT_CHARACTER,
             role: NetRole::Player,
+            staged_primary: None,
+            staged_secondary: None,
+            staged_active: ActiveWeapon::Primary,
         }
     }
 
@@ -217,6 +234,17 @@ impl Shared {
         self.spawn_requested = false;
         self.character = DEFAULT_CHARACTER;
         self.role = NetRole::Player;
+        self.staged_primary = None;
+        self.staged_secondary = None;
+        self.staged_active = ActiveWeapon::Primary;
+    }
+
+    fn staged_loadout(&self) -> StagedLoadout {
+        StagedLoadout {
+            primary: self.staged_primary,
+            secondary: self.staged_secondary,
+            active: self.staged_active,
+        }
     }
 
     /// Roster is kit/role authority; product phase stays client-side.
@@ -271,6 +299,10 @@ impl MpClient {
         self.shared.borrow().character
     }
 
+    pub fn staged_loadout(&self) -> StagedLoadout {
+        self.shared.borrow().staged_loadout()
+    }
+
     pub fn cam_intent(&self, debug_fly_wanted: bool) -> CamIntent {
         CamIntent::derive(self.phase(), debug_fly_wanted)
     }
@@ -304,7 +336,14 @@ impl MpClient {
                 format!("mp: role name={name}")
             }
             MpPhase::Character => format!("mp: character {}", s.character as char),
-            MpPhase::Ready => format!("mp: ready (spawn) kit={}", s.character as char),
+            MpPhase::Ready => {
+                let p = s.staged_primary.map(|c| c as char).unwrap_or('·');
+                let sec = s.staged_secondary.map(|c| c as char).unwrap_or('·');
+                format!(
+                    "mp: loadout kit={} p={p} s={sec} act={:?}",
+                    s.character as char, s.staged_active
+                )
+            }
             MpPhase::Spectating => "mp: spectating".into(),
             MpPhase::Living => {
                 let id = s
@@ -522,24 +561,83 @@ impl MpClient {
         s.spawn_requested = false;
     }
 
-    /// Commit kit and advance to Ready (`SetCharacter` only).
+    /// Commit kit and advance to loadout bench (`SetCharacter` only). Character stays frozen after.
     pub fn confirm_character(&self, character: u8) -> Option<u8> {
         if !is_known_character(character) {
             return None;
         }
         let mut s = self.shared.borrow_mut();
-        if s.phase != MpPhase::Character && s.phase != MpPhase::Ready {
-            return None;
-        }
-        if s.phase == MpPhase::Character && !s.phase.can_go(MpPhase::Ready) {
+        if s.phase != MpPhase::Character || !s.phase.can_go(MpPhase::Ready) {
             return None;
         }
         s.character = character;
         s.role = NetRole::Player;
         s.phase = MpPhase::Ready;
         s.spawn_requested = false;
+        s.staged_primary = None;
+        s.staged_secondary = None;
+        s.staged_active = ActiveWeapon::Primary;
         send_reliable_locked(&s, &ClientToServer::SetCharacter { character });
         Some(character)
+    }
+
+    /// Stage primary (any known letter or empty). Bench only; cancels in-flight Spawn.
+    pub fn stage_primary(&self, letter: Option<u8>) -> bool {
+        if let Some(l) = letter {
+            if WeaponClass::from_letter(l).is_none() {
+                return false;
+            }
+        }
+        let mut s = self.shared.borrow_mut();
+        if s.phase != MpPhase::Ready {
+            return false;
+        }
+        s.staged_primary = letter;
+        s.spawn_requested = false;
+        s.spawn_retry_accum = 0.0;
+        true
+    }
+
+    /// Stage secondary (launcher/pistol or empty). Illegal class rejected.
+    pub fn stage_secondary(&self, letter: Option<u8>) -> bool {
+        if let Some(l) = letter {
+            match WeaponClass::from_letter(l) {
+                Some(c) if c.allowed_in_secondary() => {}
+                _ => return false,
+            }
+        }
+        let mut s = self.shared.borrow_mut();
+        if s.phase != MpPhase::Ready {
+            return false;
+        }
+        s.staged_secondary = letter;
+        s.spawn_requested = false;
+        s.spawn_retry_accum = 0.0;
+        true
+    }
+
+    pub fn stage_active(&self, active: ActiveWeapon) {
+        let mut s = self.shared.borrow_mut();
+        if s.phase != MpPhase::Ready {
+            return;
+        }
+        s.staged_active = active;
+        s.spawn_requested = false;
+        s.spawn_retry_accum = 0.0;
+    }
+
+    /// Death accepted → loadout bench; staged loadout defaults to what they died with.
+    pub fn return_to_bench_after_death(&self, state: &SelfState) {
+        let mut s = self.shared.borrow_mut();
+        if s.phase != MpPhase::Living || !s.phase.can_go(MpPhase::Ready) {
+            return;
+        }
+        s.phase = MpPhase::Ready;
+        s.spawn_requested = false;
+        s.spawn_retry_accum = 0.0;
+        s.staged_primary = state.primary;
+        s.staged_secondary = state.secondary;
+        s.staged_active = state.active;
     }
 
     pub fn request_spawn(&self) {
@@ -634,7 +732,17 @@ impl Default for MpClient {
 }
 
 fn send_spawn_locked(s: &Shared) {
-    send_reliable_locked(s, &ClientToServer::Spawn);
+    send_reliable_locked(
+        s,
+        &ClientToServer::Spawn {
+            primary: s.staged_primary,
+            secondary: s.staged_secondary,
+            active: match s.staged_active {
+                ActiveWeapon::Primary => NetActiveWeapon::Primary,
+                ActiveWeapon::Secondary => NetActiveWeapon::Secondary,
+            },
+        },
+    );
 }
 
 fn send_reliable_locked(s: &Shared, msg: &ClientToServer) {
@@ -704,9 +812,10 @@ mod phase_tests {
         assert!(MpPhase::Ready.can_go(MpPhase::Living));
         assert!(MpPhase::Spectating.can_go(MpPhase::Character));
         assert!(MpPhase::Living.can_go(MpPhase::Spectating));
+        assert!(MpPhase::Living.can_go(MpPhase::Ready));
         assert!(!MpPhase::Lobby.can_go(MpPhase::Living));
         assert!(!MpPhase::Spectating.can_go(MpPhase::Living));
-        assert!(!MpPhase::Living.can_go(MpPhase::Ready));
+        assert!(!MpPhase::Ready.can_go(MpPhase::Character));
     }
 
     #[test]

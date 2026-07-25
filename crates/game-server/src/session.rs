@@ -270,7 +270,11 @@ async fn handle_control_msg(
     roster: &Mutex<Roster>,
 ) {
     match msg {
-        ClientToServer::Spawn => handle_spawn(player_id, clock, roster).await,
+        ClientToServer::Spawn {
+            primary,
+            secondary,
+            active: _,
+        } => handle_spawn(player_id, primary, secondary, clock, roster).await,
         ClientToServer::SetRole { role } => handle_set_role(player_id, role, clock, roster).await,
         ClientToServer::SetCharacter { character } => {
             handle_set_character(player_id, character, clock, roster).await;
@@ -364,7 +368,7 @@ async fn handle_datagram(
             false
         }
         // Reliable-stream only.
-        ClientToServer::Spawn
+        ClientToServer::Spawn { .. }
         | ClientToServer::SetRole { .. }
         | ClientToServer::SetCharacter { .. }
         | ClientToServer::Hello { .. } => false,
@@ -397,12 +401,18 @@ async fn handle_set_character(
     }
 }
 
-async fn handle_spawn(player_id: PlayerId, clock: &SharedClock, roster: &Mutex<Roster>) {
+async fn handle_spawn(
+    player_id: PlayerId,
+    primary: Option<u8>,
+    secondary: Option<u8>,
+    clock: &SharedClock,
+    roster: &Mutex<Roster>,
+) {
     let tick = clock.tick();
     let (position, yaw) = spawn_pose(tick, player_id);
     let ok = {
         let mut guard = roster.lock().await;
-        guard.try_spawn(player_id)
+        guard.try_spawn(player_id, primary, secondary)
     };
     if !ok {
         return;
