@@ -11,6 +11,7 @@ A WebGPU-powered shooter game built with Rust and Vite.
 - [Testing & Linting](#testing--linting)
 - [Docker Builds](#docker-builds)
 - [Development Workflow](#development-workflow)
+- [Documentation](#documentation)
 - [Contributing](#contributing)
 
 ## Project Structure
@@ -29,7 +30,9 @@ A WebGPU-powered shooter game built with Rust and Vite.
 │   └── cooked/          # Cook outputs (Vite publicDir → lands in web/dist)
 ├── tools/               # Build helpers (e.g. asset cook)
 ├── infra/docker/        # Docker configuration for WASM builds
-├── docs/                # Documentation
+├── docs/
+│   ├── concepts.md      # Sim ontology (terms + authoring rules)
+│   └── features/        # Append-only feature notes
 ├── CONTRIBUTING.md      # Contribution guidelines
 ├── package.json
 ├── Cargo.toml
@@ -142,6 +145,13 @@ With `npm run dev`, press **`` ` ``** (backtick) for the in-game developer conso
 | `lineup` / `draw.lineup` | Toggle blaster lineup (held Kenney row: scale, paint, grip, muzzle markers) |
 | `nethud` / `hud.net` | Top FPS / tick banner (on by default; [034](docs/features/034-mp-shared-tick.md)) |
 | `mp join` / `mp leave` / `mp status` | WebTransport session; shared server tick on the HUD while joined |
+
+## Documentation
+
+| Doc | Role |
+|-----|------|
+| [docs/concepts.md](docs/concepts.md) | Canonical sim ontology: authoring rules and terms (look, facing, joints, fire/hit impulse, loadout, loco, combat). Prefer these names in code and features. |
+| [docs/features/](docs/features/) | Append-only feature notes (what each change meant when it landed). |
 
 ## Contributing
 
