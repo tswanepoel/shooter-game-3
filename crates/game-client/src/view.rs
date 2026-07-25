@@ -14,9 +14,9 @@ const FLY_SPRINT_MULT: f32 = 3.0;
 /// Mouse look sensitivity (radians per pixel). Shared with mounted ocular.
 pub const LOOK_SENS_RAD_PER_PX: f32 = 0.00015;
 /// Flycam pitch matches mounted look (±90°). View matrix stays stable at the poles.
-/// Rest-pose eye before the body mesh reports a posed face point (character-a).
-/// Matches calibrated mount / `FACE_OFFSET_HEAD_KIT` at rest: (0, 1.52, 0.27) m.
+/// Rest eye before mesh reports a posed face point (character-a / FACE_OFFSET).
 const DEFAULT_MOUNTED_EYE_M: Vec3 = Vec3::new(0.0, 1.52, 0.27);
+const DEFAULT_MOUNTED_FORWARD: Vec3 = Vec3::Z;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ViewMode {
@@ -109,8 +109,8 @@ pub struct ViewController {
     mode: ViewMode,
     #[cfg(feature = "debug-tools")]
     fly: FlyPose,
-    /// Mounted eye from posed head (updated each frame).
     mounted_eye: Vec3,
+    mounted_forward: Vec3,
 }
 
 impl Default for ViewController {
@@ -126,11 +126,17 @@ impl ViewController {
             #[cfg(feature = "debug-tools")]
             fly: FlyPose::from_self(&SelfState::default_loadout(), DEFAULT_MOUNTED_EYE_M),
             mounted_eye: DEFAULT_MOUNTED_EYE_M,
+            mounted_forward: DEFAULT_MOUNTED_FORWARD,
         }
     }
 
-    pub fn set_mounted_eye(&mut self, eye: Vec3) {
+    pub fn set_mounted_look(&mut self, eye: Vec3, forward: Vec3) {
         self.mounted_eye = eye;
+        self.mounted_forward = if forward.length_squared() > 1e-12 {
+            forward.normalize()
+        } else {
+            DEFAULT_MOUNTED_FORWARD
+        };
     }
 
     /// World-space eye currently used for the mounted (FP) view.
@@ -231,16 +237,16 @@ impl ViewController {
     pub fn view_matrix(&self, self_state: &SelfState) -> Mat4 {
         let (eye, forward) = self.eye_and_forward(self_state);
         let yaw = match self.mode {
-            ViewMode::Mounted => self_state.look_yaw(),
+            ViewMode::Mounted => forward.x.atan2(forward.z),
             #[cfg(feature = "debug-tools")]
             ViewMode::Flycam => self.fly.yaw,
         };
         look_to_stable(eye, forward, yaw)
     }
 
-    pub fn eye_and_forward(&self, self_state: &SelfState) -> (Vec3, Vec3) {
+    pub fn eye_and_forward(&self, _self_state: &SelfState) -> (Vec3, Vec3) {
         match self.mode {
-            ViewMode::Mounted => (self.mounted_eye, self_state.look_forward()),
+            ViewMode::Mounted => (self.mounted_eye, self.mounted_forward),
             #[cfg(feature = "debug-tools")]
             ViewMode::Flycam => (self.fly.position, self.fly.forward()),
         }
@@ -273,7 +279,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mount_uses_ocular_looking_plus_z() {
+    fn mount_uses_head_forward_plus_z() {
         let v = ViewController::new();
         let s = SelfState::default_loadout();
         let (eye, forward) = v.eye_and_forward(&s);
@@ -303,20 +309,20 @@ mod tests {
         let mut v = ViewController::new();
         let mut s = SelfState::default_loadout();
         s.apply_look(1.0 / 60.0, 0.4, -0.2);
-        // Simulate posed face eye (ahead of default rest along look).
         let fp_eye = Vec3::new(0.05, 1.44, 0.22);
-        v.set_mounted_eye(fp_eye);
+        let fp_fwd = s.look_forward();
+        v.set_mounted_look(fp_eye, fp_fwd);
         let (before_eye, before_fwd) = v.eye_and_forward(&s);
         assert!((before_eye - fp_eye).length() < 1e-6);
+        assert!((before_fwd - fp_fwd.normalize()).length() < 1e-5);
 
         v.enter_flycam(&s, fp_eye);
-        let (after_eye, after_fwd) = v.eye_and_forward(&s);
+        let (after_eye, _) = v.eye_and_forward(&s);
         assert!(
             (after_eye - before_eye).length() < 1e-6,
             "fly eye jumped by {} m",
             (after_eye - before_eye).length()
         );
-        assert!((after_fwd - before_fwd).length() < 1e-5);
     }
 
     #[test]

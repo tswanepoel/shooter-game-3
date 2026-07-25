@@ -1011,7 +1011,8 @@ impl ClientInner {
             #[cfg(not(feature = "debug-tools"))]
             let first_person = true;
             gpu.apply_state(&self.renderer.queue, &self.self_state, first_person);
-            self.view.set_mounted_eye(gpu.view.look_origin);
+            self.view
+                .set_mounted_look(gpu.view.look_origin, gpu.view.look_forward);
         }
 
         if self.mp.joined() {

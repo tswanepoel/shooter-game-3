@@ -3,7 +3,7 @@
 use game_sim::SelfState;
 use glam::{Mat4, Vec3};
 
-use crate::mesh_unlit::{self, AnimClip, CharPart, KitPose, MeshVertex};
+use crate::mesh_unlit::{self, AnimClip, CharPart, MeshVertex};
 
 #[derive(Debug, Clone)]
 pub struct PartHit {
@@ -25,8 +25,7 @@ pub fn trace_segment_parts(
     to: Vec3,
 ) -> Option<PartHit> {
     let k2w = mesh_unlit::kit_to_world(self_state.placement_matrix(), min_y);
-    let (worlds, _) =
-        mesh_unlit::pose_character_kit(parts, self_state, loco, emote, die, KitPose::Present);
+    let (worlds, _) = mesh_unlit::pose_character_kit(parts, self_state, loco, emote, die);
 
     let mut best: Option<PartHit> = None;
     for (i, part) in parts.iter().enumerate() {

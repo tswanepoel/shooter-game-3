@@ -1,20 +1,15 @@
-//! Self body + blaster presentation (013/015/016/017/021/039/048).
-//!
-//! Present draws the body. Look pose mounts the view. Active blaster only when
-//! present-armed. Emote holsters the hold/blaster (039).
+//! Self body + blaster: one posed figure; local view on that head's eye socket.
 
 use game_sim::{emote_clip_name, SelfState, EMOTE_CATALOG, FACE_OFFSET_HEAD_KIT};
 use glam::{Mat4, Vec3};
 use wasm_bindgen::JsValue;
 
 use crate::body_hit::{self, PartHit};
-use crate::mesh_unlit::{
-    self, AnimClip, CharPart, KitPose, MeshVertex, UnlitMeshGpu, UnlitMeshLayout,
-};
+use crate::mesh_unlit::{self, AnimClip, CharPart, MeshVertex, UnlitMeshGpu, UnlitMeshLayout};
 
-/// First-person mount from the look pose.
 pub struct MountedView {
     pub look_origin: Vec3,
+    pub look_forward: Vec3,
     pub reticle_world: Option<Vec3>,
 }
 
@@ -85,14 +80,8 @@ impl SelfGpu {
         };
         let emote = emote_pair(self_state, &emote_clips);
         let die = die_pair(self_state, &die_clip);
-        let (worlds, arm_kit) = mesh_unlit::pose_character_kit(
-            &parts,
-            self_state,
-            Some(loco),
-            emote,
-            die,
-            KitPose::Present,
-        );
+        let (worlds, arm_kit) =
+            mesh_unlit::pose_character_kit(&parts, self_state, Some(loco), emote, die);
         let k2w = mesh_unlit::kit_to_world(self_state.placement_matrix(), min_y);
 
         let mut char_cpu: Vec<(Vec<MeshVertex>, Vec<u32>, [f32; 4])> = Vec::new();
@@ -183,6 +172,7 @@ impl SelfGpu {
             min_y,
             view: MountedView {
                 look_origin: Vec3::ZERO,
+                look_forward: Vec3::Z,
                 reticle_world: None,
             },
         };
@@ -201,14 +191,8 @@ impl SelfGpu {
         };
         let emote = emote_pair(self_state, &self.emote_clips);
         let die = die_pair(self_state, &self.die_clip);
-        let (_, arm_kit) = mesh_unlit::pose_character_kit(
-            &self.parts,
-            self_state,
-            Some(loco),
-            emote,
-            die,
-            KitPose::Present,
-        );
+        let (_, arm_kit) =
+            mesh_unlit::pose_character_kit(&self.parts, self_state, Some(loco), emote, die);
         (k2w, arm_kit)
     }
 
@@ -291,7 +275,8 @@ impl SelfGpu {
         )
     }
 
-    /// Body + active blaster from drive. `first_person` hides the head shell.
+    /// Body + active blaster from drive; mounts view on the posed head.
+    /// `first_person` hides the head shell.
     pub fn apply_present(
         &mut self,
         queue: &wgpu::Queue,
@@ -317,14 +302,8 @@ impl SelfGpu {
         };
         let emote = emote_pair(self_state, &self.emote_clips);
         let die = die_pair(self_state, &self.die_clip);
-        let (present_worlds, arm_kit) = mesh_unlit::pose_character_kit(
-            &self.parts,
-            self_state,
-            Some(loco),
-            emote,
-            die,
-            KitPose::Present,
-        );
+        let (present_worlds, arm_kit) =
+            mesh_unlit::pose_character_kit(&self.parts, self_state, Some(loco), emote, die);
 
         for (i, part) in self.parts.iter().enumerate() {
             let Some(prim) = self.part_prim[i] else {
@@ -360,31 +339,18 @@ impl SelfGpu {
                 self.mesh.write_prim_verts(queue, b.batch, pi, &verts);
             }
         }
-    }
 
-    pub fn apply_look_view(&mut self, self_state: &SelfState) {
-        let k2w = mesh_unlit::kit_to_world(self_state.placement_matrix(), self.min_y);
-        let (look_worlds, _) = mesh_unlit::pose_character_kit(
-            &self.parts,
-            self_state,
-            Some(&self.walk_clip),
-            None,
-            None,
-            KitPose::Look,
-        );
-        let look_origin = look_origin_world(&self.parts, &look_worlds, k2w);
+        let (look_origin, look_forward) = look_from_head(&self.parts, &present_worlds, k2w);
         let reticle_world = self_state.reticle_world(look_origin);
-
         self.view = MountedView {
             look_origin,
+            look_forward,
             reticle_world,
         };
     }
 
-    /// Present body + look mount from one sim figure state.
     pub fn apply_state(&mut self, queue: &wgpu::Queue, self_state: &SelfState, first_person: bool) {
         self.apply_present(queue, self_state, first_person);
-        self.apply_look_view(self_state);
     }
 
     /// Whether both loadout letters are already GPU-resident (dev equip).
@@ -412,13 +378,22 @@ fn held_with_grip_bore(k2w: Mat4, arm_kit: Mat4, letter_index: usize, grip_bore_
     held * t * Mat4::from_translation(Vec3::new(0.0, 0.0, grip_bore_m)) * t.inverse()
 }
 
-fn look_origin_world(parts: &[CharPart], worlds: &[Mat4], k2w: Mat4) -> Vec3 {
+/// Eye socket on posed head; forward is kit face (+Z).
+fn look_from_head(parts: &[CharPart], worlds: &[Mat4], k2w: Mat4) -> (Vec3, Vec3) {
     let head_kit = parts
         .iter()
         .position(|p| p.name == "head")
         .map(|i| worlds[i])
         .unwrap_or(Mat4::IDENTITY);
-    k2w.transform_point3(head_kit.transform_point3(FACE_OFFSET_HEAD_KIT))
+    let head_world = k2w * head_kit;
+    let origin = head_world.transform_point3(FACE_OFFSET_HEAD_KIT);
+    let forward = head_world.transform_vector3(Vec3::Z).normalize_or_zero();
+    let forward = if forward.length_squared() < 1e-12 {
+        Vec3::Z
+    } else {
+        forward
+    };
+    (origin, forward)
 }
 
 fn emote_pair<'a>(self_state: &SelfState, clips: &'a [AnimClip]) -> Option<(&'a AnimClip, f32)> {
