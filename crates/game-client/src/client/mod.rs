@@ -1,0 +1,153 @@
+//! Client runtime state and frame ownership.
+
+mod frame;
+mod impact;
+pub(crate) mod load;
+
+use std::collections::HashMap;
+
+use game_net::PlayerId;
+#[cfg(feature = "debug-tools")]
+use game_sim::equip_blaster_letter;
+use game_sim::{FireState, PlayerHealth, ProjectileWorld, SelfState};
+use web_sys::HtmlCanvasElement;
+
+#[cfg(feature = "debug-tools")]
+use crate::debug::DebugTools;
+use crate::emote_wheel::EmoteWheel;
+use crate::hit_marker::HitMarker;
+use crate::input::{InputSession, MoveInput};
+#[cfg(feature = "debug-tools")]
+use crate::lineup::LineupState;
+use crate::mp;
+use crate::remote_present::RemotePresent;
+use crate::renderer::Renderer;
+use crate::self_present::SelfPresentState;
+use crate::ui_overlay::UiOverlay;
+#[cfg(feature = "debug-tools")]
+use crate::view::FlyInput;
+use crate::view::ViewController;
+pub(crate) struct ClientInner {
+    renderer: Renderer,
+    pub(crate) canvas: HtmlCanvasElement,
+    /// Buffer / CSS size (HiDPI).
+    pixels_per_point: f32,
+    pub(crate) self_state: SelfState,
+    pub(crate) view: ViewController,
+    pub(crate) session: InputSession,
+    pub(crate) move_input: MoveInput,
+    emote_wheel: EmoteWheel,
+    hit_marker: HitMarker,
+    self_present: SelfPresentState,
+    remote_present: RemotePresent,
+    fire: FireState,
+    projectiles: ProjectileWorld,
+    health_by_id: HashMap<PlayerId, PlayerHealth>,
+    last_frame_secs: f64,
+    #[cfg(feature = "debug-tools")]
+    fps_ema: f32,
+    pub(crate) mp: mp::MpClient,
+    pub(crate) ui: UiOverlay,
+    #[cfg(feature = "debug-tools")]
+    pub(crate) debug: DebugTools,
+    #[cfg(feature = "debug-tools")]
+    pub(crate) fly_input: FlyInput,
+    #[cfg(feature = "debug-tools")]
+    lineup: LineupState,
+}
+
+impl ClientInner {
+    pub(crate) fn new(
+        renderer: Renderer,
+        canvas: HtmlCanvasElement,
+        pixels_per_point: f32,
+        self_state: SelfState,
+        view: ViewController,
+        ui: UiOverlay,
+        #[cfg(feature = "debug-tools")] debug: DebugTools,
+    ) -> Self {
+        Self {
+            renderer,
+            canvas,
+            pixels_per_point,
+            self_state,
+            view,
+            session: InputSession::new(),
+            move_input: MoveInput::default(),
+            emote_wheel: EmoteWheel::new(),
+            hit_marker: HitMarker::new(),
+            self_present: SelfPresentState::Idle,
+            remote_present: RemotePresent::new(),
+            fire: FireState::new(),
+            projectiles: ProjectileWorld::new(),
+            health_by_id: HashMap::new(),
+            last_frame_secs: 0.0,
+            #[cfg(feature = "debug-tools")]
+            fps_ema: 0.0,
+            mp: mp::MpClient::new(),
+            ui,
+            #[cfg(feature = "debug-tools")]
+            debug,
+            #[cfg(feature = "debug-tools")]
+            fly_input: FlyInput::default(),
+            #[cfg(feature = "debug-tools")]
+            lineup: LineupState::Idle,
+        }
+    }
+
+    #[cfg(feature = "debug-tools")]
+    fn drain_debug_host_requests(&mut self) {
+        use crate::debug::DebugHostRequest;
+        for req in self.debug.take_host_requests() {
+            match req {
+                DebugHostRequest::Screenshot => {}
+                DebugHostRequest::MpJoin => {
+                    self.mp.begin_join();
+                    self.debug.shell.push_log("mp: joining…");
+                    self.ui.set_status("joining…");
+                }
+                DebugHostRequest::MpLeave => {
+                    self.mp.leave();
+                    self.remote_present.clear();
+                    self.health_by_id.clear();
+                    self.debug.shell.push_log("mp: left (solo)");
+                    self.ui.set_status(String::new());
+                }
+                DebugHostRequest::MpStatus => {
+                    self.debug.shell.push_log(self.mp.status_line());
+                }
+                DebugHostRequest::Blaster(letter) => {
+                    let msg = self.equip_blaster_cmd(letter);
+                    self.debug.shell.push_log(msg);
+                }
+            }
+        }
+        // Optional debug tracers (038).
+        self.renderer.fire_fx.show_tracers = self.debug.draw_tracers();
+    }
+
+    #[cfg(feature = "debug-tools")]
+    fn equip_blaster_cmd(&mut self, letter: u8) -> String {
+        if self.fire.blocks_weapon_side() {
+            return "blaster: wait for burst to finish".into();
+        }
+        match equip_blaster_letter(&mut self.self_state, letter) {
+            Ok(_) => {
+                self.fire.pay_ready(letter);
+                let need_reload = match &self.self_present {
+                    SelfPresentState::Ready(gpu) => !gpu.has_blaster_letter(letter),
+                    _ => true,
+                };
+                if need_reload {
+                    self.self_present = SelfPresentState::Idle;
+                }
+                format!(
+                    "blaster {} (active={:?})",
+                    letter as char,
+                    self.self_state.active_blaster().map(|l| l as char)
+                )
+            }
+            Err(e) => format!("blaster: {e}"),
+        }
+    }
+}
