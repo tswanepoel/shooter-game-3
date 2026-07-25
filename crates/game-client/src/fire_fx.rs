@@ -3,50 +3,8 @@
 use std::collections::HashMap;
 
 use game_net::PlayerId;
-use game_sim::{weapon_def, Projectile, WeaponDef};
+use game_sim::{weapon_def, Projectile, SelfState, WeaponDef};
 use glam::{Mat4, Vec3};
-
-/// Peer present residual (not combat). Soft fold/twist + grip bore.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct RemotePresentResidual {
-    pub fold_rad: f32,
-    pub twist_rad: f32,
-    pub grip_bore_m: f32,
-}
-
-impl RemotePresentResidual {
-    fn add_fire(&mut self, def: &WeaponDef, yaw_sign: f32) {
-        let k = def.kick;
-        let sign = if yaw_sign >= 0.0 { 1.0 } else { -1.0 };
-        self.fold_rad += k.pitch_deg.to_radians();
-        self.twist_rad += k.yaw_deg.to_radians() * sign;
-        self.grip_bore_m += k.back_m;
-    }
-
-    fn settle(&mut self, dt: f32, settle_s: f32) {
-        if settle_s <= 1e-6 {
-            *self = Self::default();
-            return;
-        }
-        let t = (dt / settle_s).clamp(0.0, 1.0);
-        self.fold_rad *= 1.0 - t;
-        self.twist_rad *= 1.0 - t;
-        self.grip_bore_m *= 1.0 - t;
-        if self.fold_rad.abs() < 1e-5 {
-            self.fold_rad = 0.0;
-        }
-        if self.twist_rad.abs() < 1e-5 {
-            self.twist_rad = 0.0;
-        }
-        if self.grip_bore_m.abs() < 1e-6 {
-            self.grip_bore_m = 0.0;
-        }
-    }
-
-    fn is_quiet(self) -> bool {
-        self.fold_rad.abs() + self.twist_rad.abs() + self.grip_bore_m.abs() <= 1e-5
-    }
-}
 
 /// Flash sphere radius (m).
 const FLASH_RADIUS_M: f32 = 0.03;
@@ -118,10 +76,10 @@ struct Flash {
     pos: Vec3,
 }
 
-/// Muzzle flash + peer present residual + optional tracers.
+/// Muzzle flash, peer fire residual, optional tracers.
 pub struct FireFx {
     flashes: Vec<Flash>,
-    remote_present: HashMap<PlayerId, (RemotePresentResidual, f32)>,
+    remote_residual: HashMap<PlayerId, SelfState>,
     pub show_tracers: bool,
     pipeline: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
@@ -238,7 +196,7 @@ impl FireFx {
 
         Self {
             flashes: Vec::new(),
-            remote_present: HashMap::new(),
+            remote_residual: HashMap::new(),
             show_tracers: false,
             pipeline,
             bind_group,
@@ -280,11 +238,10 @@ impl FireFx {
             });
         }
         let entry = self
-            .remote_present
+            .remote_residual
             .entry(id)
-            .or_insert((RemotePresentResidual::default(), def.kick.settle_s));
-        entry.0.add_fire(def, yaw_sign);
-        entry.1 = def.kick.settle_s.max(1e-4);
+            .or_insert_with(SelfState::default_loadout);
+        entry.apply_fire_impulse(def, yaw_sign);
     }
 
     pub fn note_peer_projectiles(
@@ -305,11 +262,10 @@ impl FireFx {
         self.note_remote_discharge(id, def, muzzle_indices, seed_worlds, yaw);
     }
 
-    pub fn remote_present_residual(&self, id: PlayerId) -> RemotePresentResidual {
-        self.remote_present
-            .get(&id)
-            .map(|(r, _)| *r)
-            .unwrap_or_default()
+    pub fn apply_remote_fire_residual(&self, id: PlayerId, state: &mut SelfState) {
+        if let Some(src) = self.remote_residual.get(&id) {
+            src.copy_fire_residual_to(state);
+        }
     }
 
     pub fn rebind_positions(
@@ -329,10 +285,10 @@ impl FireFx {
             f.age += dt;
         }
         self.flashes.retain(|f| f.age < FLASH_LIFE_S);
-        for (res, settle) in self.remote_present.values_mut() {
-            res.settle(dt, *settle);
+        for s in self.remote_residual.values_mut() {
+            s.tick_joint_residual(dt, false);
         }
-        self.remote_present.retain(|_, (res, _)| !res.is_quiet());
+        self.remote_residual.retain(|_, s| s.has_fire_residual());
     }
 
     pub fn update_draw(

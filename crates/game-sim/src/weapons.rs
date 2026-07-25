@@ -1,8 +1,8 @@
-//! Baked weapon fire table (038/040/041/042/047/048).
+//! Baked weapon fire table (038/040/041/042/048/049).
 //!
 //! Blaster owns initial velocity and ammo kind (via class). Ammo mass is on
-//! [`crate::AmmoKind`]. Fire-impulse size and base fall live here; heat scaling
-//! of fall is on the figure.
+//! [`crate::AmmoKind`]. Fire-impulse size and base fall live here; continue-fall
+//! scaling is on the figure.
 
 use crate::{ammo_for_class, AmmoKind, WeaponClass};
 
@@ -30,11 +30,11 @@ pub enum MuzzlePolicy {
 
 /// Fire impulse size for a blaster (fold/twist deg, grip bore m, base fall s).
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct WeaponKick {
+pub struct FireImpulseSize {
     pub pitch_deg: f32,
     pub yaw_deg: f32,
     pub back_m: f32,
-    pub settle_s: f32,
+    pub fall_s: f32,
 }
 
 /// Resting aim-hold bands (041). Amplitudes in degrees; slight by design.
@@ -71,7 +71,7 @@ pub struct WeaponDef {
     pub pellets: u8,
     /// Burst string length (meaningful for [`FireMode::Burst`]).
     pub burst_count: u8,
-    pub kick: WeaponKick,
+    pub fire_impulse: FireImpulseSize,
 }
 
 impl WeaponDef {
@@ -96,43 +96,43 @@ pub const SPRINT_FIRE_BASE_S: f32 = 0.12;
 /// Projectile gravity (m/s²).
 pub const PROJECTILE_GRAVITY: glam::Vec3 = glam::Vec3::new(0.0, -9.81, 0.0);
 
-fn kick_for(class: WeaponClass) -> WeaponKick {
+fn fire_impulse_for(class: WeaponClass) -> FireImpulseSize {
     match class {
-        WeaponClass::Pistol => WeaponKick {
+        WeaponClass::Pistol => FireImpulseSize {
             pitch_deg: 0.55,
             yaw_deg: 0.14,
             back_m: 0.009,
-            settle_s: 0.05,
+            fall_s: 0.05,
         },
-        WeaponClass::Smg => WeaponKick {
+        WeaponClass::Smg => FireImpulseSize {
             pitch_deg: 0.50,
             yaw_deg: 0.14,
             back_m: 0.007,
-            settle_s: 0.055,
+            fall_s: 0.055,
         },
-        WeaponClass::AssaultRifle => WeaponKick {
+        WeaponClass::AssaultRifle => FireImpulseSize {
             pitch_deg: 0.55,
             yaw_deg: 0.14,
             back_m: 0.010,
-            settle_s: 0.055,
+            fall_s: 0.055,
         },
-        WeaponClass::SniperRifle => WeaponKick {
+        WeaponClass::SniperRifle => FireImpulseSize {
             pitch_deg: 0.85,
             yaw_deg: 0.16,
             back_m: 0.013,
-            settle_s: 0.055,
+            fall_s: 0.055,
         },
-        WeaponClass::Shotgun => WeaponKick {
+        WeaponClass::Shotgun => FireImpulseSize {
             pitch_deg: 1.05,
             yaw_deg: 0.26,
             back_m: 0.018,
-            settle_s: 0.055,
+            fall_s: 0.055,
         },
-        WeaponClass::Launcher => WeaponKick {
+        WeaponClass::Launcher => FireImpulseSize {
             pitch_deg: 1.15,
             yaw_deg: 0.18,
             back_m: 0.020,
-            settle_s: 0.055,
+            fall_s: 0.055,
         },
     }
 }
@@ -226,11 +226,11 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         muzzle_policy: MuzzlePolicy::Single,
         pellets: 1,
         burst_count: 0,
-        kick: WeaponKick {
+        fire_impulse: FireImpulseSize {
             pitch_deg: 1.15,
             yaw_deg: 0.18,
             back_m: 0.020,
-            settle_s: 0.055,
+            fall_s: 0.055,
         },
     },
     // b pistol
@@ -246,11 +246,11 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         muzzle_policy: MuzzlePolicy::Single,
         pellets: 1,
         burst_count: 0,
-        kick: WeaponKick {
+        fire_impulse: FireImpulseSize {
             pitch_deg: 0.55,
             yaw_deg: 0.14,
             back_m: 0.009,
-            settle_s: 0.05,
+            fall_s: 0.05,
         },
     },
     // c smg
@@ -266,11 +266,11 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         muzzle_policy: MuzzlePolicy::Single,
         pellets: 1,
         burst_count: 0,
-        kick: WeaponKick {
+        fire_impulse: FireImpulseSize {
             pitch_deg: 0.50,
             yaw_deg: 0.14,
             back_m: 0.007,
-            settle_s: 0.055,
+            fall_s: 0.055,
         },
     },
     // d AR
@@ -286,11 +286,11 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         muzzle_policy: MuzzlePolicy::Single,
         pellets: 1,
         burst_count: 3,
-        kick: WeaponKick {
+        fire_impulse: FireImpulseSize {
             pitch_deg: 0.55,
             yaw_deg: 0.14,
             back_m: 0.010,
-            settle_s: 0.055,
+            fall_s: 0.055,
         },
     },
     // e sniper
@@ -306,11 +306,11 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         muzzle_policy: MuzzlePolicy::Single,
         pellets: 1,
         burst_count: 0,
-        kick: WeaponKick {
+        fire_impulse: FireImpulseSize {
             pitch_deg: 0.85,
             yaw_deg: 0.16,
             back_m: 0.013,
-            settle_s: 0.055,
+            fall_s: 0.055,
         },
     },
     // f sniper
@@ -326,11 +326,11 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         muzzle_policy: MuzzlePolicy::Single,
         pellets: 1,
         burst_count: 0,
-        kick: WeaponKick {
+        fire_impulse: FireImpulseSize {
             pitch_deg: 0.85,
             yaw_deg: 0.16,
             back_m: 0.013,
-            settle_s: 0.055,
+            fall_s: 0.055,
         },
     },
     // g smg
@@ -346,11 +346,11 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         muzzle_policy: MuzzlePolicy::Single,
         pellets: 1,
         burst_count: 0,
-        kick: WeaponKick {
+        fire_impulse: FireImpulseSize {
             pitch_deg: 0.50,
             yaw_deg: 0.14,
             back_m: 0.007,
-            settle_s: 0.055,
+            fall_s: 0.055,
         },
     },
     // h smg
@@ -366,11 +366,11 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         muzzle_policy: MuzzlePolicy::Single,
         pellets: 1,
         burst_count: 0,
-        kick: WeaponKick {
+        fire_impulse: FireImpulseSize {
             pitch_deg: 0.50,
             yaw_deg: 0.14,
             back_m: 0.007,
-            settle_s: 0.055,
+            fall_s: 0.055,
         },
     },
     // i pistol alternate
@@ -386,11 +386,11 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         muzzle_policy: MuzzlePolicy::Alternate,
         pellets: 1,
         burst_count: 0,
-        kick: WeaponKick {
+        fire_impulse: FireImpulseSize {
             pitch_deg: 0.55,
             yaw_deg: 0.14,
             back_m: 0.009,
-            settle_s: 0.05,
+            fall_s: 0.05,
         },
     },
     // j shotgun all(2) × 3
@@ -406,11 +406,11 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         muzzle_policy: MuzzlePolicy::All,
         pellets: 3,
         burst_count: 0,
-        kick: WeaponKick {
+        fire_impulse: FireImpulseSize {
             pitch_deg: 1.05,
             yaw_deg: 0.26,
             back_m: 0.018,
-            settle_s: 0.055,
+            fall_s: 0.055,
         },
     },
     // k shotgun single × 6
@@ -426,11 +426,11 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         muzzle_policy: MuzzlePolicy::Single,
         pellets: 6,
         burst_count: 0,
-        kick: WeaponKick {
+        fire_impulse: FireImpulseSize {
             pitch_deg: 1.05,
             yaw_deg: 0.26,
             back_m: 0.018,
-            settle_s: 0.055,
+            fall_s: 0.055,
         },
     },
     // l smg alternate
@@ -446,11 +446,11 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         muzzle_policy: MuzzlePolicy::Alternate,
         pellets: 1,
         burst_count: 0,
-        kick: WeaponKick {
+        fire_impulse: FireImpulseSize {
             pitch_deg: 0.50,
             yaw_deg: 0.14,
             back_m: 0.007,
-            settle_s: 0.055,
+            fall_s: 0.055,
         },
     },
     // m smg
@@ -466,11 +466,11 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         muzzle_policy: MuzzlePolicy::Single,
         pellets: 1,
         burst_count: 0,
-        kick: WeaponKick {
+        fire_impulse: FireImpulseSize {
             pitch_deg: 0.50,
             yaw_deg: 0.14,
             back_m: 0.007,
-            settle_s: 0.055,
+            fall_s: 0.055,
         },
     },
     // n AR
@@ -486,11 +486,11 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         muzzle_policy: MuzzlePolicy::Single,
         pellets: 1,
         burst_count: 3,
-        kick: WeaponKick {
+        fire_impulse: FireImpulseSize {
             pitch_deg: 0.55,
             yaw_deg: 0.14,
             back_m: 0.010,
-            settle_s: 0.055,
+            fall_s: 0.055,
         },
     },
     // o shotgun all(4) × 2
@@ -506,11 +506,11 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         muzzle_policy: MuzzlePolicy::All,
         pellets: 2,
         burst_count: 0,
-        kick: WeaponKick {
+        fire_impulse: FireImpulseSize {
             pitch_deg: 1.05,
             yaw_deg: 0.26,
             back_m: 0.018,
-            settle_s: 0.055,
+            fall_s: 0.055,
         },
     },
     // p smg
@@ -526,11 +526,11 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         muzzle_policy: MuzzlePolicy::Alternate,
         pellets: 1,
         burst_count: 0,
-        kick: WeaponKick {
+        fire_impulse: FireImpulseSize {
             pitch_deg: 0.50,
             yaw_deg: 0.14,
             back_m: 0.007,
-            settle_s: 0.055,
+            fall_s: 0.055,
         },
     },
     // q AR alternate
@@ -546,11 +546,11 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         muzzle_policy: MuzzlePolicy::Alternate,
         pellets: 1,
         burst_count: 3,
-        kick: WeaponKick {
+        fire_impulse: FireImpulseSize {
             pitch_deg: 0.55,
             yaw_deg: 0.14,
             back_m: 0.010,
-            settle_s: 0.055,
+            fall_s: 0.055,
         },
     },
     // r AR
@@ -566,11 +566,11 @@ pub static WEAPON_TABLE: [WeaponDef; 18] = [
         muzzle_policy: MuzzlePolicy::Single,
         pellets: 1,
         burst_count: 3,
-        kick: WeaponKick {
+        fire_impulse: FireImpulseSize {
             pitch_deg: 0.55,
             yaw_deg: 0.14,
             back_m: 0.010,
-            settle_s: 0.055,
+            fall_s: 0.055,
         },
     },
 ];
@@ -581,8 +581,8 @@ pub fn weapon_def(letter: u8) -> Option<&'static WeaponDef> {
     WEAPON_TABLE.get(i).filter(|d| d.letter == letter)
 }
 
-pub fn class_kick(class: WeaponClass) -> WeaponKick {
-    kick_for(class)
+pub fn class_fire_impulse(class: WeaponClass) -> FireImpulseSize {
+    fire_impulse_for(class)
 }
 
 pub fn class_sway(class: WeaponClass) -> WeaponSway {

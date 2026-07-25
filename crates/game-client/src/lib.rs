@@ -1021,14 +1021,12 @@ impl ClientInner {
                 .samples()
                 .map(|(id, s)| (id, s.drive.clone()))
                 .collect();
-            let residuals: std::collections::HashMap<_, _> = samples
-                .iter()
-                .map(|(id, _)| (*id, self.renderer.fire_fx.remote_present_residual(*id)))
-                .collect();
             self.remote_present.apply_all(
                 &self.renderer.queue,
                 samples.into_iter(),
-                |id| residuals.get(&id).copied().unwrap_or_default(),
+                |id, state| {
+                    self.renderer.fire_fx.apply_remote_fire_residual(id, state);
+                },
                 |id| {
                     self.health_by_id
                         .get(&id)
@@ -1091,11 +1089,13 @@ impl ClientInner {
                 .mp
                 .remotes()
                 .samples()
-                .map(|(id, s)| (id, mp::drive_to_state(&s.drive)))
-                .collect();
-            let remote_residuals: std::collections::HashMap<_, _> = remote_states
-                .keys()
-                .map(|&id| (id, self.renderer.fire_fx.remote_present_residual(id)))
+                .map(|(id, s)| {
+                    let mut state = mp::drive_to_state(&s.drive);
+                    self.renderer
+                        .fire_fx
+                        .apply_remote_fire_residual(id, &mut state);
+                    (id, state)
+                })
                 .collect();
             let self_state = &self.self_state;
             let self_present = &self.self_present;
@@ -1111,13 +1111,8 @@ impl ClientInner {
                         _ => None,
                     },
                     Some(id) => {
-                        let mut state = remote_states.get(&id)?.clone();
-                        let res = remote_residuals.get(&id).copied().unwrap_or_default();
-                        state.shoulder_fire_fold = res.fold_rad;
-                        state.shoulder_fire_twist = res.twist_rad;
-                        state.grip_bore_m = res.grip_bore_m;
-                        state.compose_joints();
-                        remote_present.flash_muzzle_world(id, &state, res.grip_bore_m, mi)
+                        let state = remote_states.get(&id)?;
+                        remote_present.flash_muzzle_world(id, state, state.grip_bore_m, mi)
                     }
                 });
         }
@@ -1221,8 +1216,8 @@ impl ClientInner {
 
             let hud_line = {
                 let net = self.debug.net_hud();
-                let kick = self.debug.kick_hud();
-                if !net && !kick {
+                let residual = self.debug.residual_hud();
+                if !net && !residual {
                     None
                 } else {
                     let mut parts: Vec<String> = Vec::new();
@@ -1234,13 +1229,15 @@ impl ClientInner {
                         }
                         parts.push(line);
                     }
-                    if kick {
+                    if residual {
+                        let cont = self.fire.fire_continues();
+                        let fall_ms = self.self_state.fire_fall_eff_s(cont) * 1000.0;
                         parts.push(format!(
-                            "heat {:.2}  fF {:.2}°  fT {:.2}°  fall {:.0}ms",
-                            self.self_state.fire_heat_weight(),
+                            "fF {:.2}°  fT {:.2}°  fall {:.0}ms{}",
                             self.self_state.fire_fold_total().to_degrees(),
                             self.self_state.shoulder_fire_twist.to_degrees(),
-                            self.self_state.fire_fall_eff_s() * 1000.0,
+                            fall_ms,
+                            if cont { "  cont" } else { "" },
                         ));
                     }
                     Some(parts.join("  |  "))

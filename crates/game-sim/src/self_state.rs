@@ -18,20 +18,13 @@ pub const SHOULDER_PITCH_OUTWARD_RAD: f32 = 82.5_f32.to_radians();
 
 const HEAD_PITCH_BUDGET_RAD: f32 = 50.0_f32.to_radians();
 
-const FIRE_HEAT_RISE: f32 = 0.26;
-const FIRE_HEAT_RECOVER_S: f32 = 0.35;
-const FIRE_HEAT_FALL_MULT: f32 = 40.0;
-const FIRE_HEAT_CURVE: f32 = 8.0;
+const FIRE_CONTINUE_FALL_MULT: f32 = 6.0;
 
 const HIT_FOLD_DEG_PER_DMG: f32 = 0.055;
 const HIT_TWIST_DEG_PER_DMG: f32 = 0.022;
 const HIT_FOLD_CAP_DEG: f32 = 1.6;
 const HIT_TWIST_CAP_DEG: f32 = 0.65;
 const HIT_FALL_S: f32 = 0.12;
-
-fn fire_heat_weight(raw: f32) -> f32 {
-    raw.clamp(0.0, 1.0).powf(FIRE_HEAT_CURVE)
-}
 
 fn fall_toward_zero(value: f32, dt: f32, fall_s: f32) -> f32 {
     if fall_s <= 1e-6 {
@@ -216,10 +209,8 @@ pub struct SelfState {
     /// Grip socket bore travel from fire impulse (m along bore, + back).
     pub grip_bore_m: f32,
 
-    /// Base fire residual fall time (s).
+    /// Base fire residual fall time (s), from last fire impulse size.
     pub fire_fall_s: f32,
-    /// Raw fire heat 0…1; slows fire residual fall while fire is held.
-    fire_heat: f32,
     pub hit_fall_s: f32,
 
     /// Active emote wheel slot (`0`…`3`), if any (039).
@@ -275,7 +266,6 @@ impl SelfState {
             neck_hit_fold: 0.0,
             grip_bore_m: 0.0,
             fire_fall_s: 0.08,
-            fire_heat: 0.0,
             hit_fall_s: HIT_FALL_S,
             emote: None,
             emote_age_s: 0.0,
@@ -343,7 +333,7 @@ impl SelfState {
             self.clear_emote();
             self.wish_forward = 0.0;
             self.wish_strafe = 0.0;
-            self.clear_aim_residual();
+            self.clear_joint_residual();
             if !self.locomotion.is_air() {
                 self.locomotion = LocomotionMode::Stand;
                 self.walk_phase = 0.0;
@@ -733,31 +723,31 @@ impl SelfState {
         Some(look_origin + dir * RETICLE_DEPTH_M)
     }
 
-    pub fn fire_heat_weight(&self) -> f32 {
-        fire_heat_weight(self.fire_heat)
-    }
-
-    pub fn fire_fall_eff_s(&self) -> f32 {
-        let w = fire_heat_weight(self.fire_heat);
-        self.fire_fall_s * (1.0 + w * (FIRE_HEAT_FALL_MULT - 1.0))
+    /// Effective fire residual fall time (s). Slower while fire continues.
+    pub fn fire_fall_eff_s(&self, fire_continues: bool) -> f32 {
+        let base = self.fire_fall_s.max(1e-4);
+        if fire_continues {
+            base * FIRE_CONTINUE_FALL_MULT
+        } else {
+            base
+        }
     }
 
     pub fn apply_fire_impulse(&mut self, def: &WeaponDef, yaw_sign: f32) {
         if !self.alive {
             return;
         }
-        let k = def.kick;
+        let imp = def.fire_impulse;
         let sign = if yaw_sign >= 0.0 { 1.0 } else { -1.0 };
-        let fold = k.pitch_deg.to_radians();
-        let twist = k.yaw_deg.to_radians() * sign;
+        let fold = imp.pitch_deg.to_radians();
+        let twist = imp.yaw_deg.to_radians() * sign;
         let (hip, shoulder, neck) = residual_fold_split(fold);
         self.hip_fire_fold += hip;
         self.shoulder_fire_fold += shoulder;
         self.neck_fire_fold += neck;
         self.shoulder_fire_twist += twist;
-        self.grip_bore_m += k.back_m;
-        self.fire_fall_s = k.settle_s.max(1e-4);
-        self.fire_heat = (self.fire_heat + FIRE_HEAT_RISE).min(1.0);
+        self.grip_bore_m += imp.back_m;
+        self.fire_fall_s = imp.fall_s.max(1e-4);
         self.compose_joints();
     }
 
@@ -794,36 +784,58 @@ impl SelfState {
         self.compose_joints();
     }
 
-    pub fn clear_aim_residual(&mut self) {
+    /// Clear fire residual, sway, and grip bore. Hit residual stays.
+    pub fn clear_fire_residual(&mut self) {
         self.hip_fire_fold = 0.0;
-        self.hip_hit_fold = 0.0;
         self.shoulder_fire_fold = 0.0;
         self.shoulder_fire_twist = 0.0;
-        self.shoulder_hit_fold = 0.0;
-        self.shoulder_hit_twist = 0.0;
         self.shoulder_sway_fold = 0.0;
         self.shoulder_sway_twist = 0.0;
         self.neck_fire_fold = 0.0;
-        self.neck_hit_fold = 0.0;
         self.grip_bore_m = 0.0;
-        self.fire_heat = 0.0;
         self.compose_joints();
     }
 
-    /// Fall residual. Fire fall slows while `string_active`.
-    pub fn tick_aim_residual(&mut self, dt: f32, string_active: bool) {
+    /// Clear fire and hit residual (death / full reset).
+    pub fn clear_joint_residual(&mut self) {
+        self.clear_fire_residual();
+        self.hip_hit_fold = 0.0;
+        self.shoulder_hit_fold = 0.0;
+        self.shoulder_hit_twist = 0.0;
+        self.neck_hit_fold = 0.0;
+        self.compose_joints();
+    }
+
+    /// Copy fire residual fields onto another figure (remote present).
+    pub fn copy_fire_residual_to(&self, dst: &mut Self) {
+        dst.hip_fire_fold = self.hip_fire_fold;
+        dst.shoulder_fire_fold = self.shoulder_fire_fold;
+        dst.shoulder_fire_twist = self.shoulder_fire_twist;
+        dst.neck_fire_fold = self.neck_fire_fold;
+        dst.grip_bore_m = self.grip_bore_m;
+        dst.fire_fall_s = self.fire_fall_s;
+        dst.compose_joints();
+    }
+
+    /// True when fire residual or grip bore is still non-zero.
+    pub fn has_fire_residual(&self) -> bool {
+        self.hip_fire_fold.abs()
+            + self.shoulder_fire_fold.abs()
+            + self.shoulder_fire_twist.abs()
+            + self.neck_fire_fold.abs()
+            + self.grip_bore_m.abs()
+            > 1e-5
+    }
+
+    /// Fall residual. Fire fall slows while `fire_continues`.
+    pub fn tick_joint_residual(&mut self, dt: f32, fire_continues: bool) {
         let dt = dt.max(0.0);
         if !self.alive {
-            self.clear_aim_residual();
+            self.clear_joint_residual();
             return;
         }
 
-        if !string_active && self.fire_heat > 0.0 {
-            let recover = FIRE_HEAT_RECOVER_S.max(1e-4);
-            self.fire_heat = (self.fire_heat - dt / recover).max(0.0);
-        }
-
-        let fire_s = self.fire_fall_eff_s().max(1e-4);
+        let fire_s = self.fire_fall_eff_s(fire_continues);
         self.hip_fire_fold = fall_toward_zero(self.hip_fire_fold, dt, fire_s);
         self.shoulder_fire_fold = fall_toward_zero(self.shoulder_fire_fold, dt, fire_s);
         self.shoulder_fire_twist = fall_toward_zero(self.shoulder_fire_twist, dt, fire_s);
@@ -968,7 +980,7 @@ mod tests {
     fn fire_impulse_splits_fold_across_hip_shoulder_neck() {
         let mut s = SelfState::default_loadout();
         let def = crate::weapons::weapon_def(b'b').unwrap();
-        let total = def.kick.pitch_deg.to_radians();
+        let total = def.fire_impulse.pitch_deg.to_radians();
         s.apply_fire_impulse(def, 1.0);
         let sum = s.fire_fold_total();
         assert!((sum - total).abs() < 1e-5, "sum={sum} total={total}");

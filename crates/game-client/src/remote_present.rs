@@ -8,7 +8,6 @@ use glam::Vec3;
 use wasm_bindgen::JsValue;
 
 use crate::body_hit::PartHit;
-use crate::fire_fx::RemotePresentResidual;
 use crate::mp::{drive_to_state, RemoteKitKey};
 use crate::self_present::SelfGpu;
 
@@ -84,7 +83,7 @@ impl RemotePresent {
         &mut self,
         queue: &wgpu::Queue,
         samples: impl Iterator<Item = (PlayerId, DriveView)>,
-        residual_for: impl Fn(PlayerId) -> RemotePresentResidual,
+        mut apply_residual: impl FnMut(PlayerId, &mut SelfState),
         death_for: impl Fn(PlayerId) -> (bool, f32),
     ) {
         for (id, drive) in samples {
@@ -106,11 +105,7 @@ impl RemotePresent {
                     state.walk_phase = 0.0;
                 }
             }
-            let res = residual_for(id);
-            state.shoulder_fire_fold = res.fold_rad;
-            state.shoulder_fire_twist = res.twist_rad;
-            state.grip_bore_m = res.grip_bore_m;
-            state.compose_joints();
+            apply_residual(id, &mut state);
             gpu.apply_present(queue, &state, false);
         }
     }

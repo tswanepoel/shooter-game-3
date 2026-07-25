@@ -1,4 +1,4 @@
-//! Weapon fire gates, modes, and projectile motion (038/042/048).
+//! Weapon fire gates, modes, and projectile motion (038/042/048/049).
 //!
 //! Cadence and discharge live here. Fire / hit / sway residual live on [`SelfState`].
 
@@ -122,6 +122,11 @@ impl FireState {
         self.burst_left > 0
     }
 
+    /// Held stream or unfinished fixed string.
+    pub fn fire_continues(&self) -> bool {
+        self.fire_held || self.burst_left > 0
+    }
+
     /// Weapon-side actions (sprint, wheel, equip) wait while a string runs.
     pub fn blocks_weapon_side(&self) -> bool {
         self.burst_active()
@@ -198,8 +203,8 @@ impl FireState {
         self.sprint_fire_s = (self.sprint_fire_s - dt).max(0.0);
         self.cooldown_s = (self.cooldown_s - dt).max(0.0);
 
-        let string_active = fire_held || self.burst_left > 0;
-        self_state.tick_aim_residual(dt, string_active);
+        let fire_continues = fire_held || self.burst_left > 0;
+        self_state.tick_joint_residual(dt, fire_continues);
 
         if !self_state.alive {
             self.sway.clear();
@@ -215,7 +220,7 @@ impl FireState {
 
         let Some(letter) = letter else {
             self.sway.clear();
-            self_state.clear_aim_residual();
+            self_state.clear_fire_residual();
             self.fire_held = false;
             self.prev_held = false;
             self.burst_left = 0;
@@ -852,7 +857,7 @@ mod tests {
         assert!(s.hip_fire_fold > 0.0 && s.shoulder_fire_fold > 0.0 && s.neck_fire_fold > 0.0);
         let bore_after = s.grip_bore_m;
         for _ in 0..120 {
-            s.tick_aim_residual(1.0 / 60.0, false);
+            s.tick_joint_residual(1.0 / 60.0, false);
         }
         assert!(
             s.grip_bore_m < bore_after * 0.05,
@@ -893,7 +898,11 @@ mod tests {
         fire.pay_ready(b'c');
         fire.ready_s = 0.0;
         let m = muzzles();
-        let one = weapon_def(b'c').unwrap().kick.pitch_deg.to_radians();
+        let one = weapon_def(b'c')
+            .unwrap()
+            .fire_impulse
+            .pitch_deg
+            .to_radians();
         let mut shots = 0u32;
         let mut peak = 0.0f32;
         let dt = 1.0 / 60.0;
@@ -910,35 +919,36 @@ mod tests {
     }
 
     #[test]
-    fn fire_heat_rises_on_fire_and_recovers() {
+    fn fire_fall_slows_while_fire_continues() {
+        let mut s = armed_self();
+        let def = weapon_def(b'c').unwrap();
+        s.apply_fire_impulse(def, 1.0);
+        let base = s.fire_fall_eff_s(false);
+        let cont = s.fire_fall_eff_s(true);
+        assert!(
+            cont > base,
+            "continue fall {cont} should exceed base {base}"
+        );
+        assert!((cont / base - 6.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn unarmed_keeps_hit_residual() {
         let mut fire = FireState::new();
         let mut s = armed_self();
-        s.set_primary(Some(b'c')).unwrap();
-        fire.pay_ready(b'c');
-        fire.ready_s = 0.0;
-        let m = muzzles();
-        let dt = 1.0 / 60.0;
-        assert_eq!(s.fire_heat_weight(), 0.0);
-        for _ in 0..30 {
-            let _ = fire.tick(dt, &mut s, true, 0, eye(), &m);
-        }
+        fire.add_hit_impulse(&mut s, 20.0);
+        assert!(s.hit_fold_total() > 0.0);
+        s.set_primary(None).unwrap();
+        s.set_secondary(None).unwrap();
+        let hit_before = s.hit_fold_total();
+        let _ = fire.tick(0.0, &mut s, false, 0, eye(), &[]);
         assert!(
-            s.fire_heat_weight() > 0.0 || s.fire_fall_eff_s() > 0.05,
-            "expected heat under spray, w={} fall={}",
-            s.fire_heat_weight(),
-            s.fire_fall_eff_s()
+            (s.hit_fold_total() - hit_before).abs() < 1e-5,
+            "hit residual cleared on unarmed: before={hit_before} after={}",
+            s.hit_fold_total()
         );
-        // After spray, heat should be elevated enough that fall is slower than base.
-        let fall_hot = s.fire_fall_eff_s();
-        for _ in 0..60 {
-            let _ = fire.tick(dt, &mut s, false, 0, eye(), &m);
-        }
-        assert!(
-            s.fire_heat_weight() < 0.05,
-            "heat should recover after string, w={}",
-            s.fire_heat_weight()
-        );
-        assert!(fall_hot > weapon_def(b'c').unwrap().kick.settle_s);
+        assert_eq!(s.fire_fold_total(), 0.0);
+        assert_eq!(s.grip_bore_m, 0.0);
     }
 
     #[test]
