@@ -1,0 +1,308 @@
+//! Camera, scene pass, overlays, and UI for one frame.
+
+use wasm_bindgen::prelude::*;
+
+#[cfg(feature = "debug-tools")]
+use crate::lineup::LineupState;
+use crate::mp;
+use crate::self_present::SelfPresentState;
+use crate::ui_overlay::{DebugDraw, OverlayGpu};
+use crate::view::overview_view_matrix;
+
+#[cfg(feature = "debug-tools")]
+use super::super::load::capture_canvas_png;
+use super::super::ClientInner;
+
+impl ClientInner {
+    pub(super) fn draw_frame(
+        &mut self,
+        width: u32,
+        height: u32,
+        mp_blocks_play: bool,
+    ) -> Result<(), JsValue> {
+        #[cfg(feature = "debug-tools")]
+        let flycam = self.view.is_flycam();
+        #[cfg(not(feature = "debug-tools"))]
+        let flycam = false;
+
+        let draw_local_self = self.mp.is_solo() || self.mp.is_living();
+
+        let (cam_eye, cam_fwd) = self.view.eye_and_forward(&self.self_state);
+        let view_mat = if mp_blocks_play {
+            overview_view_matrix()
+        } else {
+            self.view.view_matrix(&self.self_state)
+        };
+        let view_proj = self.renderer.write_view_proj(view_mat);
+
+        let reticle_pos = match &self.self_present {
+            SelfPresentState::Ready(gpu) => gpu.view.reticle_world,
+            _ => None,
+        };
+        self.renderer.reticle.update(
+            &self.renderer.queue,
+            view_proj,
+            reticle_pos,
+            cam_eye,
+            cam_fwd,
+            height as f32,
+        );
+
+        {
+            let remote_states: std::collections::HashMap<_, _> = self
+                .mp
+                .remotes()
+                .samples()
+                .map(|(id, s)| {
+                    let mut state = mp::drive_to_state(&s.drive);
+                    self.renderer
+                        .fire_fx
+                        .apply_remote_fire_residual(id, &mut state);
+                    (id, state)
+                })
+                .collect();
+            let self_state = &self.self_state;
+            let self_present = &self.self_present;
+            let remote_present = &self.remote_present;
+            self.renderer
+                .fire_fx
+                .rebind_positions(|owner, mi| match owner {
+                    None => match self_present {
+                        SelfPresentState::Ready(gpu) => gpu
+                            .flash_muzzle_worlds(self_state, &[mi])
+                            .into_iter()
+                            .next(),
+                        _ => None,
+                    },
+                    Some(id) => {
+                        let state = remote_states.get(&id)?;
+                        remote_present.flash_muzzle_world(id, state, state.grip_bore_m, mi)
+                    }
+                });
+        }
+
+        self.renderer.fire_fx.update_draw(
+            &self.renderer.queue,
+            view_proj,
+            cam_eye,
+            cam_fwd,
+            &self.projectiles.projectiles,
+        );
+
+        if draw_local_self {
+            if let SelfPresentState::Ready(gpu) = &self.self_present {
+                gpu.write_view_proj(&self.renderer.queue, view_proj);
+            }
+        }
+        if self.mp.in_room() {
+            self.remote_present
+                .write_view_proj_all(&self.renderer.queue, view_proj);
+        }
+        let self_ref = if draw_local_self {
+            match &self.self_present {
+                SelfPresentState::Ready(gpu) => Some(gpu),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let remotes_ref = if self.mp.in_room() {
+            Some(&self.remote_present)
+        } else {
+            None
+        };
+
+        #[cfg(feature = "debug-tools")]
+        let draw_grid = self.debug.draw_grid();
+        #[cfg(not(feature = "debug-tools"))]
+        let draw_grid = true;
+
+        let draw_reticle = reticle_pos.is_some() && !flycam;
+        let hit_alpha = self.hit_marker.alpha();
+        let draw_hit_marker = hit_alpha > 0.0 && reticle_pos.is_some() && !flycam;
+        self.renderer.hit_marker_gpu.update(
+            &self.renderer.queue,
+            view_proj,
+            if draw_hit_marker { reticle_pos } else { None },
+            cam_eye,
+            cam_fwd,
+            height as f32,
+            if draw_hit_marker { hit_alpha } else { 0.0 },
+        );
+        let draw_emote_wheel = self.emote_wheel.is_open() && !flycam;
+        let aspect = self.renderer.config.width as f32 / self.renderer.config.height.max(1) as f32;
+        self.renderer.emote_wheel_gpu.update(
+            &self.renderer.queue,
+            draw_emote_wheel,
+            self.emote_wheel.highlighted_slot(),
+            aspect,
+        );
+
+        #[cfg(feature = "debug-tools")]
+        let frame = {
+            let want_lineup = self.debug.draw_lineup();
+            if want_lineup {
+                if let LineupState::Ready(gpu) = &self.lineup {
+                    gpu.write_view_proj(&self.renderer.queue, view_proj);
+                }
+            }
+            let lineup_ref = match &self.lineup {
+                LineupState::Ready(gpu) if want_lineup => Some(gpu),
+                _ => None,
+            };
+            self.renderer.render_scene(
+                draw_grid,
+                self_ref,
+                remotes_ref,
+                lineup_ref,
+                draw_reticle,
+                draw_hit_marker,
+                draw_emote_wheel,
+            )?
+        };
+        #[cfg(not(feature = "debug-tools"))]
+        let frame = self.renderer.render_scene(
+            draw_grid,
+            self_ref,
+            remotes_ref,
+            draw_reticle,
+            draw_hit_marker,
+            draw_emote_wheel,
+        )?;
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        {
+            let ppp = self.pixels_per_point;
+            let time = web_sys::window()
+                .and_then(|w| w.performance())
+                .map(|p| p.now() / 1000.0)
+                .unwrap_or(0.0);
+            let screen_w = width as f32 / ppp;
+            let screen_h = height as f32 / ppp;
+
+            let roster = self.mp.roster();
+            let phase = self.mp.phase();
+            let connecting = self.mp.is_connecting();
+            let raw = self.ui.take_raw_input(screen_w, screen_h, time);
+
+            #[cfg(feature = "debug-tools")]
+            self.debug.apply_toggle();
+
+            #[cfg(feature = "debug-tools")]
+            let hud_owned = {
+                let net = self.debug.net_hud();
+                let residual = self.debug.residual_hud();
+                if !net && !residual {
+                    None
+                } else {
+                    let mut parts: Vec<String> = Vec::new();
+                    if net {
+                        let mut line = format!("fps {:.0}", self.fps_ema);
+                        if let Some(tick) = self.mp.hud_tick_field() {
+                            line.push_str("  ");
+                            line.push_str(&tick);
+                        }
+                        parts.push(line);
+                    }
+                    if residual {
+                        let cont = self.fire.fire_continues();
+                        let fall_ms = self.self_state.fire_fall_eff_s(cont) * 1000.0;
+                        parts.push(format!(
+                            "fF {:.2}°  fT {:.2}°  fall {:.0}ms{}",
+                            self.self_state.fire_fold_total().to_degrees(),
+                            self.self_state.shoulder_fire_twist.to_degrees(),
+                            fall_ms,
+                            if cont { "  cont" } else { "" },
+                        ));
+                    }
+                    Some(parts.join("  |  "))
+                }
+            };
+
+            #[cfg(feature = "debug-tools")]
+            let debug_draw = {
+                let hud = hud_owned.as_deref();
+                if self.debug.shell.wants_draw(hud) {
+                    DebugDraw::Shell {
+                        shell: &mut self.debug.shell,
+                        hud,
+                    }
+                } else {
+                    DebugDraw::none()
+                }
+            };
+            #[cfg(not(feature = "debug-tools"))]
+            let debug_draw = DebugDraw::none();
+
+            let (full, actions) = self
+                .ui
+                .run(raw, ppp, phase, &roster, connecting, debug_draw);
+
+            if let Some((room, name)) = actions.join {
+                self.ui.set_status("joining…");
+                self.mp.begin_join_with(&room, &name);
+            }
+            if actions.spawn {
+                self.mp.request_spawn();
+            }
+            if actions.leave {
+                self.mp.leave();
+                self.remote_present.clear();
+                self.health_by_id.clear();
+                self.ui.set_status(String::new());
+            }
+
+            #[cfg(feature = "debug-tools")]
+            {
+                if let Some(cmd) = self.debug.shell.take_pending_command() {
+                    let _ = self.debug.execute(&cmd);
+                }
+                self.drain_debug_host_requests();
+            }
+
+            if let Some(full) = full {
+                let mut encoder =
+                    self.renderer
+                        .device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("ui-encoder"),
+                        });
+                self.ui.render(
+                    OverlayGpu {
+                        device: &self.renderer.device,
+                        queue: &self.renderer.queue,
+                        encoder: &mut encoder,
+                        view: &view,
+                        width,
+                        height,
+                    },
+                    full,
+                );
+                self.renderer
+                    .queue
+                    .submit(std::iter::once(encoder.finish()));
+            }
+        }
+
+        frame.present();
+
+        #[cfg(feature = "debug-tools")]
+        {
+            if self.debug.take_screenshot_request() {
+                if let Err(err) = capture_canvas_png(&self.canvas) {
+                    web_sys::console::error_1(&err);
+                    self.debug.shell.push_log(format!(
+                        "screenshot failed: {}",
+                        err.as_string().unwrap_or_default()
+                    ));
+                } else {
+                    self.debug.shell.push_log("screenshot ok");
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
