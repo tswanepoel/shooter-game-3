@@ -215,29 +215,25 @@ impl ClientInner {
                         ));
                     }
                     if look {
-                        let sens = crate::view::LOOK_SENS_RAD_PER_PX;
-                        let d_yaw_deg = (-self.last_look_px.x * sens).to_degrees();
-                        let d_pitch_deg = (-self.last_look_px.y * sens).to_degrees();
-                        let applied = self.last_play_ok && !self.emote_wheel.is_open();
-                        let (_, cam_fwd) = self.view.eye_and_forward();
-                        let cam_yaw_deg = cam_fwd.x.atan2(cam_fwd.z).to_degrees();
+                        // Slow-yaw isolation: input → apply_look args → facing pre/post/end.
+                        let end_f = self.self_state.facing.to_degrees();
                         parts.push(format!(
-                            "dx{:+.0} dy{:+.0}  dY{:+.3}° dP{:+.3}°  fY{:.3}° oP{:.2}° nF{:.2}°  camY{:.3}°  {}{}{}",
+                            "dx{:+.0} dy{:+.0}  aY{:+.4}° aP{:+.4}°  pre{:.4}° post{:.4}° end{:.4}°  Σdx{:+.0} ΣaY{:+.3}°  {} {}",
                             self.last_look_px.x,
                             self.last_look_px.y,
-                            d_yaw_deg,
-                            d_pitch_deg,
-                            self.self_state.facing.to_degrees(),
-                            self.self_state.look_offset_pitch.to_degrees(),
-                            self.self_state.neck_fold.to_degrees(),
-                            cam_yaw_deg,
-                            if self.session.is_active() {
-                                "sess"
+                            self.lookhud_a_yaw_deg,
+                            self.lookhud_a_pitch_deg,
+                            self.lookhud_pre_f_deg,
+                            self.lookhud_post_f_deg,
+                            end_f,
+                            self.lookhud_sum_dx,
+                            self.lookhud_sum_a_yaw_deg,
+                            self.lookhud_why,
+                            if self.lookhud_did_apply {
+                                "app"
                             } else {
-                                "nosess"
+                                "noapp"
                             },
-                            if self.last_play_ok { " play" } else { " noplay" },
-                            if applied { " apply" } else { " skip" },
                         ));
                     }
                     Some(parts.join("  |  "))

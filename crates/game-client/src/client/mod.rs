@@ -44,12 +44,29 @@ pub(crate) struct ClientInner {
     last_frame_secs: f64,
     #[cfg(feature = "debug-tools")]
     fps_ema: f32,
-    /// Last frame's session look accumulate (px) for lookhud.
+    /// lookhud: input px this frame.
     #[cfg(feature = "debug-tools")]
     last_look_px: glam::Vec2,
-    /// Whether play controls ran look/loco this frame (lookhud).
+    /// lookhud: facing before / after apply_look, and at draw (end).
     #[cfg(feature = "debug-tools")]
-    last_play_ok: bool,
+    lookhud_pre_f_deg: f32,
+    #[cfg(feature = "debug-tools")]
+    lookhud_post_f_deg: f32,
+    /// lookhud: deltas actually passed to apply_look (degrees).
+    #[cfg(feature = "debug-tools")]
+    lookhud_a_yaw_deg: f32,
+    #[cfg(feature = "debug-tools")]
+    lookhud_a_pitch_deg: f32,
+    #[cfg(feature = "debug-tools")]
+    lookhud_did_apply: bool,
+    /// lookhud: gate token (`ok` / `wheel` / `nosess` / …).
+    #[cfg(feature = "debug-tools")]
+    lookhud_why: &'static str,
+    /// lookhud: crawl accumulate (reset when dx==0 this frame).
+    #[cfg(feature = "debug-tools")]
+    lookhud_sum_dx: f32,
+    #[cfg(feature = "debug-tools")]
+    lookhud_sum_a_yaw_deg: f32,
     pub(crate) mp: mp::MpClient,
     pub(crate) ui: UiOverlay,
     #[cfg(feature = "debug-tools")]
@@ -90,7 +107,21 @@ impl ClientInner {
             #[cfg(feature = "debug-tools")]
             last_look_px: glam::Vec2::ZERO,
             #[cfg(feature = "debug-tools")]
-            last_play_ok: false,
+            lookhud_pre_f_deg: 0.0,
+            #[cfg(feature = "debug-tools")]
+            lookhud_post_f_deg: 0.0,
+            #[cfg(feature = "debug-tools")]
+            lookhud_a_yaw_deg: 0.0,
+            #[cfg(feature = "debug-tools")]
+            lookhud_a_pitch_deg: 0.0,
+            #[cfg(feature = "debug-tools")]
+            lookhud_did_apply: false,
+            #[cfg(feature = "debug-tools")]
+            lookhud_why: "init",
+            #[cfg(feature = "debug-tools")]
+            lookhud_sum_dx: 0.0,
+            #[cfg(feature = "debug-tools")]
+            lookhud_sum_a_yaw_deg: 0.0,
             mp: mp::MpClient::new(),
             ui,
             #[cfg(feature = "debug-tools")]

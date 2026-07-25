@@ -636,3 +636,21 @@ fn jump_and_cycle_cancel_emote() {
     s.cycle_weapon(1);
     assert!(!s.is_emoting());
 }
+
+#[test]
+fn tiny_mouse_yaw_moves_facing() {
+    let mut s = SelfState::default_loadout();
+    let sens = 0.00015_f32;
+    let d = -3.0 * sens; // 3 px horizontal
+    let before = s.facing;
+    s.apply_look(1.0 / 60.0, d, 0.0);
+    assert!(
+        (s.facing - (before + d)).abs() < 1e-9,
+        "facing {} before {} d {}",
+        s.facing,
+        before,
+        d
+    );
+    let deg = (s.facing - before).to_degrees().abs();
+    assert!(deg > 0.01, "expected >0.01 deg, got {deg}");
+}

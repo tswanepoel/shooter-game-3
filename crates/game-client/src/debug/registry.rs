@@ -64,7 +64,7 @@ impl DebugRegistry {
             "hud.look",
             CVar {
                 value: CVarValue::Bool(true),
-                help: "client: mouse look px → yaw/pitch sample on top banner",
+                help: "client: look isolation (dx aY pre/post/end why) on top banner",
             },
         );
         self.cvars.insert(
@@ -142,7 +142,7 @@ impl DebugRegistry {
             "  lineup [on|off|toggle]  blaster lineup (armed characters)".into(),
             "  nethud [on|off|toggle]  top FPS / tick banner".into(),
             "  residualhud [on|off|toggle]  fire residual fold / fall".into(),
-            "  lookhud [on|off|toggle]  mouse look px / yaw sample".into(),
+            "  lookhud [on|off|toggle]  look isolation: dx aY pre/post/end".into(),
             "  remount           leave flycam, restore self view".into(),
             "  screenshot|shot   capture frame (F9)".into(),
             "  mp join|leave|status  WebTransport shared tick + remotes".into(),
