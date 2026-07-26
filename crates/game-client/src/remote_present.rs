@@ -118,6 +118,16 @@ impl RemotePresent {
         }
     }
 
+    pub fn iter_name_anchors(&self) -> impl Iterator<Item = (PlayerId, Vec3)> + '_ {
+        const ABOVE_HEAD_M: f32 = 0.80;
+        self.slots.iter().filter_map(|(&id, slot)| {
+            let Slot::Ready { gpu, .. } = slot else {
+                return None;
+            };
+            Some((id, gpu.view.head_joint_world + Vec3::Y * ABOVE_HEAD_M))
+        })
+    }
+
     pub fn flash_muzzle_world(
         &self,
         id: PlayerId,

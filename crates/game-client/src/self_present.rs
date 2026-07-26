@@ -12,6 +12,7 @@ pub struct MountedView {
     pub look_origin: Vec3,
     pub look_forward: Vec3,
     pub reticle_world: Option<Vec3>,
+    pub head_joint_world: Vec3,
 }
 
 struct EquippedBlaster {
@@ -172,6 +173,7 @@ impl SelfGpu {
                 look_origin: Vec3::ZERO,
                 look_forward: Vec3::Z,
                 reticle_world: None,
+                head_joint_world: Vec3::ZERO,
             },
         };
         // Full body at load (remotes share this path); local FP hides head next apply.
@@ -338,12 +340,14 @@ impl SelfGpu {
             }
         }
 
-        let (look_origin, look_forward) = look_from_head(&self.parts, &present_worlds, k2w);
+        let (look_origin, look_forward, head_joint_world) =
+            look_from_head(&self.parts, &present_worlds, k2w);
         let reticle_world = self_state.reticle_world(look_origin);
         self.view = MountedView {
             look_origin,
             look_forward,
             reticle_world,
+            head_joint_world,
         };
     }
 
@@ -384,13 +388,14 @@ fn held_with_grip_bore(k2w: Mat4, arm_kit: Mat4, letter_index: usize, grip_bore_
 }
 
 /// Concepts look: position at eye socket, orientation from posed head (+Z face).
-fn look_from_head(parts: &[CharPart], worlds: &[Mat4], k2w: Mat4) -> (Vec3, Vec3) {
+fn look_from_head(parts: &[CharPart], worlds: &[Mat4], k2w: Mat4) -> (Vec3, Vec3, Vec3) {
     let head_kit = parts
         .iter()
         .position(|p| p.name == "head")
         .map(|i| worlds[i])
         .unwrap_or(Mat4::IDENTITY);
     let head_world = k2w * head_kit;
+    let head_joint_world = head_world.transform_point3(Vec3::ZERO);
     let origin = head_world.transform_point3(FACE_OFFSET_HEAD_KIT);
     let forward = head_world.transform_vector3(Vec3::Z).normalize_or_zero();
     let forward = if forward.length_squared() < 1e-12 {
@@ -398,7 +403,7 @@ fn look_from_head(parts: &[CharPart], worlds: &[Mat4], k2w: Mat4) -> (Vec3, Vec3
     } else {
         forward
     };
-    (origin, forward)
+    (origin, forward, head_joint_world)
 }
 
 fn emote_pair<'a>(self_state: &SelfState, clips: &'a [AnimClip]) -> Option<(&'a AnimClip, f32)> {

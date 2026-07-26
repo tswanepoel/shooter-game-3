@@ -6,7 +6,7 @@ use wasm_bindgen::prelude::*;
 use crate::lineup::LineupState;
 use crate::mp::{self, CamIntent};
 use crate::self_present::SelfPresentState;
-use crate::ui_overlay::{DebugDraw, OverlayGpu, ProductSession};
+use crate::ui_overlay::{DebugDraw, FloatingNameLabel, OverlayGpu, ProductSession};
 use crate::view::overview_view_matrix;
 
 #[cfg(feature = "debug-tools")]
@@ -190,6 +190,16 @@ impl ClientInner {
             let roster = self.mp.roster();
             let phase = self.mp.phase();
             let connecting = self.mp.is_connecting();
+            let floating_names = collect_floating_names(
+                &self.remote_present,
+                &roster,
+                self.mp.player_id(),
+                |id| self.mp.peer_living(id),
+                cam_eye,
+                view_proj,
+                screen_w,
+                screen_h,
+            );
             let raw = self.ui.take_raw_input(screen_w, screen_h, time);
 
             #[cfg(feature = "debug-tools")]
@@ -269,6 +279,7 @@ impl ClientInner {
                     connecting,
                     character: self.mp.character(),
                     staged: self.mp.staged_loadout(),
+                    floating_names: &floating_names,
                 },
                 debug_draw,
             );
@@ -369,4 +380,64 @@ impl ClientInner {
 
         Ok(())
     }
+}
+
+fn collect_floating_names(
+    remotes: &crate::remote_present::RemotePresent,
+    roster: &[game_net::RosterEntry],
+    local_id: Option<game_net::PlayerId>,
+    peer_living: impl Fn(game_net::PlayerId) -> bool,
+    cam_eye: glam::Vec3,
+    view_proj: glam::Mat4,
+    screen_w: f32,
+    screen_h: f32,
+) -> Vec<FloatingNameLabel> {
+    const REF_DIST_M: f32 = 8.0;
+    const REF_SIZE: f32 = 16.0;
+    const MIN_SIZE: f32 = 10.0;
+    const MAX_SIZE: f32 = 22.0;
+
+    let mut out = Vec::new();
+    for (id, world) in remotes.iter_name_anchors() {
+        if Some(id) == local_id || !peer_living(id) {
+            continue;
+        }
+        let Some(entry) = roster.iter().find(|e| e.id == id) else {
+            continue;
+        };
+        if entry.display_name.is_empty() {
+            continue;
+        }
+        let Some(pos) = world_to_screen(view_proj, world, screen_w, screen_h) else {
+            continue;
+        };
+        let dist = (world - cam_eye).length().max(0.5);
+        let font_size = (REF_SIZE * REF_DIST_M / dist).clamp(MIN_SIZE, MAX_SIZE);
+        out.push(FloatingNameLabel {
+            pos,
+            name: entry.display_name.clone(),
+            ally: false,
+            font_size,
+        });
+    }
+    out
+}
+
+fn world_to_screen(
+    view_proj: glam::Mat4,
+    world: glam::Vec3,
+    screen_w: f32,
+    screen_h: f32,
+) -> Option<egui::Pos2> {
+    let clip = view_proj * world.extend(1.0);
+    if clip.w <= 1e-5 {
+        return None;
+    }
+    let ndc = clip.truncate() / clip.w;
+    if !(-1.0..=1.0).contains(&ndc.x) || !(-1.0..=1.0).contains(&ndc.y) {
+        return None;
+    }
+    let x = (ndc.x * 0.5 + 0.5) * screen_w;
+    let y = (1.0 - (ndc.y * 0.5 + 0.5)) * screen_h;
+    Some(egui::pos2(x, y))
 }

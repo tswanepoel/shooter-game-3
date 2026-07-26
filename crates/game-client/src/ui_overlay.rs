@@ -31,6 +31,14 @@ pub struct ProductActions {
     pub leave: bool,
 }
 
+#[derive(Debug, Clone)]
+pub struct FloatingNameLabel {
+    pub pos: egui::Pos2,
+    pub name: String,
+    pub ally: bool,
+    pub font_size: f32,
+}
+
 /// Per-frame product inputs for the overlay (phase, roster, loadout bench).
 pub struct ProductSession<'a> {
     pub phase: MpPhase,
@@ -38,6 +46,7 @@ pub struct ProductSession<'a> {
     pub connecting: bool,
     pub character: u8,
     pub staged: StagedLoadout,
+    pub floating_names: &'a [FloatingNameLabel],
 }
 
 pub struct UiOverlay {
@@ -142,12 +151,16 @@ impl UiOverlay {
 
         let phase = session.phase;
         let show_score = phase.in_room();
+        let has_names = !session.floating_names.is_empty();
         let mut actions = ProductActions::default();
         let status = self.status.clone();
 
         let full = self.egui_ctx.run(raw_input, |ctx| {
             if show_score {
                 draw_score(ctx, session.roster, phase, &mut actions);
+            }
+            if has_names {
+                draw_floating_names(ctx, session.floating_names);
             }
 
             match phase {
@@ -179,7 +192,7 @@ impl UiOverlay {
             || self.egui_ctx.is_pointer_over_area()
             || self.egui_ctx.wants_keyboard_input();
 
-        let any = phase != MpPhase::Living || show_score || debug.active();
+        let any = phase != MpPhase::Living || show_score || debug.active() || has_names;
         if any {
             (Some(full), actions)
         } else {
@@ -229,6 +242,50 @@ impl UiOverlay {
             self.egui_renderer
                 .render(&mut pass.forget_lifetime(), &tris, &screen_descriptor);
         }
+    }
+}
+
+fn draw_floating_names(ctx: &egui::Context, labels: &[FloatingNameLabel]) {
+    const FILL_ALLY: egui::Color32 = egui::Color32::from_rgb(80, 150, 255);
+    const FILL_OPPONENT: egui::Color32 = egui::Color32::from_rgb(230, 70, 70);
+    const OUTLINE: egui::Color32 = egui::Color32::from_rgb(8, 10, 14);
+    const OUTLINE_OFFSETS: [(f32, f32); 8] = [
+        (-1.0, 0.0),
+        (1.0, 0.0),
+        (0.0, -1.0),
+        (0.0, 1.0),
+        (-1.0, -1.0),
+        (1.0, -1.0),
+        (-1.0, 1.0),
+        (1.0, 1.0),
+    ];
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("floating_names"),
+    ));
+    let screen = ctx.screen_rect();
+    for label in labels {
+        if !screen.contains(label.pos) {
+            continue;
+        }
+        let fill = if label.ally { FILL_ALLY } else { FILL_OPPONENT };
+        let font = egui::FontId::new(label.font_size, egui::FontFamily::Proportional);
+        for (ox, oy) in OUTLINE_OFFSETS {
+            painter.text(
+                label.pos + egui::vec2(ox, oy),
+                egui::Align2::CENTER_BOTTOM,
+                &label.name,
+                font.clone(),
+                OUTLINE,
+            );
+        }
+        painter.text(
+            label.pos,
+            egui::Align2::CENTER_BOTTOM,
+            &label.name,
+            font,
+            fill,
+        );
     }
 }
 
