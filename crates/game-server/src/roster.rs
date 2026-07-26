@@ -302,16 +302,28 @@ pub fn ammo_from_wire(ammo: u8) -> Option<AmmoKind> {
     }
 }
 
+/// Deterministic ground pose from tick + id (no RNG): hash → polar (x,z) + facing yaw.
 pub fn spawn_pose(tick: u64, player_id: PlayerId) -> (NetVec3, f32) {
+    // Splitmix-ish avalanche so nearby ticks don't cluster on the ring.
     let seed = tick
         .wrapping_mul(0x9E37_79B9_7F4A_7C15)
         .wrapping_add(player_id as u64);
-    let a = ((seed >> 11) as f32 / u32::MAX as f32) * std::f32::consts::TAU;
-    let r = ((seed >> 32) as f32 / u32::MAX as f32) * SPAWN_RADIUS_M;
-    let x = a.cos() * r;
-    let z = a.sin() * r;
-    let yaw = ((seed >> 17) as f32 / u32::MAX as f32) * std::f32::consts::TAU;
+    let angle = unit_turn(seed, 11);
+    let radius = unit01(seed, 32) * SPAWN_RADIUS_M;
+    let x = angle.cos() * radius;
+    let z = angle.sin() * radius;
+    let yaw = unit_turn(seed, 17);
     (NetVec3::new(x, 0.0, z), yaw)
+}
+
+/// Low 32 bits of `seed >> shift` as a float in [0, 1].
+fn unit01(seed: u64, shift: u32) -> f32 {
+    ((seed >> shift) as u32) as f32 / (u32::MAX as f32)
+}
+
+/// Same bits mapped onto [0, τ).
+fn unit_turn(seed: u64, shift: u32) -> f32 {
+    unit01(seed, shift) * std::f32::consts::TAU
 }
 
 #[cfg(test)]
@@ -451,6 +463,22 @@ mod tests {
         assert_eq!(ya, yb);
         let (c, yc) = spawn_pose(11, 1);
         assert!(a != c || ya != yc);
+    }
+
+    #[test]
+    fn spawn_pose_yaw_in_unit_circle() {
+        for tick in [0_u64, 1, 10, 128, 180, 1_000_000, u64::MAX / 3] {
+            for id in [0_u32, 1, 7, 999] {
+                let (_, yaw) = spawn_pose(tick, id);
+                assert!(
+                    yaw.is_finite() && (0.0..std::f32::consts::TAU).contains(&yaw),
+                    "tick={tick} id={id} yaw={yaw}"
+                );
+            }
+        }
+        // High tick used to cast (seed>>17) as f32 ≫ u32::MAX → kilroradian yaw (055).
+        let (_, yaw) = spawn_pose(1_000_000, 1);
+        assert!(yaw < std::f32::consts::TAU);
     }
 
     #[test]

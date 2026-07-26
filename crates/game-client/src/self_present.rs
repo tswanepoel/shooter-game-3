@@ -424,5 +424,5 @@ pub enum SelfPresentState {
     Idle,
     Loading,
     Ready(SelfGpu),
-    Failed(String),
+    Failed,
 }

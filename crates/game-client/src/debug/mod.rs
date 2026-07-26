@@ -112,10 +112,6 @@ impl DebugTools {
         self.registry.get_bool("hud.residual").unwrap_or(true)
     }
 
-    pub fn look_hud(&self) -> bool {
-        self.registry.get_bool("hud.look").unwrap_or(true)
-    }
-
     pub fn draw_tracers(&self) -> bool {
         self.registry.get_bool("draw.tracers").unwrap_or(false)
     }

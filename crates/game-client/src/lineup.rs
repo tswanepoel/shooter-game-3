@@ -87,5 +87,5 @@ pub enum LineupState {
     Idle,
     Loading,
     Ready(LineupGpu),
-    Failed(String),
+    Failed,
 }

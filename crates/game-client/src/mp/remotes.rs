@@ -22,6 +22,7 @@ impl RemoteKitKey {
 #[derive(Debug, Clone)]
 pub struct RemoteSample {
     /// Server tick of this drive sample (present / adaptive delay).
+    #[allow(dead_code)]
     pub tick: u64,
     pub drive: DriveView,
 }

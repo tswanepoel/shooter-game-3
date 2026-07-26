@@ -47,10 +47,6 @@ impl ClientInner {
 
         let look = self.session.take_look_px();
         let session_ok = self.session.is_active();
-        #[cfg(feature = "debug-tools")]
-        {
-            self.last_look_px = look;
-        }
 
         let effects = self.mp.drain_frame_effects();
         if effects.release_pointer_lock && self.session.is_active() {
@@ -68,7 +64,7 @@ impl ClientInner {
                     self.self_state.character != character
                         || !gpu.covers_loadout(spawn.primary, spawn.secondary)
                 }
-                SelfPresentState::Loading | SelfPresentState::Failed(_) => true,
+                SelfPresentState::Loading | SelfPresentState::Failed => true,
                 SelfPresentState::Idle => false,
             };
             self.self_state = SelfState::default_loadout();
@@ -77,8 +73,7 @@ impl ClientInner {
             self.self_state.secondary = spawn.secondary;
             self.self_state.active = spawn.active;
             self.self_state.position = spawn.position;
-            // bug: commented to unfreeze camera yaw on soft mouse dX movements which wouldn't otherwise register
-            //self.self_state.set_look(spawn.yaw, 0.0);
+            self.self_state.set_look(spawn.yaw, 0.0);
             self.self_state.alive = true;
             self.self_state.health = game_sim::HEALTH_MAX;
             self.self_state.regen_block_s = 0.0;
@@ -110,21 +105,6 @@ impl ClientInner {
         let cam = self.mp.cam_intent(debug_fly);
         let was_fly = self.view.is_flycam();
         let play_ok = session_ok && !console_open && !cam.is_fly() && !self.mp.blocks_play();
-        #[cfg(feature = "debug-tools")]
-        {
-            // Default gate; play may override to `wheel` if emote radial is open.
-            self.lookhud_why = if !session_ok {
-                "nosess"
-            } else if console_open {
-                "console"
-            } else if cam.is_fly() {
-                "fly"
-            } else if self.mp.blocks_play() {
-                "noplay"
-            } else {
-                "ok"
-            };
-        }
         let fire_held = self.tick_play_controls(dt, look, play_ok);
 
         self.tick_combat(dt, fire_held);

@@ -63,7 +63,7 @@ pub(crate) fn maybe_kick_self_load(inner: &Rc<RefCell<ClientInner>>) {
             Err(err) => {
                 let msg = err.as_string().unwrap_or_else(|| format!("{err:?}"));
                 web_sys::console::error_1(&JsValue::from_str(&format!("self load failed: {msg}")));
-                c.self_present = SelfPresentState::Failed(msg);
+                c.self_present = SelfPresentState::Failed;
             }
         }
     });
@@ -127,7 +127,7 @@ pub(crate) fn maybe_kick_lineup_load(inner: &Rc<RefCell<ClientInner>>) {
     {
         let mut c = inner.borrow_mut();
         if !c.debug.draw_lineup() {
-            if matches!(c.lineup, LineupState::Failed(_)) {
+            if matches!(c.lineup, LineupState::Failed) {
                 c.lineup = LineupState::Idle;
             }
             return;
@@ -172,7 +172,7 @@ pub(crate) fn maybe_kick_lineup_load(inner: &Rc<RefCell<ClientInner>>) {
                     "lineup load failed: {msg}"
                 )));
                 c.debug.shell.push_log(format!("lineup failed: {msg}"));
-                c.lineup = LineupState::Failed(msg);
+                c.lineup = LineupState::Failed;
             }
         }
     });

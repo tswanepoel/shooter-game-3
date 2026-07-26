@@ -12,14 +12,6 @@ impl ClientInner {
         let emote_press = self.move_input.take_emote_press();
         let emote_release = self.move_input.take_emote_release();
 
-        #[cfg(feature = "debug-tools")]
-        {
-            self.lookhud_pre_f_deg = self.self_state.facing.to_degrees();
-            self.lookhud_a_yaw_deg = 0.0;
-            self.lookhud_a_pitch_deg = 0.0;
-            self.lookhud_did_apply = false;
-        }
-
         if play_ok {
             // Emote wheel (039): B open / release commit; look freezes into select.
             // Fire while open closes without commit (fire path may still run).
@@ -55,18 +47,6 @@ impl ClientInner {
                 let a_yaw = -look.x * LOOK_SENS_RAD_PER_PX;
                 let a_pitch = -look.y * LOOK_SENS_RAD_PER_PX;
                 self.self_state.apply_look(dt, a_yaw, a_pitch);
-                #[cfg(feature = "debug-tools")]
-                {
-                    self.lookhud_a_yaw_deg = a_yaw.to_degrees();
-                    self.lookhud_a_pitch_deg = a_pitch.to_degrees();
-                    self.lookhud_did_apply = true;
-                    self.lookhud_why = "ok";
-                }
-            } else {
-                #[cfg(feature = "debug-tools")]
-                {
-                    self.lookhud_why = "wheel";
-                }
             }
             let (fwd, strafe) = self.move_input.axes();
             let mut sprint_tap = self.move_input.take_sprint();
@@ -111,18 +91,6 @@ impl ClientInner {
                 self.emote_wheel.close();
             }
             self.self_state.apply_move(dt, 0.0, 0.0, false);
-        }
-
-        #[cfg(feature = "debug-tools")]
-        {
-            self.lookhud_post_f_deg = self.self_state.facing.to_degrees();
-            if look.x != 0.0 {
-                self.lookhud_sum_dx += look.x;
-                self.lookhud_sum_a_yaw_deg += self.lookhud_a_yaw_deg;
-            } else {
-                self.lookhud_sum_dx = 0.0;
-                self.lookhud_sum_a_yaw_deg = 0.0;
-            }
         }
 
         fire_held

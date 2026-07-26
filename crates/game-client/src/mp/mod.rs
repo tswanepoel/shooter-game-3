@@ -30,7 +30,6 @@ use web_sys::WritableStreamDefaultWriter;
 use clock::ClockSync;
 #[cfg(feature = "debug-tools")]
 use cookie::load_display_name_cookie as load_cookie;
-use phase::{CamIntent, MpPhase, PendingSpawn};
 use session::{join_session, js_error_string};
 
 /// Resend Spawn while Ready after user confirm until YouSpawned.

@@ -190,8 +190,7 @@ impl ClientInner {
             let hud_owned = {
                 let net = self.debug.net_hud();
                 let residual = self.debug.residual_hud();
-                let look = self.debug.look_hud();
-                if !net && !residual && !look {
+                if !net && !residual {
                     None
                 } else {
                     let mut parts: Vec<String> = Vec::new();
@@ -212,28 +211,6 @@ impl ClientInner {
                             self.self_state.shoulder_fire_twist.to_degrees(),
                             fall_ms,
                             if cont { "  cont" } else { "" },
-                        ));
-                    }
-                    if look {
-                        // Slow-yaw isolation: input → apply_look args → facing pre/post/end.
-                        let end_f = self.self_state.facing.to_degrees();
-                        parts.push(format!(
-                            "dx{:+.0} dy{:+.0}  aY{:+.4}° aP{:+.4}°  pre{:.4}° post{:.4}° end{:.4}°  Σdx{:+.0} ΣaY{:+.3}°  {} {}",
-                            self.last_look_px.x,
-                            self.last_look_px.y,
-                            self.lookhud_a_yaw_deg,
-                            self.lookhud_a_pitch_deg,
-                            self.lookhud_pre_f_deg,
-                            self.lookhud_post_f_deg,
-                            end_f,
-                            self.lookhud_sum_dx,
-                            self.lookhud_sum_a_yaw_deg,
-                            self.lookhud_why,
-                            if self.lookhud_did_apply {
-                                "app"
-                            } else {
-                                "noapp"
-                            },
                         ));
                     }
                     Some(parts.join("  |  "))

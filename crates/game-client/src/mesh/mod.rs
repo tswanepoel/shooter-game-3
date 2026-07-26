@@ -15,8 +15,6 @@ mod shader;
 mod upload;
 
 pub use anim::{extract_clip, pose_character_kit, AnimClip};
-#[cfg(feature = "debug-tools")]
-pub use gltf::extract_character_hold;
 pub use gltf::{extract_character_parts, extract_primitives, CharPart};
 pub use gpu::{UnlitMeshGpu, UnlitMeshLayout};
 pub use kit::{
