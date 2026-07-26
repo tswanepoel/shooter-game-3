@@ -74,6 +74,21 @@ pub struct Roster {
     peers: HashMap<PlayerId, PeerEntry>,
 }
 
+/// Host map of room code → roster. Membership routes a player to their room.
+pub struct Rooms {
+    rooms: HashMap<String, Roster>,
+    membership: HashMap<PlayerId, String>,
+}
+
+/// Trim and reject blank room codes (case-sensitive; `dev` ≠ `Dev`).
+pub fn normalize_room_code(raw: &str) -> Result<String, &'static str> {
+    let code = raw.trim();
+    if code.is_empty() {
+        return Err("room code empty");
+    }
+    Ok(code.to_string())
+}
+
 /// Lookup surface for claimed-hit resolution (roster peers or pure test maps).
 trait CombatStore {
     fn living_of(&self, id: PlayerId) -> bool;
@@ -126,11 +141,123 @@ fn apply_impact_store(store: &mut impl CombatStore, firer: PlayerId, hit: &NetIm
     true
 }
 
+impl Rooms {
+    pub fn new() -> Self {
+        Self {
+            rooms: HashMap::new(),
+            membership: HashMap::new(),
+        }
+    }
+
+    pub fn name_taken_in(&self, room_code: &str, key: &str) -> bool {
+        self.rooms.get(room_code).is_some_and(|r| r.name_taken(key))
+    }
+
+    pub fn insert(&mut self, room_code: String, id: PlayerId, entry: PeerEntry) {
+        self.membership.insert(id, room_code.clone());
+        self.rooms
+            .entry(room_code)
+            .or_insert_with(Roster::new)
+            .insert(id, entry);
+    }
+
+    /// Remove the member. Drops the room when empty. Broadcasts roster when peers remain.
+    pub fn leave(&mut self, id: PlayerId, tick: u64) -> bool {
+        let Some(code) = self.membership.remove(&id) else {
+            return false;
+        };
+        let empty = {
+            let Some(roster) = self.rooms.get_mut(&code) else {
+                return false;
+            };
+            roster.remove(id);
+            roster.is_empty()
+        };
+        if empty {
+            self.rooms.remove(&code);
+            return true;
+        }
+        if let Some(roster) = self.rooms.get(&code) {
+            roster.broadcast_roster(tick);
+        }
+        true
+    }
+
+    fn room(&self, id: PlayerId) -> Option<&Roster> {
+        let code = self.membership.get(&id)?;
+        self.rooms.get(code)
+    }
+
+    fn room_mut(&mut self, id: PlayerId) -> Option<&mut Roster> {
+        let code = self.membership.get(&id)?.clone();
+        self.rooms.get_mut(&code)
+    }
+
+    pub fn living(&self, id: PlayerId) -> bool {
+        self.room(id).is_some_and(|r| r.living(id))
+    }
+
+    pub fn try_spawn(&mut self, id: PlayerId, primary: Option<u8>, secondary: Option<u8>) -> bool {
+        self.room_mut(id)
+            .is_some_and(|r| r.try_spawn(id, primary, secondary))
+    }
+
+    pub fn set_role(&mut self, id: PlayerId, role: NetRole) -> bool {
+        self.room_mut(id).is_some_and(|r| r.set_role(id, role))
+    }
+
+    pub fn set_character(&mut self, id: PlayerId, character: u8) -> bool {
+        self.room_mut(id)
+            .is_some_and(|r| r.set_character(id, character))
+    }
+
+    pub fn character(&self, id: PlayerId) -> Option<u8> {
+        self.room(id).and_then(|r| r.character(id))
+    }
+
+    pub fn apply_impact(&mut self, firer: PlayerId, hit: &NetImpactHit) -> bool {
+        self.room_mut(firer)
+            .is_some_and(|r| r.apply_impact(firer, hit))
+    }
+
+    pub fn broadcast_roster(&self, id: PlayerId, tick: u64) {
+        if let Some(roster) = self.room(id) {
+            roster.broadcast_roster(tick);
+        }
+    }
+
+    pub fn send_reliable(&self, id: PlayerId, bytes: Vec<u8>) {
+        if let Some(roster) = self.room(id) {
+            roster.send_reliable(id, bytes);
+        }
+    }
+
+    pub fn relay_datagram(&self, except: PlayerId, bytes: &[u8]) {
+        if let Some(roster) = self.room(except) {
+            roster.relay_datagram(except, bytes);
+        }
+    }
+
+    #[cfg(test)]
+    fn room_count(&self) -> usize {
+        self.rooms.len()
+    }
+
+    #[cfg(test)]
+    fn member_room(&self, id: PlayerId) -> Option<&str> {
+        self.membership.get(&id).map(|s| s.as_str())
+    }
+}
+
 impl Roster {
     pub fn new() -> Self {
         Self {
             peers: HashMap::new(),
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.peers.is_empty()
     }
 
     pub fn name_taken(&self, key: &str) -> bool {
@@ -329,7 +456,7 @@ fn unit_turn(seed: u64, shift: u32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use game_net::{display_name_key, normalize_display_name, NetImpactHit};
+    use game_net::{display_name_key, normalize_display_name, NetImpactHit, NetRole};
 
     #[test]
     fn enter_map_blocks_while_living_allows_after_death() {
@@ -361,6 +488,25 @@ mod tests {
         assert_eq!(normalize_display_name("  Ace  ").unwrap(), "Ace");
         assert!(normalize_display_name("").is_err());
         assert_eq!(display_name_key("Ace"), display_name_key("ace"));
+    }
+
+    #[test]
+    fn normalize_room_code_rejects_blank_keeps_case() {
+        assert!(normalize_room_code("").is_err());
+        assert!(normalize_room_code("   ").is_err());
+        assert_eq!(normalize_room_code("  dev ").unwrap(), "dev");
+        assert_eq!(normalize_room_code("Dev").unwrap(), "Dev");
+    }
+
+    #[test]
+    fn leave_drops_empty_room() {
+        let mut rooms = Rooms::new();
+        rooms.membership.insert(1, "alpha".into());
+        rooms.rooms.insert("alpha".into(), Roster::new());
+        assert_eq!(rooms.room_count(), 1);
+        assert!(rooms.leave(1, 0));
+        assert_eq!(rooms.room_count(), 0);
+        assert!(rooms.member_room(1).is_none());
     }
 
     #[test]

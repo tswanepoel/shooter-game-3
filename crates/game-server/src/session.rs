@@ -11,7 +11,7 @@ use tracing::{info, warn};
 use wtransport::Connection;
 
 use crate::clock::{IdAllocator, SharedClock};
-use crate::roster::{spawn_pose, CombatState, PeerEntry, Roster};
+use crate::roster::{normalize_room_code, spawn_pose, CombatState, PeerEntry, Rooms};
 
 pub type SessionError = Box<dyn std::error::Error + Send + Sync>;
 
@@ -19,23 +19,23 @@ pub async fn handle_session(
     incoming: wtransport::endpoint::IncomingSession,
     clock: Arc<SharedClock>,
     ids: Arc<IdAllocator>,
-    roster: Arc<Mutex<Roster>>,
+    rooms: Arc<Mutex<Rooms>>,
 ) -> Result<(), SessionError> {
     let connection = accept_connection(incoming).await?;
     let (send, recv) = connection.accept_bi().await?;
 
-    let Some(hello) = accept_hello(send, recv, &roster).await? else {
+    let Some(hello) = accept_hello(send, recv, &rooms).await? else {
         return Ok(());
     };
     let player_id = ids.alloc();
     let (reliable_tx, control_rx) =
-        admit_member(&connection, hello, player_id, &clock, &roster).await?;
+        admit_member(&connection, hello, player_id, &clock, &rooms).await?;
 
     session_loop(
         &connection,
         player_id,
         clock,
-        roster,
+        rooms,
         control_rx,
         reliable_tx,
     )
@@ -57,6 +57,7 @@ async fn accept_connection(
 }
 
 struct HelloOk {
+    room_code: String,
     display_name: String,
     send: wtransport::SendStream,
     recv: wtransport::RecvStream,
@@ -77,7 +78,7 @@ async fn write_reject(
 async fn accept_hello(
     mut send: wtransport::SendStream,
     mut recv: wtransport::RecvStream,
-    roster: &Mutex<Roster>,
+    rooms: &Mutex<Rooms>,
 ) -> Result<Option<HelloOk>, SessionError> {
     let mut buf = vec![0u8; 4096];
     let n = recv
@@ -85,7 +86,7 @@ async fn accept_hello(
         .await?
         .ok_or("client closed stream before Hello")?;
 
-    let (protocol, _room_code, display_name_raw) = match decode_c2s(&buf[..n]) {
+    let (protocol, room_code_raw, display_name_raw) = match decode_c2s(&buf[..n]) {
         Ok(ClientToServer::Hello {
             protocol,
             room_code,
@@ -106,6 +107,14 @@ async fn accept_hello(
         return Ok(None);
     }
 
+    let room_code = match normalize_room_code(&room_code_raw) {
+        Ok(c) => c,
+        Err(reason) => {
+            write_reject(&mut send, reason).await?;
+            return Ok(None);
+        }
+    };
+
     let display_name = match normalize_display_name(&display_name_raw) {
         Ok(n) => n,
         Err(reason) => {
@@ -116,8 +125,8 @@ async fn accept_hello(
     let name_key = display_name_key(&display_name);
 
     {
-        let guard = roster.lock().await;
-        if guard.name_taken(&name_key) {
+        let guard = rooms.lock().await;
+        if guard.name_taken_in(&room_code, &name_key) {
             drop(guard);
             write_reject(&mut send, "display name taken").await?;
             return Ok(None);
@@ -125,6 +134,7 @@ async fn accept_hello(
     }
 
     Ok(Some(HelloOk {
+        room_code,
         display_name,
         send,
         recv,
@@ -136,7 +146,7 @@ async fn admit_member(
     hello: HelloOk,
     player_id: PlayerId,
     clock: &SharedClock,
-    roster: &Mutex<Roster>,
+    rooms: &Mutex<Rooms>,
 ) -> Result<
     (
         mpsc::UnboundedSender<Vec<u8>>,
@@ -145,6 +155,7 @@ async fn admit_member(
     SessionError,
 > {
     let HelloOk {
+        room_code,
         display_name,
         mut send,
         mut recv,
@@ -157,7 +168,7 @@ async fn admit_member(
         server_time_secs: clock.server_time_secs(),
     })?;
     send.write_all(&welcome).await?;
-    info!(player_id, %display_name, "welcomed");
+    info!(player_id, %room_code, %display_name, "welcomed");
 
     let (reliable_tx, mut reliable_rx) = mpsc::unbounded_channel::<Vec<u8>>();
     tokio::spawn(async move {
@@ -181,9 +192,10 @@ async fn admit_member(
     });
 
     {
-        let mut guard = roster.lock().await;
+        let mut guard = rooms.lock().await;
         let join_tick = clock.tick();
         guard.insert(
+            room_code,
             player_id,
             PeerEntry {
                 connection: connection.clone(),
@@ -194,7 +206,7 @@ async fn admit_member(
                 character: DEFAULT_CHARACTER,
             },
         );
-        guard.broadcast_roster(join_tick);
+        guard.broadcast_roster(player_id, join_tick);
     }
 
     Ok((reliable_tx, control_rx))
@@ -204,7 +216,7 @@ async fn session_loop(
     connection: &Connection,
     player_id: PlayerId,
     clock: Arc<SharedClock>,
-    roster: Arc<Mutex<Roster>>,
+    rooms: Arc<Mutex<Rooms>>,
     mut control_rx: mpsc::UnboundedReceiver<ClientToServer>,
     _reliable_tx: mpsc::UnboundedSender<Vec<u8>>,
 ) -> Result<(), SessionError> {
@@ -217,7 +229,7 @@ async fn session_loop(
             control = control_rx.recv() => {
                 match control {
                     Some(msg) => {
-                        handle_control_msg(player_id, msg, &clock, &roster).await;
+                        handle_control_msg(player_id, msg, &clock, &rooms).await;
                     }
                     None => {
                         info!(player_id, "reliable control closed");
@@ -236,7 +248,7 @@ async fn session_loop(
                                 t2,
                                 connection,
                                 &clock,
-                                &roster,
+                                &rooms,
                             )
                             .await
                             {
@@ -253,7 +265,7 @@ async fn session_loop(
         }
     }
 
-    remove_member(player_id, &clock, &roster).await;
+    remove_member(player_id, &clock, &rooms).await;
     Ok(())
 }
 
@@ -261,17 +273,17 @@ async fn handle_control_msg(
     player_id: PlayerId,
     msg: ClientToServer,
     clock: &SharedClock,
-    roster: &Mutex<Roster>,
+    rooms: &Mutex<Rooms>,
 ) {
     match msg {
         ClientToServer::Spawn {
             primary,
             secondary,
             active: _,
-        } => handle_spawn(player_id, primary, secondary, clock, roster).await,
-        ClientToServer::SetRole { role } => handle_set_role(player_id, role, clock, roster).await,
+        } => handle_spawn(player_id, primary, secondary, clock, rooms).await,
+        ClientToServer::SetRole { role } => handle_set_role(player_id, role, clock, rooms).await,
         ClientToServer::SetCharacter { character } => {
-            handle_set_character(player_id, character, clock, roster).await;
+            handle_set_character(player_id, character, clock, rooms).await;
         }
         _ => {}
     }
@@ -284,7 +296,7 @@ async fn handle_datagram(
     t2: f64,
     connection: &Connection,
     clock: &SharedClock,
-    roster: &Mutex<Roster>,
+    rooms: &Mutex<Rooms>,
 ) -> bool {
     match msg {
         ClientToServer::ClockProbe { t1 } => {
@@ -304,7 +316,7 @@ async fn handle_datagram(
             false
         }
         ClientToServer::DriveSample { tick, mut drive } => {
-            let guard = roster.lock().await;
+            let guard = rooms.lock().await;
             if !guard.living(player_id) {
                 return false;
             }
@@ -326,7 +338,7 @@ async fn handle_datagram(
             if projectiles.is_empty() {
                 return false;
             }
-            let guard = roster.lock().await;
+            let guard = rooms.lock().await;
             if !guard.living(player_id) {
                 return false;
             }
@@ -342,7 +354,7 @@ async fn handle_datagram(
         }
         ClientToServer::ImpactHit { tick, hit } => {
             let roster_dirty = {
-                let mut guard = roster.lock().await;
+                let mut guard = rooms.lock().await;
                 guard.apply_impact(player_id, &hit)
             };
             let Ok(relay) = encode_s2c(&ServerToClient::PeerImpactHit {
@@ -353,10 +365,10 @@ async fn handle_datagram(
                 return false;
             };
             {
-                let guard = roster.lock().await;
+                let guard = rooms.lock().await;
                 guard.relay_datagram(player_id, &relay);
                 if roster_dirty {
-                    guard.broadcast_roster(clock.tick());
+                    guard.broadcast_roster(player_id, clock.tick());
                 }
             }
             false
@@ -373,12 +385,12 @@ async fn handle_set_role(
     player_id: PlayerId,
     role: NetRole,
     clock: &SharedClock,
-    roster: &Mutex<Roster>,
+    rooms: &Mutex<Rooms>,
 ) {
     let tick = clock.tick();
-    let mut guard = roster.lock().await;
+    let mut guard = rooms.lock().await;
     if guard.set_role(player_id, role) {
-        guard.broadcast_roster(tick);
+        guard.broadcast_roster(player_id, tick);
     }
 }
 
@@ -386,12 +398,12 @@ async fn handle_set_character(
     player_id: PlayerId,
     character: u8,
     clock: &SharedClock,
-    roster: &Mutex<Roster>,
+    rooms: &Mutex<Rooms>,
 ) {
     let tick = clock.tick();
-    let mut guard = roster.lock().await;
+    let mut guard = rooms.lock().await;
     if guard.set_character(player_id, character) {
-        guard.broadcast_roster(tick);
+        guard.broadcast_roster(player_id, tick);
     }
 }
 
@@ -400,12 +412,12 @@ async fn handle_spawn(
     primary: Option<u8>,
     secondary: Option<u8>,
     clock: &SharedClock,
-    roster: &Mutex<Roster>,
+    rooms: &Mutex<Rooms>,
 ) {
     let tick = clock.tick();
     let (position, facing) = spawn_pose(tick, player_id);
     let ok = {
-        let mut guard = roster.lock().await;
+        let mut guard = rooms.lock().await;
         guard.try_spawn(player_id, primary, secondary)
     };
     if !ok {
@@ -418,16 +430,15 @@ async fn handle_spawn(
     }) else {
         return;
     };
-    let guard = roster.lock().await;
+    let guard = rooms.lock().await;
     guard.send_reliable(player_id, you);
-    guard.broadcast_roster(tick);
+    guard.broadcast_roster(player_id, tick);
 }
 
-async fn remove_member(player_id: PlayerId, clock: &SharedClock, roster: &Mutex<Roster>) {
-    let mut guard = roster.lock().await;
-    if guard.remove(player_id) {
-        let tick = clock.tick();
-        guard.broadcast_roster(tick);
-        info!(player_id, "peer left, roster notified");
+async fn remove_member(player_id: PlayerId, clock: &SharedClock, rooms: &Mutex<Rooms>) {
+    let mut guard = rooms.lock().await;
+    let tick = clock.tick();
+    if guard.leave(player_id, tick) {
+        info!(player_id, "peer left");
     }
 }

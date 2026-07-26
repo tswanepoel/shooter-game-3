@@ -16,7 +16,7 @@ use wtransport::tls::Sha256DigestFmt;
 use wtransport::{Endpoint, Identity, ServerConfig};
 
 use clock::{IdAllocator, SharedClock};
-use roster::Roster;
+use roster::Rooms;
 use session::handle_session;
 
 const DEFAULT_BIND: &str = "0.0.0.0:4433";
@@ -51,7 +51,7 @@ async fn main() {
     let server = Endpoint::server(config).expect("WebTransport endpoint");
     let clock = Arc::new(SharedClock::new());
     let ids = Arc::new(IdAllocator::new());
-    let roster = Arc::new(Mutex::new(Roster::new()));
+    let rooms = Arc::new(Mutex::new(Rooms::new()));
 
     {
         let clock = Arc::clone(&clock);
@@ -78,9 +78,9 @@ async fn main() {
         let incoming = server.accept().await;
         let clock = Arc::clone(&clock);
         let ids = Arc::clone(&ids);
-        let roster = Arc::clone(&roster);
+        let rooms = Arc::clone(&rooms);
         tokio::spawn(async move {
-            if let Err(e) = handle_session(incoming, clock, ids, roster).await {
+            if let Err(e) = handle_session(incoming, clock, ids, rooms).await {
                 warn!("session ended: {e}");
             }
         });
