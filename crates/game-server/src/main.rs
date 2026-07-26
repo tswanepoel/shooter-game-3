@@ -1,6 +1,7 @@
 //! Native multiplayer host (WebTransport).
 
 mod clock;
+mod loot;
 mod roster;
 mod session;
 
@@ -55,6 +56,7 @@ async fn main() {
 
     {
         let clock = Arc::clone(&clock);
+        let rooms = Arc::clone(&rooms);
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs_f64(TICK_DURATION_SECS));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -62,6 +64,8 @@ async fn main() {
             loop {
                 interval.tick().await;
                 clock.advance();
+                let mut guard = rooms.lock().await;
+                guard.tick_loot(TICK_DURATION_SECS as f32, clock.tick());
             }
         });
     }

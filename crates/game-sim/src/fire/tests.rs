@@ -653,3 +653,18 @@ fn spawn_ammo_fills_mag_and_draft_reserve() {
     );
     assert_eq!(s.reserve.light_foam, 0);
 }
+
+#[test]
+fn dump_death_ammo_empties_active_kind() {
+    let mut s = armed_self();
+    s.set_primary(Some(b'b')).unwrap();
+    s.primary_mag = 4;
+    s.reserve.light_foam = 6;
+    s.reserve.thick_foam = 3;
+    let (kind, n) = s.dump_death_ammo().expect("dump");
+    assert_eq!(kind, AmmoKind::LightFoam);
+    assert_eq!(n, 10);
+    assert_eq!(s.primary_mag, 0);
+    assert_eq!(s.reserve.light_foam, 0);
+    assert_eq!(s.reserve.thick_foam, 3);
+}

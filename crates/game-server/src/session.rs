@@ -204,6 +204,7 @@ async fn admit_member(
                 combat: CombatState::fresh(),
                 role: NetRole::Player,
                 character: DEFAULT_CHARACTER,
+                last_drive: None,
             },
         );
         guard.broadcast_roster(player_id, join_tick);
@@ -327,11 +328,16 @@ async fn handle_datagram(
             let Ok(relay) = encode_s2c(&ServerToClient::PeerDrive {
                 tick,
                 id: player_id,
-                drive,
+                drive: drive.clone(),
             }) else {
                 return false;
             };
-            guard.relay_datagram(player_id, &relay);
+            drop(guard);
+            {
+                let mut guard = rooms.lock().await;
+                guard.note_drive(player_id, drive);
+                guard.relay_datagram(player_id, &relay);
+            }
             false
         }
         ClientToServer::ProjectileSpawn { tick, projectiles } => {
@@ -353,6 +359,7 @@ async fn handle_datagram(
             false
         }
         ClientToServer::ImpactHit { tick, hit } => {
+            let victim = hit.target;
             let roster_dirty = {
                 let mut guard = rooms.lock().await;
                 guard.apply_impact(player_id, &hit)
@@ -365,12 +372,28 @@ async fn handle_datagram(
                 return false;
             };
             {
-                let guard = rooms.lock().await;
+                let mut guard = rooms.lock().await;
                 guard.relay_datagram(player_id, &relay);
                 if roster_dirty {
-                    guard.broadcast_roster(player_id, clock.tick());
+                    let t = clock.tick();
+                    guard.spawn_corpse_for_kill(victim, t);
+                    guard.broadcast_roster(player_id, t);
                 }
             }
+            false
+        }
+        ClientToServer::AmmoDump { tick, dump } => {
+            let mut guard = rooms.lock().await;
+            guard.accept_ammo_dump(player_id, dump.ammo, dump.rounds, dump.position, tick);
+            false
+        }
+        ClientToServer::LootClaim {
+            tick,
+            drop_id,
+            position,
+        } => {
+            let mut guard = rooms.lock().await;
+            guard.accept_loot_claim(player_id, drop_id, position, tick);
             false
         }
         // Reliable-stream only.

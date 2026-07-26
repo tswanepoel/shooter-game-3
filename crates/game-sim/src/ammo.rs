@@ -1,7 +1,15 @@
 //! Ammo owns round facts (mass). Blasters own which kind they fire and launch speed.
 //! Magazine capacity and spawn reserve drafts live here as tune tables (058).
+//! Reserve capacity and death-dump / loot take drafts (059).
 
 use crate::WeaponClass;
+
+/// Corpse present lifetime (s). Long enough to loot (059).
+pub const CORPSE_LIFETIME_S: f32 = 45.0;
+/// Ammo drop lifetime (s). May end earlier on grant-empty or corpse end (059).
+pub const AMMO_DROP_LIFETIME_S: f32 = 45.0;
+/// Walk-over take radius (m) around an ammo drop (059).
+pub const LOOT_TAKE_RADIUS_M: f32 = 1.5;
 
 /// What a round is. Shared across letters that fire the same kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -52,6 +60,18 @@ impl ReserveAmmo {
         let sum = self.get(kind).saturating_add(n);
         self.set(kind, sum);
     }
+
+    /// How many more rounds of `kind` fit under reserve capacity (059).
+    pub fn room(self, kind: AmmoKind) -> u16 {
+        reserve_capacity_for(kind).saturating_sub(self.get(kind))
+    }
+
+    /// Add up to `n` rounds of `kind`, capped by reserve capacity. Returns how many added.
+    pub fn add_capped(&mut self, kind: AmmoKind, n: u16) -> u16 {
+        let fit = self.room(kind).min(n);
+        self.add(kind, fit);
+        fit
+    }
 }
 
 /// Draft magazine capacity by weapon class (058).
@@ -71,6 +91,25 @@ pub fn spawn_reserve_for(kind: AmmoKind) -> u16 {
         AmmoKind::ThickFoam => 20,
         AmmoKind::Grenade => 4,
     }
+}
+
+/// Max reserve rounds a player may carry per kind (059).
+pub fn reserve_capacity_for(kind: AmmoKind) -> u16 {
+    match kind {
+        AmmoKind::LightFoam => 180,
+        AmmoKind::ThickFoam => 40,
+        AmmoKind::Grenade => 8,
+    }
+}
+
+/// Upper bound for a death dump of `kind` (active mag cap worst case + reserve cap).
+pub fn max_dump_rounds_for(kind: AmmoKind) -> u16 {
+    let mag_worst = match kind {
+        AmmoKind::LightFoam => mag_capacity_for_class(WeaponClass::AssaultRifle),
+        AmmoKind::ThickFoam => mag_capacity_for_class(WeaponClass::SniperRifle),
+        AmmoKind::Grenade => mag_capacity_for_class(WeaponClass::Launcher),
+    };
+    mag_worst.saturating_add(reserve_capacity_for(kind))
 }
 
 /// Round-only facts. Mass is the source of truth here — not on the blaster.
@@ -170,5 +209,18 @@ mod tests {
         assert_eq!(r.get(AmmoKind::LightFoam), 6);
         assert_eq!(r.take(AmmoKind::LightFoam, 100), 6);
         assert_eq!(r.get(AmmoKind::LightFoam), 0);
+    }
+
+    #[test]
+    fn reserve_room_and_capped_add() {
+        let mut r = ReserveAmmo::default();
+        r.set(
+            AmmoKind::Grenade,
+            reserve_capacity_for(AmmoKind::Grenade) - 1,
+        );
+        assert_eq!(r.room(AmmoKind::Grenade), 1);
+        assert_eq!(r.add_capped(AmmoKind::Grenade, 5), 1);
+        assert_eq!(r.room(AmmoKind::Grenade), 0);
+        assert_eq!(r.add_capped(AmmoKind::Grenade, 1), 0);
     }
 }

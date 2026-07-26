@@ -18,7 +18,7 @@ pub use cookie::load_display_name_cookie;
 pub use drive::drive_to_state;
 pub use phase::{CamIntent, MpPhase, StagedLoadout};
 pub use remotes::{RemoteKitKey, RemoteTable};
-pub use shared::{FrameEffects, PeerImpactHitBatch, PeerProjectileBatch};
+pub use shared::{FrameEffects, LootGrantBatch, PeerImpactHitBatch, PeerProjectileBatch};
 // Named type for `FrameEffects::pending_spawn` (phase module is private).
 #[allow(unused_imports)]
 pub use shared::PendingSpawn;
@@ -31,8 +31,8 @@ pub(crate) use shared::{client_now_secs, Shared};
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use game_net::{PlayerId, RosterEntry};
-use game_sim::{ActiveWeapon, ImpactHit, Projectile, SelfState};
+use game_net::{NetAmmoDropSpawn, NetCorpseSpawn, PlayerId, RosterEntry};
+use game_sim::{ActiveWeapon, AmmoKind, ImpactHit, Projectile, SelfState};
 
 pub struct MpClient {
     shared: Rc<RefCell<Shared>>,
@@ -178,6 +178,26 @@ impl MpClient {
         std::mem::take(&mut self.shared.borrow_mut().pending_hits)
     }
 
+    pub fn take_corpse_spawns(&mut self) -> Vec<NetCorpseSpawn> {
+        std::mem::take(&mut self.shared.borrow_mut().pending_corpse_spawns)
+    }
+
+    pub fn take_corpse_ends(&mut self) -> Vec<u64> {
+        std::mem::take(&mut self.shared.borrow_mut().pending_corpse_ends)
+    }
+
+    pub fn take_drop_spawns(&mut self) -> Vec<NetAmmoDropSpawn> {
+        std::mem::take(&mut self.shared.borrow_mut().pending_drop_spawns)
+    }
+
+    pub fn take_drop_ends(&mut self) -> Vec<u64> {
+        std::mem::take(&mut self.shared.borrow_mut().pending_drop_ends)
+    }
+
+    pub fn take_loot_grants(&mut self) -> Vec<LootGrantBatch> {
+        std::mem::take(&mut self.shared.borrow_mut().pending_loot_grants)
+    }
+
     /// Drain spawn/error/cursor side effects for the frame loop.
     pub fn drain_frame_effects(&mut self) -> FrameEffects {
         let mut s = self.shared.borrow_mut();
@@ -194,6 +214,14 @@ impl MpClient {
 
     pub fn claim_hits(&self, hits: &[ImpactHit]) {
         claims::claim_hits(&self.shared, hits);
+    }
+
+    pub fn claim_ammo_dump(&self, kind: AmmoKind, rounds: u16, position: glam::Vec3) {
+        claims::claim_ammo_dump(&self.shared, kind, rounds, position);
+    }
+
+    pub fn claim_loot(&self, drop_id: u64, position: glam::Vec3) {
+        claims::claim_loot(&self.shared, drop_id, position);
     }
 
     /// Debug-console join with cookie name and default room.

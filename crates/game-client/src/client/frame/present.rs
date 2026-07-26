@@ -27,10 +27,12 @@ impl ClientInner {
         }
 
         if self.mp.in_room() {
+            // Living remotes only — dead peers have no owned body except the corpse (059).
             let samples: Vec<_> = self
                 .mp
                 .remotes()
                 .samples()
+                .filter(|(id, _)| self.mp.peer_living(*id))
                 .map(|(id, s)| (id, s.drive.clone()))
                 .collect();
             self.remote_present.apply_all(
@@ -39,15 +41,13 @@ impl ClientInner {
                 |id, state| {
                     self.renderer.fire_fx.apply_remote_fire_residual(id, state);
                 },
-                |id| {
-                    self.health_by_id
-                        .get(&id)
-                        .map(|h| (h.alive, h.die_age_s))
-                        .unwrap_or((true, 0.0))
-                },
+                |_id| (true, 0.0),
             );
+            self.corpse_present
+                .apply_all(&self.renderer.queue, &self.world_loot.corpses);
         } else {
             self.remote_present.clear();
+            self.corpse_present.clear();
         }
 
         let status = match cam {

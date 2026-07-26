@@ -78,10 +78,15 @@ pub(crate) fn maybe_kick_remote_loads(inner: &Rc<RefCell<ClientInner>>) {
             }
             return;
         }
-        let ids: Vec<_> = c.mp.remotes().ids().collect();
+        let ids: Vec<_> =
+            c.mp.remotes()
+                .ids()
+                .filter(|id| c.mp.peer_living(*id))
+                .collect();
         let samples: Vec<_> =
             c.mp.remotes()
                 .samples()
+                .filter(|(id, _)| c.mp.peer_living(*id))
                 .map(|(id, s)| (id, s.drive.clone()))
                 .collect();
         c.remote_present.plan_loads_from(&ids, &samples)
@@ -118,6 +123,63 @@ pub(crate) fn maybe_kick_remote_loads(inner: &Rc<RefCell<ClientInner>>) {
                 }
             }
             c.remote_present.finish_load(id, kit, result);
+        });
+    }
+}
+
+pub(crate) fn maybe_kick_corpse_loads(inner: &Rc<RefCell<ClientInner>>) {
+    let loads = {
+        let mut c = inner.borrow_mut();
+        if !c.mp.in_room() {
+            c.corpse_present.clear();
+            return;
+        }
+        let corpses = c.world_loot.corpses.clone();
+        c.corpse_present.plan_loads(&corpses)
+    };
+    if loads.is_empty() {
+        return;
+    }
+
+    let (device, queue, format) = {
+        let c = inner.borrow();
+        (
+            c.renderer.device.clone(),
+            c.renderer.queue.clone(),
+            c.renderer.config.format,
+        )
+    };
+
+    for (corpse_id, character) in loads {
+        let position = {
+            let c = inner.borrow();
+            c.world_loot
+                .corpses
+                .get(&corpse_id)
+                .map(|x| (x.position, x.facing))
+                .unwrap_or((glam::Vec3::ZERO, 0.0))
+        };
+        let state = crate::corpse_present::corpse_load_state(character, position.0, position.1);
+        let inner = inner.clone();
+        let device = device.clone();
+        let queue = queue.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = SelfGpu::load(&device, &queue, format, MSAA_SAMPLE_COUNT, &state).await;
+            let mut c = inner.borrow_mut();
+            match &result {
+                Ok(_) => {
+                    web_sys::console::log_1(
+                        &format!("mp: corpse id={corpse_id} present ready").into(),
+                    );
+                }
+                Err(err) => {
+                    let msg = err.as_string().unwrap_or_else(|| format!("{err:?}"));
+                    web_sys::console::error_1(
+                        &format!("mp: corpse id={corpse_id} load failed: {msg}").into(),
+                    );
+                }
+            }
+            c.corpse_present.finish_load(corpse_id, character, result);
         });
     }
 }

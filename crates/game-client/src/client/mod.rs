@@ -12,6 +12,7 @@ use game_sim::equip_blaster_letter;
 use game_sim::{FireState, PlayerHealth, ProjectileWorld, SelfState};
 use web_sys::HtmlCanvasElement;
 
+use crate::corpse_present::CorpsePresent;
 #[cfg(feature = "debug-tools")]
 use crate::debug::DebugTools;
 use crate::emote_wheel::EmoteWheel;
@@ -25,6 +26,7 @@ use crate::renderer::Renderer;
 use crate::self_present::SelfPresentState;
 use crate::ui_overlay::UiOverlay;
 use crate::view::{FlyInput, ViewController};
+use crate::world_loot::WorldLoot;
 pub(crate) struct ClientInner {
     renderer: Renderer,
     pub(crate) canvas: HtmlCanvasElement,
@@ -38,9 +40,14 @@ pub(crate) struct ClientInner {
     hit_marker: HitMarker,
     self_present: SelfPresentState,
     remote_present: RemotePresent,
+    corpse_present: CorpsePresent,
     fire: FireState,
     projectiles: ProjectileWorld,
     health_by_id: HashMap<PlayerId, PlayerHealth>,
+    world_loot: WorldLoot,
+    next_local_drop_id: u64,
+    /// Edge detect local death dump (059).
+    was_alive: bool,
     last_frame_secs: f64,
     #[cfg(feature = "debug-tools")]
     fps_ema: f32,
@@ -75,9 +82,13 @@ impl ClientInner {
             hit_marker: HitMarker::new(),
             self_present: SelfPresentState::Idle,
             remote_present: RemotePresent::new(),
+            corpse_present: CorpsePresent::new(),
             fire: FireState::new(),
             projectiles: ProjectileWorld::new(),
             health_by_id: HashMap::new(),
+            world_loot: WorldLoot::default(),
+            next_local_drop_id: 1,
+            was_alive: true,
             last_frame_secs: 0.0,
             #[cfg(feature = "debug-tools")]
             fps_ema: 0.0,
@@ -105,6 +116,8 @@ impl ClientInner {
                 DebugHostRequest::MpLeave => {
                     self.mp.leave();
                     self.remote_present.clear();
+                    self.corpse_present.clear();
+                    self.world_loot.clear();
                     self.health_by_id.clear();
                     self.debug.shell.push_log("mp: left (lobby)");
                     self.ui.set_status(String::new());

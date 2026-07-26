@@ -3,13 +3,18 @@
 use std::collections::HashMap;
 
 use game_net::{
-    display_name_key, encode_s2c_frame, is_known_character, NetImpactHit, NetRole, NetVec3,
-    PlayerId, RosterEntry, ServerToClient,
+    display_name_key, encode_s2c_frame, is_known_character, DriveView, NetImpactHit, NetRole,
+    NetVec3, PlayerId, RosterEntry, ServerToClient,
 };
 use game_sim::{impact_damage, AmmoKind, HitBodyPart, WeaponClass, HEALTH_MAX};
 use tokio::sync::mpsc;
 use tracing::warn;
 use wtransport::Connection;
+
+use crate::loot::{
+    encode_corpse_end, encode_corpse_spawn, encode_drop_end, encode_drop_spawn, encode_loot_grant,
+    RoomLoot,
+};
 
 pub const SPAWN_RADIUS_M: f32 = 8.0;
 
@@ -68,10 +73,13 @@ pub struct PeerEntry {
     pub combat: CombatState,
     pub role: NetRole,
     pub character: u8,
+    /// Last drive sample while living (059 corpse pose + loot radius).
+    pub last_drive: Option<DriveView>,
 }
 
 pub struct Roster {
     peers: HashMap<PlayerId, PeerEntry>,
+    loot: RoomLoot,
 }
 
 /// Host map of room code → roster. Membership routes a player to their room.
@@ -220,6 +228,51 @@ impl Rooms {
             .is_some_and(|r| r.apply_impact(firer, hit))
     }
 
+    /// After a scored kill: mint corpse from victim last drive and broadcast.
+    pub fn spawn_corpse_for_kill(&mut self, victim: PlayerId, tick: u64) {
+        let Some(roster) = self.room_mut(victim) else {
+            return;
+        };
+        roster.spawn_corpse_for_kill(victim, tick);
+    }
+
+    pub fn note_drive(&mut self, id: PlayerId, drive: DriveView) {
+        if let Some(roster) = self.room_mut(id) {
+            roster.note_drive(id, drive);
+        }
+    }
+
+    pub fn accept_ammo_dump(
+        &mut self,
+        victim: PlayerId,
+        ammo: u8,
+        rounds: u16,
+        position: NetVec3,
+        tick: u64,
+    ) {
+        if let Some(roster) = self.room_mut(victim) {
+            roster.accept_ammo_dump(victim, ammo, rounds, position, tick);
+        }
+    }
+
+    pub fn accept_loot_claim(
+        &mut self,
+        claimant: PlayerId,
+        drop_id: u64,
+        position: NetVec3,
+        tick: u64,
+    ) {
+        if let Some(roster) = self.room_mut(claimant) {
+            roster.accept_loot_claim(claimant, drop_id, position, tick);
+        }
+    }
+
+    pub fn tick_loot(&mut self, dt: f32, tick: u64) {
+        for roster in self.rooms.values_mut() {
+            roster.tick_loot(dt, tick);
+        }
+    }
+
     pub fn broadcast_roster(&self, id: PlayerId, tick: u64) {
         if let Some(roster) = self.room(id) {
             roster.broadcast_roster(tick);
@@ -253,6 +306,7 @@ impl Roster {
     pub fn new() -> Self {
         Self {
             peers: HashMap::new(),
+            loot: RoomLoot::default(),
         }
     }
 
@@ -279,6 +333,90 @@ impl Roster {
             .get(&id)
             .map(|p| p.combat.living)
             .unwrap_or(false)
+    }
+
+    pub fn note_drive(&mut self, id: PlayerId, drive: DriveView) {
+        if let Some(peer) = self.peers.get_mut(&id) {
+            peer.last_drive = Some(drive);
+        }
+    }
+
+    pub fn spawn_corpse_for_kill(&mut self, victim: PlayerId, tick: u64) {
+        let Some(peer) = self.peers.get(&victim) else {
+            return;
+        };
+        if peer.combat.living {
+            return;
+        }
+        let character = peer.character;
+        let (position, facing) = peer
+            .last_drive
+            .as_ref()
+            .map(|d| (d.position, d.facing))
+            .unwrap_or((NetVec3::new(0.0, 0.0, 0.0), 0.0));
+        let spawn = self.loot.spawn_corpse(victim, character, position, facing);
+        if let Some(bytes) = encode_corpse_spawn(tick, spawn) {
+            self.broadcast_datagram_all(&bytes);
+        }
+    }
+
+    pub fn accept_ammo_dump(
+        &mut self,
+        victim: PlayerId,
+        ammo: u8,
+        rounds: u16,
+        position: NetVec3,
+        tick: u64,
+    ) {
+        if self.living(victim) {
+            return;
+        }
+        if let Some(drop) = self.loot.accept_dump(victim, ammo, rounds, position) {
+            if let Some(bytes) = encode_drop_spawn(tick, drop) {
+                self.broadcast_datagram_all(&bytes);
+            }
+        }
+    }
+
+    pub fn accept_loot_claim(
+        &mut self,
+        claimant: PlayerId,
+        drop_id: u64,
+        position: NetVec3,
+        tick: u64,
+    ) {
+        let living = self.living(claimant);
+        let Some(grant) = self.loot.elect_claim(claimant, drop_id, position, living) else {
+            return;
+        };
+        if let Some(bytes) = encode_loot_grant(
+            tick,
+            grant.drop_id,
+            grant.player_id,
+            grant.ammo,
+            grant.rounds,
+        ) {
+            self.broadcast_datagram_all(&bytes);
+        }
+        if grant.drop_empty {
+            if let Some(bytes) = encode_drop_end(tick, grant.drop_id) {
+                self.broadcast_datagram_all(&bytes);
+            }
+        }
+    }
+
+    pub fn tick_loot(&mut self, dt: f32, tick: u64) {
+        let ev = self.loot.tick(dt);
+        for corpse_id in ev.corpse_ends {
+            if let Some(bytes) = encode_corpse_end(tick, corpse_id) {
+                self.broadcast_datagram_all(&bytes);
+            }
+        }
+        for drop_id in ev.drop_ends {
+            if let Some(bytes) = encode_drop_end(tick, drop_id) {
+                self.broadcast_datagram_all(&bytes);
+            }
+        }
     }
 
     pub fn try_spawn(&mut self, id: PlayerId, primary: Option<u8>, secondary: Option<u8>) -> bool {
@@ -360,6 +498,14 @@ impl Roster {
             if id == except {
                 continue;
             }
+            if let Err(e) = peer.connection.send_datagram(bytes) {
+                warn!(peer = id, "send_datagram: {e}");
+            }
+        }
+    }
+
+    pub fn broadcast_datagram_all(&self, bytes: &[u8]) {
+        for (&id, peer) in &self.peers {
             if let Err(e) = peer.connection.send_datagram(bytes) {
                 warn!(peer = id, "send_datagram: {e}");
             }

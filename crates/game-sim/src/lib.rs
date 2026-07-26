@@ -8,6 +8,7 @@ mod config;
 mod emote;
 mod fire;
 mod health;
+mod loot;
 mod self_state;
 mod weapons;
 
@@ -16,5 +17,6 @@ pub use config::*;
 pub use emote::*;
 pub use fire::*;
 pub use health::*;
+pub use loot::*;
 pub use self_state::*;
 pub use weapons::*;

@@ -93,6 +93,8 @@ impl ClientInner {
         if self.mp.in_room() {
             self.remote_present
                 .write_view_proj_all(&self.renderer.queue, view_proj);
+            self.corpse_present
+                .write_view_proj_all(&self.renderer.queue, view_proj);
         }
         let self_ref = if draw_local_self {
             match &self.self_present {
@@ -104,6 +106,11 @@ impl ClientInner {
         };
         let remotes_ref = if self.mp.in_room() {
             Some(&self.remote_present)
+        } else {
+            None
+        };
+        let corpses_ref = if self.mp.in_room() {
+            Some(&self.corpse_present)
         } else {
             None
         };
@@ -150,6 +157,7 @@ impl ClientInner {
                 draw_grid,
                 self_ref,
                 remotes_ref,
+                corpses_ref,
                 lineup_ref,
                 draw_reticle,
                 draw_hit_marker,
@@ -161,6 +169,7 @@ impl ClientInner {
             draw_grid,
             self_ref,
             remotes_ref,
+            corpses_ref,
             draw_reticle,
             draw_hit_marker,
             draw_emote_wheel,
@@ -223,6 +232,14 @@ impl ClientInner {
                             .map(|k| self.self_state.reserve.get(k))
                             .unwrap_or(0);
                         parts.push(format!("mag {mag}/{cap}  rsv {rsv}"));
+                    }
+                    // 059: see whether a drop exists and how far (take radius 1.5m).
+                    if let Some((n, dist, rounds)) =
+                        self.world_loot.hud_near(self.self_state.position)
+                    {
+                        parts.push(format!("loot {n} near {dist:.2}m r={rounds}"));
+                    } else {
+                        parts.push(format!("loot 0  corpses {}", self.world_loot.corpses.len()));
                     }
                     Some(parts.join("  |  "))
                 }
@@ -295,6 +312,8 @@ impl ClientInner {
             if actions.leave {
                 self.mp.leave();
                 self.remote_present.clear();
+                self.corpse_present.clear();
+                self.world_loot.clear();
                 self.health_by_id.clear();
                 self.ui.set_status(String::new());
             }

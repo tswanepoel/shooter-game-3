@@ -4,6 +4,8 @@
 mod body_hit;
 #[cfg(target_arch = "wasm32")]
 mod client;
+#[cfg(target_arch = "wasm32")]
+mod corpse_present;
 #[cfg(all(target_arch = "wasm32", feature = "debug-tools"))]
 mod debug;
 #[cfg(target_arch = "wasm32")]
@@ -34,6 +36,8 @@ mod self_present;
 mod ui_overlay;
 #[cfg(target_arch = "wasm32")]
 mod view;
+#[cfg(target_arch = "wasm32")]
+mod world_loot;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[allow(dead_code)]
@@ -56,7 +60,7 @@ use web_sys::HtmlCanvasElement;
 #[cfg(all(target_arch = "wasm32", feature = "debug-tools"))]
 use client::load::maybe_kick_lineup_load;
 #[cfg(target_arch = "wasm32")]
-use client::load::{maybe_kick_remote_loads, maybe_kick_self_load};
+use client::load::{maybe_kick_corpse_loads, maybe_kick_remote_loads, maybe_kick_self_load};
 #[cfg(target_arch = "wasm32")]
 pub(crate) use client::ClientInner;
 #[cfg(all(target_arch = "wasm32", feature = "debug-tools"))]
@@ -136,6 +140,7 @@ impl GameClient {
         *frame_cb.borrow_mut() = Some(Closure::new(move || {
             maybe_kick_self_load(&client);
             maybe_kick_remote_loads(&client);
+            maybe_kick_corpse_loads(&client);
             #[cfg(feature = "debug-tools")]
             maybe_kick_lineup_load(&client);
 

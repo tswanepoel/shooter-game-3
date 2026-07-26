@@ -14,6 +14,7 @@ use web_sys::ReadableStreamDefaultReader;
 
 use super::apply::{apply_roster, apply_you_spawned};
 use super::cookie::save_display_name_cookie;
+use super::shared::LootGrantBatch;
 use super::{client_now_secs, MpPhase, PeerImpactHitBatch, PeerProjectileBatch, Shared};
 
 const IDENTITY_PATH: &str = "/__debug/wt-identity";
@@ -233,6 +234,35 @@ fn handle_s2c(shared: &Rc<RefCell<Shared>>, msg: ServerToClient, t4: f64) {
                 return;
             }
             s.pending_hits.push(PeerImpactHitBatch { hit });
+        }
+        ServerToClient::CorpseSpawn { corpse, .. } => {
+            shared.borrow_mut().pending_corpse_spawns.push(corpse);
+        }
+        ServerToClient::CorpseEnd { corpse_id, .. } => {
+            shared.borrow_mut().pending_corpse_ends.push(corpse_id);
+        }
+        ServerToClient::AmmoDropSpawn { drop, .. } => {
+            shared.borrow_mut().pending_drop_spawns.push(drop);
+        }
+        ServerToClient::AmmoDropEnd { drop_id, .. } => {
+            shared.borrow_mut().pending_drop_ends.push(drop_id);
+        }
+        ServerToClient::LootGrant {
+            drop_id,
+            player_id,
+            ammo,
+            rounds,
+            ..
+        } => {
+            shared
+                .borrow_mut()
+                .pending_loot_grants
+                .push(LootGrantBatch {
+                    drop_id,
+                    player_id,
+                    ammo,
+                    rounds,
+                });
         }
         ServerToClient::Welcome { .. } | ServerToClient::Reject { .. } => {}
     }

@@ -4,6 +4,7 @@ use glam::Mat4;
 use wasm_bindgen::prelude::*;
 use web_sys::HtmlCanvasElement;
 
+use crate::corpse_present::CorpsePresent;
 use crate::emote_wheel::EmoteWheelGpu;
 use crate::fire_fx::FireFx;
 use crate::hit_marker::HitMarkerGpu;
@@ -319,6 +320,7 @@ impl Renderer {
         draw_grid: bool,
         self_body: Option<&SelfGpu>,
         remotes: Option<&RemotePresent>,
+        corpses: Option<&CorpsePresent>,
         #[cfg(feature = "debug-tools")] lineup: Option<&LineupGpu>,
         draw_reticle: bool,
         draw_hit_marker: bool,
@@ -367,6 +369,10 @@ impl Renderer {
 
             if let Some(remotes) = remotes {
                 remotes.draw_all(&mut pass);
+            }
+
+            if let Some(corpses) = corpses {
+                corpses.draw_all(&mut pass);
             }
 
             #[cfg(feature = "debug-tools")]

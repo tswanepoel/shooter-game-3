@@ -1,4 +1,4 @@
-//! Fire, projectiles, hits, and health for one frame.
+//! Fire, projectiles, hits, health, and loot for one frame.
 
 use std::collections::HashMap;
 
@@ -235,8 +235,62 @@ impl ClientInner {
             h.tick_regen(dt);
         }
 
+        // Death dump → victim AmmoDump / solo local drop (059).
+        if self.was_alive && !self.self_state.alive {
+            let pos = self.self_state.position;
+            if let Some((kind, rounds)) = self.self_state.dump_death_ammo() {
+                if self.mp.in_room() {
+                    self.mp.claim_ammo_dump(kind, rounds, pos);
+                } else if rounds > 0 {
+                    let id = self.next_local_drop_id;
+                    self.next_local_drop_id = self.next_local_drop_id.saturating_add(1);
+                    self.world_loot.spawn_local_drop(id, pos, kind, rounds);
+                }
+            }
+        }
+        self.was_alive = self.self_state.alive;
+
         if self.mp.is_living() && !self.self_state.alive {
             self.mp.return_to_bench_after_death(&self.self_state);
+        }
+
+        // Ingest room loot announces / ends / grants.
+        for c in self.mp.take_corpse_spawns() {
+            self.world_loot.note_corpse_spawn(&c);
+        }
+        for id in self.mp.take_corpse_ends() {
+            self.world_loot.note_corpse_end(id);
+        }
+        for d in self.mp.take_drop_spawns() {
+            let Some(kind) = mp::ammo_kind_from_wire(d.ammo) else {
+                continue;
+            };
+            self.world_loot.note_drop_spawn(&d, kind);
+        }
+        for id in self.mp.take_drop_ends() {
+            self.world_loot.note_drop_end(id);
+        }
+        for g in self.mp.take_loot_grants() {
+            self.world_loot.apply_grant_shrink(g.drop_id, g.rounds);
+            if local_id == Some(g.player_id) {
+                if let Some(kind) = mp::ammo_kind_from_wire(g.ammo) {
+                    self.self_state.grant_reserve(kind, g.rounds);
+                }
+            }
+        }
+
+        self.world_loot.tick(dt);
+
+        // Walk-over: MP claims; solo grants locally.
+        if self.self_state.alive {
+            if self.mp.is_living() {
+                for drop_id in self.world_loot.overlapping_claimable(&self.self_state) {
+                    self.mp.claim_loot(drop_id, self.self_state.position);
+                    self.world_loot.mark_claimed(drop_id);
+                }
+            } else if !self.mp.in_room() {
+                let _ = self.world_loot.try_solo_take(&mut self.self_state);
+            }
         }
 
         self.renderer.fire_fx.tick(dt);

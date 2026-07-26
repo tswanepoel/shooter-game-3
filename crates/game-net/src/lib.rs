@@ -7,7 +7,7 @@ pub const TICK_HZ: u32 = 180;
 pub const TICK_DURATION_SECS: f64 = 1.0 / TICK_HZ as f64;
 
 /// Alpha wire; bumped when variants change (no distributed compat promise).
-pub const PROTOCOL_VERSION: u16 = 11;
+pub const PROTOCOL_VERSION: u16 = 13;
 
 /// Max display-name length after trim (051).
 pub const DISPLAY_NAME_MAX_CHARS: usize = 24;
@@ -105,6 +105,34 @@ pub struct NetImpactHit {
     pub part: u8,
 }
 
+/// Victim death dump of active-kind rounds into a room ammo drop (059).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NetAmmoDump {
+    pub ammo: u8,
+    pub rounds: u16,
+    pub position: NetVec3,
+}
+
+/// Pose snapshot for a corpse present (059).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NetCorpseSpawn {
+    pub corpse_id: u64,
+    pub victim: PlayerId,
+    pub character: u8,
+    pub position: NetVec3,
+    pub facing: f32,
+}
+
+/// Invisible ammo drop announce (059).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NetAmmoDropSpawn {
+    pub drop_id: u64,
+    pub corpse_id: u64,
+    pub position: NetVec3,
+    pub ammo: u8,
+    pub rounds: u16,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RosterEntry {
     pub id: PlayerId,
@@ -139,6 +167,17 @@ pub enum ClientToServer {
     ImpactHit {
         tick: u64,
         hit: NetImpactHit,
+    },
+    /// Victim dump of death ammo into a room drop (059).
+    AmmoDump {
+        tick: u64,
+        dump: NetAmmoDump,
+    },
+    /// Living walk-over claim on a drop (059). Position is the claimant feet pose.
+    LootClaim {
+        tick: u64,
+        drop_id: u64,
+        position: NetVec3,
     },
     /// Reliable control stream only.
     SetRole {
@@ -200,6 +239,34 @@ pub enum ServerToClient {
         tick: u64,
         id: PlayerId,
         hit: NetImpactHit,
+    },
+    /// Room corpse present after accepted death (059).
+    CorpseSpawn {
+        tick: u64,
+        corpse: NetCorpseSpawn,
+    },
+    /// Corpse lifetime ended (059). Linked drop ends with it.
+    CorpseEnd {
+        tick: u64,
+        corpse_id: u64,
+    },
+    /// Room ammo drop after a victim dump (059).
+    AmmoDropSpawn {
+        tick: u64,
+        drop: NetAmmoDropSpawn,
+    },
+    /// Elected loot grant into winner reserve (059).
+    LootGrant {
+        tick: u64,
+        drop_id: u64,
+        player_id: PlayerId,
+        ammo: u8,
+        rounds: u16,
+    },
+    /// Drop ended by timer or empty without a grant frame (059).
+    AmmoDropEnd {
+        tick: u64,
+        drop_id: u64,
     },
 }
 
@@ -474,6 +541,75 @@ mod tests {
         };
         let b = encode_s2c(&s2c).unwrap();
         assert_eq!(decode_s2c(&b).unwrap(), s2c);
+    }
+
+    #[test]
+    fn loot_wire_roundtrip() {
+        let dump = NetAmmoDump {
+            ammo: 0,
+            rounds: 12,
+            position: NetVec3::new(1.0, 0.0, 2.0),
+        };
+        let c2s = ClientToServer::AmmoDump {
+            tick: 9,
+            dump: dump.clone(),
+        };
+        assert_eq!(decode_c2s(&encode_c2s(&c2s).unwrap()).unwrap(), c2s);
+
+        let claim = ClientToServer::LootClaim {
+            tick: 10,
+            drop_id: 7,
+            position: NetVec3::new(1.0, 0.0, 2.0),
+        };
+        assert_eq!(decode_c2s(&encode_c2s(&claim).unwrap()).unwrap(), claim);
+
+        let corpse = ServerToClient::CorpseSpawn {
+            tick: 11,
+            corpse: NetCorpseSpawn {
+                corpse_id: 3,
+                victim: 2,
+                character: b'a',
+                position: NetVec3::new(1.0, 0.0, 2.0),
+                facing: 0.5,
+            },
+        };
+        assert_eq!(decode_s2c(&encode_s2c(&corpse).unwrap()).unwrap(), corpse);
+
+        let drop = ServerToClient::AmmoDropSpawn {
+            tick: 12,
+            drop: NetAmmoDropSpawn {
+                drop_id: 7,
+                corpse_id: 3,
+                position: NetVec3::new(1.0, 0.0, 2.0),
+                ammo: 0,
+                rounds: 12,
+            },
+        };
+        assert_eq!(decode_s2c(&encode_s2c(&drop).unwrap()).unwrap(), drop);
+
+        let grant = ServerToClient::LootGrant {
+            tick: 13,
+            drop_id: 7,
+            player_id: 1,
+            ammo: 0,
+            rounds: 5,
+        };
+        assert_eq!(decode_s2c(&encode_s2c(&grant).unwrap()).unwrap(), grant);
+
+        let end = ServerToClient::AmmoDropEnd {
+            tick: 14,
+            drop_id: 7,
+        };
+        assert_eq!(decode_s2c(&encode_s2c(&end).unwrap()).unwrap(), end);
+
+        let corpse_end = ServerToClient::CorpseEnd {
+            tick: 15,
+            corpse_id: 3,
+        };
+        assert_eq!(
+            decode_s2c(&encode_s2c(&corpse_end).unwrap()).unwrap(),
+            corpse_end
+        );
     }
 
     #[test]

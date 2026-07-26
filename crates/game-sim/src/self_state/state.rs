@@ -203,6 +203,36 @@ impl SelfState {
         spent
     }
 
+    /// Room left in reserve for `kind` under capacity (059).
+    pub fn reserve_room(&self, kind: AmmoKind) -> u16 {
+        self.reserve.room(kind)
+    }
+
+    /// Grant rounds into reserve, capped by capacity. Returns how many added (059).
+    pub fn grant_reserve(&mut self, kind: AmmoKind, n: u16) -> u16 {
+        self.reserve.add_capped(kind, n)
+    }
+
+    /// Empty active magazine + that kind's reserve into a death dump payload (059).
+    /// Returns `None` when there is no active blaster. Rounds may be zero (no drop).
+    pub fn dump_death_ammo(&mut self) -> Option<(AmmoKind, u16)> {
+        let kind = self.active_ammo_kind()?;
+        let mag = match self.active {
+            ActiveWeapon::Primary => {
+                let n = self.primary_mag;
+                self.primary_mag = 0;
+                n
+            }
+            ActiveWeapon::Secondary => {
+                let n = self.secondary_mag;
+                self.secondary_mag = 0;
+                n
+            }
+        };
+        let from_reserve = self.reserve.take(kind, u16::MAX);
+        Some((kind, mag.saturating_add(from_reserve)))
+    }
+
     /// Fill active magazine from reserve of that ammo kind, up to capacity (058).
     /// Returns true when any rounds moved.
     pub fn try_reload(&mut self) -> bool {
