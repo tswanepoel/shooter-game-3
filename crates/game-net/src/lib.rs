@@ -9,9 +9,6 @@ pub const TICK_DURATION_SECS: f64 = 1.0 / TICK_HZ as f64;
 /// Alpha wire; bumped when variants change (no distributed compat promise).
 pub const PROTOCOL_VERSION: u16 = 11;
 
-/// Default room code (051 MVP). Client pre-fills this; server accepts only this value.
-pub const DEFAULT_ROOM_CODE: &str = "dev";
-
 /// Max display-name length after trim (051).
 pub const DISPLAY_NAME_MAX_CHARS: usize = 24;
 
@@ -310,7 +307,7 @@ mod tests {
     fn hello_roundtrip() {
         let msg = ClientToServer::Hello {
             protocol: PROTOCOL_VERSION,
-            room_code: DEFAULT_ROOM_CODE.into(),
+            room_code: "dev".into(),
             display_name: "Ace".into(),
         };
         let b = encode_c2s(&msg).unwrap();
@@ -488,7 +485,7 @@ mod tests {
     fn directional_roots_do_not_cross_decode() {
         let c2s = encode_c2s(&ClientToServer::Hello {
             protocol: 1,
-            room_code: DEFAULT_ROOM_CODE.into(),
+            room_code: "dev".into(),
             display_name: "x".into(),
         })
         .unwrap();

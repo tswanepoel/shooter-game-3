@@ -2,7 +2,6 @@
 
 use game_net::{
     NetImpactHit, NetProjectileSpawn, NetRole, PlayerId, RosterEntry, DEFAULT_CHARACTER,
-    DEFAULT_ROOM_CODE as ROOM_CODE,
 };
 use game_sim::ActiveWeapon;
 use web_sys::WritableStreamDefaultWriter;
@@ -79,7 +78,7 @@ impl Shared {
             pending_hits: Vec::new(),
             pending_spawn: None,
             spawn_requested: false,
-            join_room: ROOM_CODE.into(),
+            join_room: String::new(),
             join_name: String::new(),
             character: DEFAULT_CHARACTER,
             role: NetRole::Player,

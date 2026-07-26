@@ -3,7 +3,7 @@
 use game_net::{character_catalog, NetRole, RosterEntry, DEFAULT_CHARACTER};
 use game_sim::{ActiveWeapon, WeaponClass};
 
-use crate::mp::{self, MpPhase, StagedLoadout, DEFAULT_ROOM_CODE};
+use crate::mp::{self, MpPhase, StagedLoadout, JOIN_ROOM_PREFILL};
 
 #[cfg(feature = "debug-tools")]
 use crate::debug::DebugShell;
@@ -80,7 +80,7 @@ impl UiOverlay {
             egui_renderer,
             pending_events: Vec::new(),
             modifiers: egui::Modifiers::default(),
-            room_code: DEFAULT_ROOM_CODE.into(),
+            room_code: JOIN_ROOM_PREFILL.into(),
             display_name: name,
             status: String::new(),
             ui_wants_pointer: false,
@@ -291,7 +291,7 @@ fn draw_join(
                 ui.add(
                     egui::TextEdit::singleline(room)
                         .desired_width(220.0)
-                        .hint_text(DEFAULT_ROOM_CODE),
+                        .hint_text("room code"),
                 );
                 ui.end_row();
                 ui.label("Name");

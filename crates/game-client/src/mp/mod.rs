@@ -16,13 +16,15 @@ mod tick;
 pub use claims::{ammo_kind_from_wire, net_spawn_to_projectile};
 pub use cookie::load_display_name_cookie;
 pub use drive::drive_to_state;
-pub use game_net::DEFAULT_ROOM_CODE;
 pub use phase::{CamIntent, MpPhase, StagedLoadout};
 pub use remotes::{RemoteKitKey, RemoteTable};
 pub use shared::{FrameEffects, PeerImpactHitBatch, PeerProjectileBatch};
 // Named type for `FrameEffects::pending_spawn` (phase module is private).
 #[allow(unused_imports)]
 pub use shared::PendingSpawn;
+
+/// Temporary alpha join-form / console pre-fill. Nuke when room must be typed.
+pub const JOIN_ROOM_PREFILL: &str = "dev";
 
 pub(crate) use shared::{client_now_secs, Shared};
 

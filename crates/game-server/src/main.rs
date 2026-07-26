@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use game_net::{DEFAULT_ROOM_CODE, PROTOCOL_VERSION, TICK_DURATION_SECS, TICK_HZ};
+use game_net::{PROTOCOL_VERSION, TICK_DURATION_SECS, TICK_HZ};
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 use wtransport::tls::Sha256DigestFmt;
@@ -70,7 +70,6 @@ async fn main() {
         %bind,
         tick_hz = TICK_HZ,
         protocol = PROTOCOL_VERSION,
-        room = DEFAULT_ROOM_CODE,
         cert = %cert_hash.fmt(Sha256DigestFmt::DottedHex),
         "game-server listening (WebTransport)"
     );

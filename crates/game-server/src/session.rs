@@ -4,8 +4,7 @@ use std::sync::Arc;
 
 use game_net::{
     decode_c2s, display_name_key, encode_s2c, encode_s2c_frame, normalize_display_name,
-    ClientToServer, NetRole, PlayerId, ServerToClient, DEFAULT_CHARACTER, DEFAULT_ROOM_CODE,
-    PROTOCOL_VERSION,
+    ClientToServer, NetRole, PlayerId, ServerToClient, DEFAULT_CHARACTER, PROTOCOL_VERSION,
 };
 use tokio::sync::{mpsc, Mutex};
 use tracing::{info, warn};
@@ -86,7 +85,7 @@ async fn accept_hello(
         .await?
         .ok_or("client closed stream before Hello")?;
 
-    let (protocol, room_code, display_name_raw) = match decode_c2s(&buf[..n]) {
+    let (protocol, _room_code, display_name_raw) = match decode_c2s(&buf[..n]) {
         Ok(ClientToServer::Hello {
             protocol,
             room_code,
@@ -104,11 +103,6 @@ async fn accept_hello(
             format!("protocol mismatch: got {protocol}, want {PROTOCOL_VERSION}"),
         )
         .await?;
-        return Ok(None);
-    }
-
-    if room_code != DEFAULT_ROOM_CODE {
-        write_reject(&mut send, format!("unknown room code: {room_code}")).await?;
         return Ok(None);
     }
 

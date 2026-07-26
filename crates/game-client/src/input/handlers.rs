@@ -214,9 +214,11 @@ pub fn install_input_handlers(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCanv
             }
 
             #[cfg(feature = "debug-tools")]
-            let fly = client.view.is_flycam() || client.debug.flycam_wanted();
+            let fly = client.view.is_flycam()
+                || client.debug.flycam_wanted()
+                || client.mp.is_spectating();
             #[cfg(not(feature = "debug-tools"))]
-            let fly = false;
+            let fly = client.view.is_flycam() || client.mp.is_spectating();
             if fly {
                 return;
             }

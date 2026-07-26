@@ -329,7 +329,7 @@ fn unit_turn(seed: u64, shift: u32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use game_net::{display_name_key, normalize_display_name, NetImpactHit, DEFAULT_ROOM_CODE};
+    use game_net::{display_name_key, normalize_display_name, NetImpactHit};
 
     #[test]
     fn enter_map_blocks_while_living_allows_after_death() {
@@ -357,11 +357,10 @@ mod tests {
     }
 
     #[test]
-    fn normalize_and_room_policy() {
+    fn normalize_display_name_policy() {
         assert_eq!(normalize_display_name("  Ace  ").unwrap(), "Ace");
         assert!(normalize_display_name("").is_err());
         assert_eq!(display_name_key("Ace"), display_name_key("ace"));
-        assert_eq!(DEFAULT_ROOM_CODE, "dev");
     }
 
     #[test]

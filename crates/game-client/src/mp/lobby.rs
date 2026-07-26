@@ -3,10 +3,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use game_net::{
-    is_known_character, normalize_display_name, ClientToServer, NetRole,
-    DEFAULT_ROOM_CODE as ROOM_CODE,
-};
+use game_net::{is_known_character, normalize_display_name, ClientToServer, NetRole};
 use game_sim::{ActiveWeapon, SelfState, WeaponClass};
 use js_sys::Reflect;
 use wasm_bindgen::JsCast;
@@ -17,12 +14,13 @@ use super::phase::MpPhase;
 use super::send::{send_reliable_locked, send_spawn_locked, SPAWN_RETRY_SECS};
 use super::session::{join_session, js_error_string};
 use super::shared::Shared;
+use super::JOIN_ROOM_PREFILL;
 
-/// Debug-console join with cookie name and default room.
+/// Debug-console join with cookie name into the alpha prefill room.
 #[cfg(feature = "debug-tools")]
 pub(crate) fn begin_join(shared: &Rc<RefCell<Shared>>) {
-    let name = load_cookie().unwrap_or_else(|| ROOM_CODE.into());
-    begin_join_with(shared, ROOM_CODE, &name);
+    let name = load_cookie().unwrap_or_else(|| JOIN_ROOM_PREFILL.into());
+    begin_join_with(shared, JOIN_ROOM_PREFILL, &name);
 }
 
 pub(crate) fn begin_join_with(shared: &Rc<RefCell<Shared>>, room_code: &str, display_name: &str) {
