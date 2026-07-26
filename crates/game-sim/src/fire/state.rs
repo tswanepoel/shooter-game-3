@@ -184,7 +184,7 @@ impl FireState {
         if fire_intent && self_state.is_emoting() {
             self_state.clear_emote();
         }
-        let Some(aim) = self_state.weapon_line() else {
+        let Some(weapon_line) = self_state.weapon_line() else {
             return Vec::new();
         };
         if fire_intent && self_state.sprint_latched {
@@ -205,9 +205,14 @@ impl FireState {
         // Burst continuation (string always finishes).
         if self.burst_active() {
             if self.gates_clear() {
-                if let Some(d) =
-                    self.spawn_discharge(def, owner, look_origin, aim, muzzle_worlds, self_state)
-                {
+                if let Some(d) = self.spawn_discharge(
+                    def,
+                    owner,
+                    look_origin,
+                    weapon_line,
+                    muzzle_worlds,
+                    self_state,
+                ) {
                     self.burst_left = self.burst_left.saturating_sub(1);
                     self.cooldown_s = def.shot_interval_s();
                     out.push(d);
@@ -239,7 +244,7 @@ impl FireState {
                         def,
                         owner,
                         look_origin,
-                        aim,
+                        weapon_line,
                         muzzle_worlds,
                         self_state,
                     ) {
@@ -253,7 +258,7 @@ impl FireState {
                         def,
                         owner,
                         look_origin,
-                        aim,
+                        weapon_line,
                         muzzle_worlds,
                         self_state,
                     ) {
@@ -272,16 +277,16 @@ impl FireState {
         def: &WeaponDef,
         owner: u32,
         look_origin: Vec3,
-        aim: Vec3,
+        weapon_line: Vec3,
         muzzle_worlds: &[Vec3],
         self_state: &mut SelfState,
     ) -> Option<Discharge> {
-        let aim = {
-            let len = aim.length();
+        let weapon_line = {
+            let len = weapon_line.length();
             if len < 1e-8 {
                 Vec3::Z
             } else {
-                aim / len
+                weapon_line / len
             }
         };
 
@@ -306,7 +311,8 @@ impl FireState {
         let mut projectiles = Vec::new();
         for &mi in &muzzle_indices {
             for _ in 0..def.pellets {
-                let dir = scatter_direction(aim, def.spread_half_deg, &mut || self.next_rand01());
+                let dir =
+                    scatter_direction(weapon_line, def.spread_half_deg, &mut || self.next_rand01());
                 let id = self.next_id;
                 self.next_id = self.next_id.wrapping_add(1);
                 projectiles.push(Projectile {
@@ -340,10 +346,10 @@ impl FireState {
     }
 }
 
-/// Sample a unit direction inside a cone about `aim` (half-angle degrees).
-fn scatter_direction(aim: Vec3, half_deg: f32, rand01: &mut dyn FnMut() -> f32) -> Vec3 {
+/// Sample a unit direction inside a cone about `axis` (half-angle degrees).
+fn scatter_direction(axis: Vec3, half_deg: f32, rand01: &mut dyn FnMut() -> f32) -> Vec3 {
     if half_deg <= 1e-6 {
-        return aim;
+        return axis;
     }
     let half = half_deg.to_radians();
     // Uniform in cone: cos(theta) between cos(half) and 1.
@@ -354,14 +360,14 @@ fn scatter_direction(aim: Vec3, half_deg: f32, rand01: &mut dyn FnMut() -> f32) 
     let sin_t = (1.0 - cos_t * cos_t).max(0.0).sqrt();
     let phi = v * std::f32::consts::TAU;
 
-    // Orthonormal basis with aim as +Z of local cone.
-    let up = if aim.y.abs() < 0.9 { Vec3::Y } else { Vec3::X };
-    let right = aim.cross(up).normalize_or_zero();
-    let bitangent = right.cross(aim).normalize_or_zero();
-    let dir = (aim * cos_t + right * (sin_t * phi.cos()) + bitangent * (sin_t * phi.sin()))
+    // Orthonormal basis with axis as +Z of local cone.
+    let up = if axis.y.abs() < 0.9 { Vec3::Y } else { Vec3::X };
+    let right = axis.cross(up).normalize_or_zero();
+    let bitangent = right.cross(axis).normalize_or_zero();
+    let dir = (axis * cos_t + right * (sin_t * phi.cos()) + bitangent * (sin_t * phi.sin()))
         .normalize_or_zero();
     if dir.length_squared() < 1e-12 {
-        aim
+        axis
     } else {
         dir
     }

@@ -409,7 +409,7 @@ async fn handle_spawn(
     roster: &Mutex<Roster>,
 ) {
     let tick = clock.tick();
-    let (position, yaw) = spawn_pose(tick, player_id);
+    let (position, facing) = spawn_pose(tick, player_id);
     let ok = {
         let mut guard = roster.lock().await;
         guard.try_spawn(player_id, primary, secondary)
@@ -420,7 +420,7 @@ async fn handle_spawn(
     let Ok(you) = encode_s2c_frame(&ServerToClient::YouSpawned {
         tick,
         position,
-        yaw,
+        facing,
     }) else {
         return;
     };

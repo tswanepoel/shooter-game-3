@@ -32,7 +32,7 @@ pub fn apply_you_spawned(
     spawn_requested: &mut bool,
     pending_spawn: &mut Option<PendingSpawn>,
     position: NetVec3,
-    yaw: f32,
+    facing: f32,
     loadout: PendingSpawnLoadout,
 ) -> bool {
     if *phase != MpPhase::Ready || !phase.can_go(MpPhase::Living) {
@@ -42,7 +42,7 @@ pub fn apply_you_spawned(
     *spawn_requested = false;
     *pending_spawn = Some(PendingSpawn {
         position: glam::Vec3::new(position.x, position.y, position.z),
-        yaw,
+        facing,
         primary: loadout.primary,
         secondary: loadout.secondary,
         active: loadout.active,
@@ -150,7 +150,7 @@ mod tests {
         {
             let p = pending.as_ref().expect("pose");
             assert!((p.position.x - 1.0).abs() < 1e-5);
-            assert!((p.yaw - 0.5).abs() < 1e-5);
+            assert!((p.facing - 0.5).abs() < 1e-5);
             assert_eq!(p.primary, Some(b'p'));
             assert_eq!(p.secondary, Some(b'b'));
         }

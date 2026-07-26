@@ -93,7 +93,7 @@ impl CamIntent {
 #[derive(Debug, Clone)]
 pub struct PendingSpawn {
     pub position: glam::Vec3,
-    pub yaw: f32,
+    pub facing: f32,
     pub primary: Option<u8>,
     pub secondary: Option<u8>,
     pub active: ActiveWeapon,

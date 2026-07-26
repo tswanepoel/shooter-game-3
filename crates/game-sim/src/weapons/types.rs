@@ -33,7 +33,7 @@ pub struct FireImpulseSize {
     pub fall_s: f32,
 }
 
-/// Resting aim-hold bands (041). Amplitudes in degrees; slight by design.
+/// Resting hold sway bands (041). Amplitudes in degrees; slight by design.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct WeaponSway {
     /// Slow vertical-dominant breath amplitude (deg).

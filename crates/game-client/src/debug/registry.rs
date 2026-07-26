@@ -92,7 +92,7 @@ impl DebugRegistry {
             "flycam" | "fly" => self.cmd_flycam(&args),
             "lineup" => self.cmd_lineup(&args),
             "nethud" => self.cmd_nethud(&args),
-            "residualhud" | "kickhud" => self.cmd_residualhud(&args),
+            "residualhud" => self.cmd_residualhud(&args),
             "remount" => {
                 self.set_bool("cam.fly", false);
                 "cam.fly = 0 (remount)".into()

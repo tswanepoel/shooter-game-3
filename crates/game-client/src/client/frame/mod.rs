@@ -73,7 +73,7 @@ impl ClientInner {
             self.self_state.secondary = spawn.secondary;
             self.self_state.active = spawn.active;
             self.self_state.position = spawn.position;
-            self.self_state.set_look(spawn.yaw, 0.0);
+            self.self_state.set_drive_look(spawn.facing, 0.0, 0.0);
             self.self_state.alive = true;
             self.self_state.health = game_sim::HEALTH_MAX;
             self.self_state.regen_block_s = 0.0;

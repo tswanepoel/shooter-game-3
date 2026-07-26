@@ -175,7 +175,9 @@ fn handle_s2c(shared: &Rc<RefCell<Shared>>, msg: ServerToClient, t4: f64) {
         ServerToClient::ClockReply { t1, t2, t3, tick } => {
             shared.borrow_mut().clock.on_sample(t1, t2, t3, t4, tick);
         }
-        ServerToClient::YouSpawned { position, yaw, .. } => {
+        ServerToClient::YouSpawned {
+            position, facing, ..
+        } => {
             let mut s = shared.borrow_mut();
             let loadout = super::apply::PendingSpawnLoadout {
                 primary: s.staged_primary,
@@ -193,7 +195,7 @@ fn handle_s2c(shared: &Rc<RefCell<Shared>>, msg: ServerToClient, t4: f64) {
                 spawn_requested,
                 pending_spawn,
                 position,
-                yaw,
+                facing,
                 loadout,
             );
         }

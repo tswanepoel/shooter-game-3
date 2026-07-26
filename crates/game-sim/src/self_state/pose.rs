@@ -40,7 +40,7 @@ fn fall_toward_zero(value: f32, dt: f32, fall_s: f32) -> f32 {
     v
 }
 
-/// Default range along look for aim markers when max range is unknown (metres).
+/// Default range along look for reticle markers when max range is unknown (metres).
 pub const DEFAULT_BORE_RANGE_M: f32 = 100.0;
 /// World depth of the screen-centre reticle billboard (metres).
 pub const RETICLE_DEPTH_M: f32 = 4.0;

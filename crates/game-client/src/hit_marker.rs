@@ -94,7 +94,7 @@ impl HitMarker {
     }
 }
 
-/// World-space X on the aim reticle point (alpha-blend, no depth write).
+/// World-space X on the reticle point (alpha-blend, no depth write).
 pub struct HitMarkerGpu {
     pipeline: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,

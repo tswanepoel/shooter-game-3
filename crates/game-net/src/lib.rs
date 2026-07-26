@@ -7,7 +7,7 @@ pub const TICK_HZ: u32 = 180;
 pub const TICK_DURATION_SECS: f64 = 1.0 / TICK_HZ as f64;
 
 /// Alpha wire; bumped when variants change (no distributed compat promise).
-pub const PROTOCOL_VERSION: u16 = 10;
+pub const PROTOCOL_VERSION: u16 = 11;
 
 /// Default room code (051 MVP). Client pre-fills this; server accepts only this value.
 pub const DEFAULT_ROOM_CODE: &str = "dev";
@@ -180,7 +180,7 @@ pub enum ServerToClient {
     YouSpawned {
         tick: u64,
         position: NetVec3,
-        yaw: f32,
+        facing: f32,
     },
     /// Sole membership / score / living / role / kit truth.
     Roster {
@@ -398,7 +398,7 @@ mod tests {
         let you = ServerToClient::YouSpawned {
             tick: 1,
             position: NetVec3::new(2.0, 0.0, -1.0),
-            yaw: 0.5,
+            facing: 0.5,
         };
         let b = encode_s2c(&you).unwrap();
         assert_eq!(decode_s2c(&b).unwrap(), you);
@@ -502,7 +502,7 @@ mod tests {
         let a = ServerToClient::YouSpawned {
             tick: 1,
             position: NetVec3::new(0.0, 0.0, 0.0),
-            yaw: 0.0,
+            facing: 0.0,
         };
         let b = ServerToClient::Roster {
             tick: 3,

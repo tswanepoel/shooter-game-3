@@ -302,7 +302,7 @@ pub fn ammo_from_wire(ammo: u8) -> Option<AmmoKind> {
     }
 }
 
-/// Deterministic ground pose from tick + id (no RNG): hash → polar (x,z) + facing yaw.
+/// Deterministic ground pose from tick + id (no RNG): hash → polar (x,z) + facing.
 pub fn spawn_pose(tick: u64, player_id: PlayerId) -> (NetVec3, f32) {
     // Splitmix-ish avalanche so nearby ticks don't cluster on the ring.
     let seed = tick
@@ -312,8 +312,8 @@ pub fn spawn_pose(tick: u64, player_id: PlayerId) -> (NetVec3, f32) {
     let radius = unit01(seed, 32) * SPAWN_RADIUS_M;
     let x = angle.cos() * radius;
     let z = angle.sin() * radius;
-    let yaw = unit_turn(seed, 17);
-    (NetVec3::new(x, 0.0, z), yaw)
+    let facing = unit_turn(seed, 17);
+    (NetVec3::new(x, 0.0, z), facing)
 }
 
 /// Low 32 bits of `seed >> shift` as a float in [0, 1].
@@ -466,19 +466,19 @@ mod tests {
     }
 
     #[test]
-    fn spawn_pose_yaw_in_unit_circle() {
+    fn spawn_pose_facing_in_unit_circle() {
         for tick in [0_u64, 1, 10, 128, 180, 1_000_000, u64::MAX / 3] {
             for id in [0_u32, 1, 7, 999] {
-                let (_, yaw) = spawn_pose(tick, id);
+                let (_, facing) = spawn_pose(tick, id);
                 assert!(
-                    yaw.is_finite() && (0.0..std::f32::consts::TAU).contains(&yaw),
-                    "tick={tick} id={id} yaw={yaw}"
+                    facing.is_finite() && (0.0..std::f32::consts::TAU).contains(&facing),
+                    "tick={tick} id={id} facing={facing}"
                 );
             }
         }
-        // High tick used to cast (seed>>17) as f32 ≫ u32::MAX → kilroradian yaw (055).
-        let (_, yaw) = spawn_pose(1_000_000, 1);
-        assert!(yaw < std::f32::consts::TAU);
+        // High tick used to cast (seed>>17) as f32 ≫ u32::MAX → kilroradian facing (055).
+        let (_, facing) = spawn_pose(1_000_000, 1);
+        assert!(facing < std::f32::consts::TAU);
     }
 
     #[test]
