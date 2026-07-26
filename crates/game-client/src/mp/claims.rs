@@ -104,7 +104,7 @@ pub(crate) fn claim_ammo_dump(
     let _ = writer.write_with_chunk(&arr);
 }
 
-pub(crate) fn claim_loot(shared: &RefCell<Shared>, drop_id: u64, position: glam::Vec3) {
+pub(crate) fn claim_loot(shared: &RefCell<Shared>, drop_id: u64, position: glam::Vec3, room: u16) {
     let s = shared.borrow();
     if s.phase != MpPhase::Living {
         return;
@@ -117,6 +117,7 @@ pub(crate) fn claim_loot(shared: &RefCell<Shared>, drop_id: u64, position: glam:
         tick,
         drop_id,
         position: NetVec3::new(position.x, position.y, position.z),
+        room,
     }) else {
         return;
     };

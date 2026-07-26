@@ -7,7 +7,7 @@ pub const TICK_HZ: u32 = 180;
 pub const TICK_DURATION_SECS: f64 = 1.0 / TICK_HZ as f64;
 
 /// Alpha wire; bumped when variants change (no distributed compat promise).
-pub const PROTOCOL_VERSION: u16 = 13;
+pub const PROTOCOL_VERSION: u16 = 14;
 
 /// Max display-name length after trim (051).
 pub const DISPLAY_NAME_MAX_CHARS: usize = 24;
@@ -173,11 +173,12 @@ pub enum ClientToServer {
         tick: u64,
         dump: NetAmmoDump,
     },
-    /// Living walk-over claim on a drop (059). Position is the claimant feet pose.
+    /// Living walk-over claim on a drop (059). `room` is reserve free slots for that kind.
     LootClaim {
         tick: u64,
         drop_id: u64,
         position: NetVec3,
+        room: u16,
     },
     /// Reliable control stream only.
     SetRole {
@@ -560,6 +561,7 @@ mod tests {
             tick: 10,
             drop_id: 7,
             position: NetVec3::new(1.0, 0.0, 2.0),
+            room: 12,
         };
         assert_eq!(decode_c2s(&encode_c2s(&claim).unwrap()).unwrap(), claim);
 

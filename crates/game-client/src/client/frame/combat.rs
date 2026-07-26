@@ -284,8 +284,8 @@ impl ClientInner {
         // Walk-over: MP claims; solo grants locally.
         if self.self_state.alive {
             if self.mp.is_living() {
-                for drop_id in self.world_loot.overlapping_claimable(&self.self_state) {
-                    self.mp.claim_loot(drop_id, self.self_state.position);
+                for (drop_id, room) in self.world_loot.overlapping_claimable(&self.self_state) {
+                    self.mp.claim_loot(drop_id, self.self_state.position, room);
                     self.world_loot.mark_claimed(drop_id);
                 }
             } else if !self.mp.in_room() {

@@ -391,9 +391,10 @@ async fn handle_datagram(
             tick,
             drop_id,
             position,
+            room,
         } => {
             let mut guard = rooms.lock().await;
-            guard.accept_loot_claim(player_id, drop_id, position, tick);
+            guard.accept_loot_claim(player_id, drop_id, position, room, tick);
             false
         }
         // Reliable-stream only.

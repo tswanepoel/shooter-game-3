@@ -132,12 +132,13 @@ impl RoomLoot {
         })
     }
 
-    /// First valid claim wins this take. `claimant_pos` is last known drive position.
+    /// First valid claim wins this take. Takes at most `room` rounds (remaining reserve space).
     pub fn elect_claim(
         &mut self,
         claimant: PlayerId,
         drop_id: u64,
         claimant_pos: NetVec3,
+        room: u16,
         living: bool,
     ) -> Option<LootGrantEvent> {
         if !living {
@@ -151,7 +152,8 @@ impl RoomLoot {
             return None;
         }
         let kind = drop.kind;
-        let want = drop.rounds.min(reserve_capacity_for(kind));
+        let room = room.min(reserve_capacity_for(kind));
+        let want = drop.rounds.min(room);
         if want == 0 {
             return None;
         }
@@ -289,11 +291,26 @@ mod tests {
         assert_eq!(drop.rounds, 10);
 
         let grant = loot
-            .elect_claim(1, drop.drop_id, NetVec3::new(0.5, 0.0, 0.0), true)
+            .elect_claim(1, drop.drop_id, NetVec3::new(0.5, 0.0, 0.0), 10, true)
             .expect("grant");
         assert_eq!(grant.rounds, 10);
         assert!(grant.drop_empty);
         assert!(loot.drops.is_empty());
+    }
+
+    #[test]
+    fn claim_partial_room_leaves_rest() {
+        let mut loot = RoomLoot::default();
+        loot.spawn_corpse(2, b'a', NetVec3::new(0.0, 0.0, 0.0), 0.0);
+        let drop = loot
+            .accept_dump(2, 0, 50, NetVec3::new(0.0, 0.0, 0.0))
+            .unwrap();
+        let grant = loot
+            .elect_claim(1, drop.drop_id, NetVec3::new(0.0, 0.0, 0.0), 12, true)
+            .expect("grant");
+        assert_eq!(grant.rounds, 12);
+        assert!(!grant.drop_empty);
+        assert_eq!(loot.drops.get(&drop.drop_id).unwrap().rounds, 38);
     }
 
     #[test]
@@ -308,6 +325,7 @@ mod tests {
                 1,
                 drop.drop_id,
                 NetVec3::new(LOOT_TAKE_RADIUS_M + 1.0, 0.0, 0.0),
+                5,
                 true
             )
             .is_none());

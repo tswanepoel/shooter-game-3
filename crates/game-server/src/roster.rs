@@ -260,10 +260,11 @@ impl Rooms {
         claimant: PlayerId,
         drop_id: u64,
         position: NetVec3,
+        room: u16,
         tick: u64,
     ) {
         if let Some(roster) = self.room_mut(claimant) {
-            roster.accept_loot_claim(claimant, drop_id, position, tick);
+            roster.accept_loot_claim(claimant, drop_id, position, room, tick);
         }
     }
 
@@ -383,10 +384,14 @@ impl Roster {
         claimant: PlayerId,
         drop_id: u64,
         position: NetVec3,
+        room: u16,
         tick: u64,
     ) {
         let living = self.living(claimant);
-        let Some(grant) = self.loot.elect_claim(claimant, drop_id, position, living) else {
+        let Some(grant) = self
+            .loot
+            .elect_claim(claimant, drop_id, position, room, living)
+        else {
             return;
         };
         if let Some(bytes) = encode_loot_grant(

@@ -97,7 +97,8 @@ impl WorldLoot {
     }
 
     /// Drops the living player overlaps with reserve room and may claim now.
-    pub fn overlapping_claimable(&mut self, state: &SelfState) -> Vec<u64> {
+    /// Returns `(drop_id, room)` for each claimable drop.
+    pub fn overlapping_claimable(&mut self, state: &SelfState) -> Vec<(u64, u16)> {
         if !state.alive {
             return Vec::new();
         }
@@ -112,7 +113,8 @@ impl WorldLoot {
             if d.rounds == 0 {
                 continue;
             }
-            if state.reserve_room(d.kind) == 0 {
+            let room = state.reserve_room(d.kind);
+            if room == 0 {
                 continue;
             }
             if !in_take_radius(d.position, state.position) {
@@ -126,7 +128,7 @@ impl WorldLoot {
             if age < CLAIM_RETRY_S {
                 continue;
             }
-            out.push(d.id);
+            out.push((d.id, room));
         }
         out
     }

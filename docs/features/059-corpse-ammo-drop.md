@@ -53,7 +53,7 @@ Solo / offline: the local sim may grant on overlap without a wire round-trip; co
 
 - On accepted death the room broadcasts `CorpseSpawn`; corpse ends with `CorpseEnd` on the room timer.
 - Victim sends `AmmoDump { ammo, rounds, position }` once; when rounds are above zero the room mints a drop and broadcasts `AmmoDropSpawn`.
-- `LootClaim { drop_id, position }` from living members; server elects using claim pose; `LootGrant` + optional `AmmoDropEnd`.
+- `LootClaim { drop_id, position, room }` from living members; server elects using claim pose and free reserve room; `LootGrant` + optional `AmmoDropEnd`.
 
 Protocol bump as usual for this alpha.
 

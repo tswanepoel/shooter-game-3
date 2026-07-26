@@ -220,8 +220,8 @@ impl MpClient {
         claims::claim_ammo_dump(&self.shared, kind, rounds, position);
     }
 
-    pub fn claim_loot(&self, drop_id: u64, position: glam::Vec3) {
-        claims::claim_loot(&self.shared, drop_id, position);
+    pub fn claim_loot(&self, drop_id: u64, position: glam::Vec3, room: u16) {
+        claims::claim_loot(&self.shared, drop_id, position, room);
     }
 
     /// Debug-console join with cookie name and default room.
