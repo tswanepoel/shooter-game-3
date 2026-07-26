@@ -382,6 +382,7 @@ impl ClientInner {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn collect_floating_names(
     remotes: &crate::remote_present::RemotePresent,
     roster: &[game_net::RosterEntry],
