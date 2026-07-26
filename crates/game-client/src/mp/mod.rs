@@ -1,161 +1,36 @@
-//! WebTransport multiplayer session (room join, role, character, loadout, spawn — 051–053).
+//! WebTransport multiplayer session (room join, role, character, loadout, spawn).
 
 mod apply;
+mod claims;
 mod clock;
 mod cookie;
 mod drive;
+mod lobby;
 mod phase;
 mod remotes;
+mod send;
 mod session;
+mod shared;
+mod tick;
 
+pub use claims::{ammo_kind_from_wire, net_spawn_to_projectile};
 pub use cookie::load_display_name_cookie;
-pub use drive::{drive_to_state, state_to_drive};
+pub use drive::drive_to_state;
 pub use game_net::DEFAULT_ROOM_CODE;
-pub use phase::{CamIntent, MpPhase, PendingSpawn, StagedLoadout};
+pub use phase::{CamIntent, MpPhase, StagedLoadout};
 pub use remotes::{RemoteKitKey, RemoteTable};
+pub use shared::{FrameEffects, PeerImpactHitBatch, PeerProjectileBatch};
+// Named type for `FrameEffects::pending_spawn` (phase module is private).
+#[allow(unused_imports)]
+pub use shared::PendingSpawn;
+
+pub(crate) use shared::{client_now_secs, Shared};
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use game_net::{
-    encode_c2s, is_known_character, normalize_display_name, ClientToServer, NetActiveWeapon,
-    NetImpactHit, NetProjectileSpawn, NetRole, NetVec3, PlayerId, RosterEntry, DEFAULT_CHARACTER,
-    DEFAULT_ROOM_CODE as ROOM_CODE, TICK_HZ,
-};
-use game_sim::{weapon_def, ActiveWeapon, AmmoKind, ImpactHit, Projectile, SelfState, WeaponClass};
-use js_sys::{Reflect, Uint8Array};
-use wasm_bindgen::JsCast;
-use web_sys::WritableStreamDefaultWriter;
-
-use clock::ClockSync;
-#[cfg(feature = "debug-tools")]
-use cookie::load_display_name_cookie as load_cookie;
-use session::{join_session, js_error_string};
-
-/// Resend Spawn while Ready after user confirm until YouSpawned.
-const SPAWN_RETRY_SECS: f32 = 0.5;
-
-#[derive(Debug, Clone)]
-pub struct PeerProjectileBatch {
-    pub id: PlayerId,
-    pub projectiles: Vec<NetProjectileSpawn>,
-}
-
-#[derive(Debug, Clone)]
-pub struct PeerImpactHitBatch {
-    pub hit: NetImpactHit,
-}
-
-pub struct FrameEffects {
-    pub pending_spawn: Option<PendingSpawn>,
-    pub error: Option<String>,
-    pub release_pointer_lock: bool,
-}
-
-pub(crate) struct Shared {
-    pub(crate) phase: MpPhase,
-    pub(crate) clock: ClockSync,
-    pub(crate) player_id: Option<PlayerId>,
-    pub(crate) display_name: Option<String>,
-    pub(crate) dgram_writer: Option<WritableStreamDefaultWriter>,
-    pub(crate) reliable_writer: Option<WritableStreamDefaultWriter>,
-    pub(crate) transport: Option<wasm_bindgen::JsValue>,
-    pub(crate) last_error: Option<String>,
-    pub(crate) probe_accum: f32,
-    pub(crate) drive_accum: f32,
-    pub(crate) spawn_retry_accum: f32,
-    pub(crate) join_secs: f32,
-    pub(crate) remotes: RemoteTable,
-    pub(crate) roster: Vec<RosterEntry>,
-    pub(crate) pending_projectiles: Vec<PeerProjectileBatch>,
-    pub(crate) pending_hits: Vec<PeerImpactHitBatch>,
-    pub(crate) pending_spawn: Option<PendingSpawn>,
-    pub(crate) spawn_requested: bool,
-    pub(crate) join_room: String,
-    pub(crate) join_name: String,
-    pub(crate) character: u8,
-    pub(crate) role: NetRole,
-    pub(crate) staged_primary: Option<u8>,
-    pub(crate) staged_secondary: Option<u8>,
-    pub(crate) staged_active: ActiveWeapon,
-}
-
-impl Shared {
-    fn new() -> Self {
-        Self {
-            phase: MpPhase::Lobby,
-            clock: ClockSync::new(),
-            player_id: None,
-            display_name: None,
-            dgram_writer: None,
-            reliable_writer: None,
-            transport: None,
-            last_error: None,
-            probe_accum: 0.0,
-            drive_accum: 0.0,
-            spawn_retry_accum: 0.0,
-            join_secs: 0.0,
-            remotes: RemoteTable::new(),
-            roster: Vec::new(),
-            pending_projectiles: Vec::new(),
-            pending_hits: Vec::new(),
-            pending_spawn: None,
-            spawn_requested: false,
-            join_room: ROOM_CODE.into(),
-            join_name: String::new(),
-            character: DEFAULT_CHARACTER,
-            role: NetRole::Player,
-            staged_primary: None,
-            staged_secondary: None,
-            staged_active: ActiveWeapon::Primary,
-        }
-    }
-
-    pub(crate) fn reset_session(&mut self) {
-        self.phase = MpPhase::Lobby;
-        self.clock.clear();
-        self.player_id = None;
-        self.display_name = None;
-        self.dgram_writer = None;
-        self.reliable_writer = None;
-        self.transport = None;
-        self.probe_accum = 0.0;
-        self.drive_accum = 0.0;
-        self.spawn_retry_accum = 0.0;
-        self.join_secs = 0.0;
-        self.remotes.clear();
-        self.roster.clear();
-        self.pending_projectiles.clear();
-        self.pending_hits.clear();
-        self.pending_spawn = None;
-        self.spawn_requested = false;
-        self.character = DEFAULT_CHARACTER;
-        self.role = NetRole::Player;
-        self.staged_primary = None;
-        self.staged_secondary = None;
-        self.staged_active = ActiveWeapon::Primary;
-    }
-
-    fn staged_loadout(&self) -> StagedLoadout {
-        StagedLoadout {
-            primary: self.staged_primary,
-            secondary: self.staged_secondary,
-            active: self.staged_active,
-        }
-    }
-
-    /// Roster is kit/role authority; product phase stays client-side.
-    pub(crate) fn reconcile_self_from_roster(&mut self) {
-        let Some(id) = self.player_id else {
-            return;
-        };
-        let Some(me) = self.roster.iter().find(|e| e.id == id) else {
-            return;
-        };
-        self.character = me.character;
-        self.role = me.role;
-    }
-}
+use game_net::{PlayerId, RosterEntry};
+use game_sim::{ActiveWeapon, ImpactHit, Projectile, SelfState};
 
 pub struct MpClient {
     shared: Rc<RefCell<Shared>>,
@@ -312,313 +187,70 @@ impl MpClient {
     }
 
     pub fn claim_projectiles(&self, projectiles: &[Projectile]) {
-        if projectiles.is_empty() {
-            return;
-        }
-        let s = self.shared.borrow();
-        if s.phase != MpPhase::Living {
-            return;
-        }
-        let Some(writer) = s.dgram_writer.as_ref() else {
-            return;
-        };
-        let tick = s.clock.estimated_tick(client_now_secs()).unwrap_or(0);
-        let spawns: Vec<NetProjectileSpawn> = projectiles
-            .iter()
-            .map(|p| NetProjectileSpawn {
-                id: p.id,
-                weapon: p.weapon,
-                origin: NetVec3::new(p.origin.x, p.origin.y, p.origin.z),
-                velocity: NetVec3::new(p.velocity.x, p.velocity.y, p.velocity.z),
-                muzzle_index: p.muzzle_index,
-            })
-            .collect();
-        let Ok(payload) = encode_c2s(&ClientToServer::ProjectileSpawn {
-            tick,
-            projectiles: spawns,
-        }) else {
-            return;
-        };
-        let arr = Uint8Array::from(payload.as_slice());
-        let _ = writer.write_with_chunk(&arr);
+        claims::claim_projectiles(&self.shared, projectiles);
     }
 
     pub fn claim_hits(&self, hits: &[ImpactHit]) {
-        if hits.is_empty() {
-            return;
-        }
-        let s = self.shared.borrow();
-        if s.phase != MpPhase::Living {
-            return;
-        }
-        let Some(writer) = s.dgram_writer.as_ref() else {
-            return;
-        };
-        let tick = s.clock.estimated_tick(client_now_secs()).unwrap_or(0);
-        for h in hits {
-            let Some(ammo) = ammo_kind_to_wire(h.ammo) else {
-                continue;
-            };
-            let hit = NetImpactHit {
-                projectile_id: h.projectile_id,
-                target: h.target_id,
-                ammo,
-                speed: h.speed,
-                part: h.part.to_wire(),
-            };
-            let Ok(payload) = encode_c2s(&ClientToServer::ImpactHit { tick, hit }) else {
-                continue;
-            };
-            let arr = Uint8Array::from(payload.as_slice());
-            let _ = writer.write_with_chunk(&arr);
-        }
+        claims::claim_hits(&self.shared, hits);
     }
 
     /// Debug-console join with cookie name and default room.
     #[cfg(feature = "debug-tools")]
     pub fn begin_join(&self) {
-        let name = load_cookie().unwrap_or_else(|| ROOM_CODE.into());
-        self.begin_join_with(ROOM_CODE, &name);
+        lobby::begin_join(&self.shared);
     }
 
     pub fn begin_join_with(&self, room_code: &str, display_name: &str) {
-        let mut s = self.shared.borrow_mut();
-        if !s.phase.can_go(MpPhase::Connecting) {
-            return;
-        }
-        let name = match normalize_display_name(display_name) {
-            Ok(n) => n,
-            Err(reason) => {
-                s.last_error = Some(format!("mp: {reason}"));
-                return;
-            }
-        };
-        s.phase = MpPhase::Connecting;
-        s.clock.clear();
-        s.player_id = None;
-        s.display_name = None;
-        s.remotes.clear();
-        s.roster.clear();
-        s.last_error = None;
-        s.spawn_requested = false;
-        s.join_room = room_code.to_string();
-        s.join_name = name;
-        drop(s);
-
-        let shared = Rc::clone(&self.shared);
-        wasm_bindgen_futures::spawn_local(async move {
-            if let Err(e) = join_session(Rc::clone(&shared)).await {
-                let msg = js_error_string(&e);
-                let mut s = shared.borrow_mut();
-                s.reset_session();
-                s.last_error = Some(format!("mp: join failed: {msg}"));
-            }
-        });
+        lobby::begin_join_with(&self.shared, room_code, display_name);
     }
 
     pub fn choose_play(&self) {
-        let mut s = self.shared.borrow_mut();
-        if !s.phase.can_go(MpPhase::Character) {
-            return;
-        }
-        s.role = NetRole::Player;
-        s.phase = MpPhase::Character;
-        s.spawn_requested = false;
-        send_reliable_locked(
-            &s,
-            &ClientToServer::SetRole {
-                role: NetRole::Player,
-            },
-        );
+        lobby::choose_play(&self.shared);
     }
 
     pub fn choose_spectate(&self) {
-        let mut s = self.shared.borrow_mut();
-        if !s.phase.can_go(MpPhase::Spectating) {
-            return;
-        }
-        s.role = NetRole::Spectator;
-        s.phase = MpPhase::Spectating;
-        s.spawn_requested = false;
-        send_reliable_locked(
-            &s,
-            &ClientToServer::SetRole {
-                role: NetRole::Spectator,
-            },
-        );
+        lobby::choose_spectate(&self.shared);
     }
 
     /// UI back only — does not resend role.
     pub fn back_to_role(&self) {
-        let mut s = self.shared.borrow_mut();
-        if !s.phase.can_go(MpPhase::Role) {
-            return;
-        }
-        s.phase = MpPhase::Role;
-        s.spawn_requested = false;
+        lobby::back_to_role(&self.shared);
     }
 
     /// Commit kit and advance to loadout bench (`SetCharacter` only). Character stays frozen after.
     pub fn confirm_character(&self, character: u8) -> Option<u8> {
-        if !is_known_character(character) {
-            return None;
-        }
-        let mut s = self.shared.borrow_mut();
-        if s.phase != MpPhase::Character || !s.phase.can_go(MpPhase::Ready) {
-            return None;
-        }
-        s.character = character;
-        s.role = NetRole::Player;
-        s.phase = MpPhase::Ready;
-        s.spawn_requested = false;
-        s.staged_primary = None;
-        s.staged_secondary = None;
-        s.staged_active = ActiveWeapon::Primary;
-        send_reliable_locked(&s, &ClientToServer::SetCharacter { character });
-        Some(character)
+        lobby::confirm_character(&self.shared, character)
     }
 
     /// Stage primary (any known letter or empty). Bench only; cancels in-flight Spawn.
     pub fn stage_primary(&self, letter: Option<u8>) -> bool {
-        if let Some(l) = letter {
-            if WeaponClass::from_letter(l).is_none() {
-                return false;
-            }
-        }
-        let mut s = self.shared.borrow_mut();
-        if s.phase != MpPhase::Ready {
-            return false;
-        }
-        s.staged_primary = letter;
-        s.spawn_requested = false;
-        s.spawn_retry_accum = 0.0;
-        true
+        lobby::stage_primary(&self.shared, letter)
     }
 
     /// Stage secondary (launcher/pistol or empty). Illegal class rejected.
     pub fn stage_secondary(&self, letter: Option<u8>) -> bool {
-        if let Some(l) = letter {
-            match WeaponClass::from_letter(l) {
-                Some(c) if c.allowed_in_secondary() => {}
-                _ => return false,
-            }
-        }
-        let mut s = self.shared.borrow_mut();
-        if s.phase != MpPhase::Ready {
-            return false;
-        }
-        s.staged_secondary = letter;
-        s.spawn_requested = false;
-        s.spawn_retry_accum = 0.0;
-        true
+        lobby::stage_secondary(&self.shared, letter)
     }
 
     pub fn stage_active(&self, active: ActiveWeapon) {
-        let mut s = self.shared.borrow_mut();
-        if s.phase != MpPhase::Ready {
-            return;
-        }
-        s.staged_active = active;
-        s.spawn_requested = false;
-        s.spawn_retry_accum = 0.0;
+        lobby::stage_active(&self.shared, active);
     }
 
     /// Death accepted → loadout bench; staged loadout defaults to what they died with.
     pub fn return_to_bench_after_death(&self, state: &SelfState) {
-        let mut s = self.shared.borrow_mut();
-        if s.phase != MpPhase::Living || !s.phase.can_go(MpPhase::Ready) {
-            return;
-        }
-        s.phase = MpPhase::Ready;
-        s.spawn_requested = false;
-        s.spawn_retry_accum = 0.0;
-        s.staged_primary = state.primary;
-        s.staged_secondary = state.secondary;
-        s.staged_active = state.active;
+        lobby::return_to_bench_after_death(&self.shared, state);
     }
 
     pub fn request_spawn(&self) {
-        let mut s = self.shared.borrow_mut();
-        if s.phase != MpPhase::Ready {
-            return;
-        }
-        s.spawn_requested = true;
-        s.spawn_retry_accum = SPAWN_RETRY_SECS;
-        send_spawn_locked(&s);
+        lobby::request_spawn(&self.shared);
     }
 
     pub fn leave(&self) {
-        let mut s = self.shared.borrow_mut();
-        if let Some(t) = s.transport.take() {
-            if let Ok(close) = Reflect::get(&t, &"close".into()) {
-                if let Ok(f) = close.dyn_into::<js_sys::Function>() {
-                    let _ = f.call0(&t);
-                }
-            }
-        }
-        s.reset_session();
+        lobby::leave(&self.shared);
     }
 
     pub fn on_frame(&mut self, dt: f32, self_state: &SelfState) {
-        let mut s = self.shared.borrow_mut();
-        if !s.phase.in_room() {
-            return;
-        }
-        s.join_secs += dt;
-        s.probe_accum += dt;
-        s.drive_accum += dt;
-
-        let dgram = s.dgram_writer.clone();
-        let living = s.phase == MpPhase::Living;
-        let ready = s.phase == MpPhase::Ready;
-
-        let mut send_spawn = false;
-        if ready && s.spawn_requested {
-            s.spawn_retry_accum += dt;
-            if s.spawn_retry_accum >= SPAWN_RETRY_SECS {
-                s.spawn_retry_accum = 0.0;
-                send_spawn = true;
-            }
-        }
-
-        let probe_interval = if s.join_secs < 1.0 { 0.05 } else { 0.2 };
-        let send_probe = s.probe_accum >= probe_interval;
-        if send_probe {
-            s.probe_accum = 0.0;
-        }
-
-        let drive_interval = 1.0 / TICK_HZ as f32;
-        let send_drive = living && s.drive_accum >= drive_interval;
-        let drive_payload = if send_drive {
-            s.drive_accum = 0.0;
-            let tick = s.clock.estimated_tick(client_now_secs()).unwrap_or(0);
-            let drive = state_to_drive(self_state);
-            encode_c2s(&ClientToServer::DriveSample { tick, drive }).ok()
-        } else {
-            None
-        };
-
-        if send_spawn {
-            send_spawn_locked(&s);
-        }
-        drop(s);
-
-        let Some(writer) = dgram else {
-            return;
-        };
-
-        if send_probe {
-            let t1 = client_now_secs();
-            if let Ok(payload) = encode_c2s(&ClientToServer::ClockProbe { t1 }) {
-                let arr = Uint8Array::from(payload.as_slice());
-                let _ = writer.write_with_chunk(&arr);
-            }
-        }
-
-        if let Some(payload) = drive_payload {
-            let arr = Uint8Array::from(payload.as_slice());
-            let _ = writer.write_with_chunk(&arr);
-        }
+        tick::on_frame(&self.shared, dt, self_state);
     }
 }
 
@@ -626,71 +258,4 @@ impl Default for MpClient {
     fn default() -> Self {
         Self::new()
     }
-}
-
-fn send_spawn_locked(s: &Shared) {
-    send_reliable_locked(
-        s,
-        &ClientToServer::Spawn {
-            primary: s.staged_primary,
-            secondary: s.staged_secondary,
-            active: match s.staged_active {
-                ActiveWeapon::Primary => NetActiveWeapon::Primary,
-                ActiveWeapon::Secondary => NetActiveWeapon::Secondary,
-            },
-        },
-    );
-}
-
-fn send_reliable_locked(s: &Shared, msg: &ClientToServer) {
-    let Ok(payload) = encode_c2s(msg) else {
-        return;
-    };
-    let Some(w) = s.reliable_writer.as_ref() else {
-        return;
-    };
-    let arr = Uint8Array::from(payload.as_slice());
-    let _ = w.write_with_chunk(&arr);
-}
-
-pub fn ammo_kind_from_wire(ammo: u8) -> Option<AmmoKind> {
-    match ammo {
-        0 => Some(AmmoKind::LightFoam),
-        1 => Some(AmmoKind::ThickFoam),
-        2 => Some(AmmoKind::Grenade),
-        _ => None,
-    }
-}
-
-fn ammo_kind_to_wire(ammo: AmmoKind) -> Option<u8> {
-    Some(match ammo {
-        AmmoKind::LightFoam => 0,
-        AmmoKind::ThickFoam => 1,
-        AmmoKind::Grenade => 2,
-    })
-}
-
-pub fn net_spawn_to_projectile(owner: PlayerId, n: &NetProjectileSpawn) -> Option<Projectile> {
-    let def = weapon_def(n.weapon)?;
-    let origin = glam::Vec3::new(n.origin.x, n.origin.y, n.origin.z);
-    let velocity = glam::Vec3::new(n.velocity.x, n.velocity.y, n.velocity.z);
-    Some(Projectile {
-        id: n.id,
-        owner,
-        weapon: n.weapon,
-        ammo: def.ammo(),
-        origin,
-        position: origin,
-        velocity,
-        traveled: 0.0,
-        max_range: def.max_range,
-        muzzle_index: n.muzzle_index,
-    })
-}
-
-pub(crate) fn client_now_secs() -> f64 {
-    web_sys::window()
-        .and_then(|w| w.performance())
-        .map(|p| p.now() / 1000.0)
-        .unwrap_or(0.0)
 }
