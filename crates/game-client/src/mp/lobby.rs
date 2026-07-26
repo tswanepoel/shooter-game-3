@@ -14,6 +14,7 @@ use super::phase::MpPhase;
 use super::send::{send_reliable_locked, send_spawn_locked, SPAWN_RETRY_SECS};
 use super::session::{join_session, js_error_string};
 use super::shared::Shared;
+#[cfg(feature = "debug-tools")]
 use super::JOIN_ROOM_PREFILL;
 
 /// Debug-console join with cookie name into the alpha prefill room.

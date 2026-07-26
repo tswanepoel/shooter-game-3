@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { defineConfig, type Plugin } from 'vite';
+import { defineConfig, type Plugin, type PreviewServer, type ViteDevServer } from 'vite';
 import wasm from 'vite-plugin-wasm';
 import topLevelAwait from 'vite-plugin-top-level-await';
 import { fileURLToPath } from 'node:url';
@@ -19,81 +19,84 @@ function readBody(req: IncomingMessage): Promise<string> {
   });
 }
 
-/** Dev-only: debug shot sink + WebTransport identity for `mp join`. */
-function debugShotsPlugin(): Plugin {
-  return {
-    name: 'debug-shots',
-    configureServer(server) {
-      server.middlewares.use(async (req: IncomingMessage, res: ServerResponse, next) => {
-        const url = req.url?.split('?')[0];
+function attachDebugMiddleware(server: ViteDevServer | PreviewServer) {
+  server.middlewares.use(async (req: IncomingMessage, res: ServerResponse, next) => {
+    const url = req.url?.split('?')[0];
 
-        if (url === '/__debug/wt-identity' && req.method === 'GET') {
-          try {
-            if (!fs.existsSync(wtIdentityPath)) {
-              res.statusCode = 404;
-              res.setHeader('Content-Type', 'application/json');
-              res.end(
-                JSON.stringify({
-                  error: 'wt-identity missing; run cargo run -p game-server',
-                }),
-              );
-              return;
-            }
-            const body = fs.readFileSync(wtIdentityPath, 'utf8');
-            res.statusCode = 200;
-            res.setHeader('Content-Type', 'application/json');
-            res.end(body);
-          } catch (err) {
-            res.statusCode = 500;
-            res.setHeader('Content-Type', 'application/json');
-            res.end(JSON.stringify({ error: String(err) }));
-          }
-          return;
-        }
-
-        if (url !== '/__debug/shot' || req.method !== 'POST') {
-          next();
-          return;
-        }
-
-        try {
-          const raw = await readBody(req);
-          const body = JSON.parse(raw) as { dataUrl?: string };
-          const dataUrl = body.dataUrl;
-          if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/png;base64,')) {
-            res.statusCode = 400;
-            res.setHeader('Content-Type', 'application/json');
-            res.end(JSON.stringify({ error: 'expected data:image/png;base64,...' }));
-            return;
-          }
-
-          const b64 = dataUrl.slice('data:image/png;base64,'.length);
-          const buf = Buffer.from(b64, 'base64');
-          fs.mkdirSync(shotsDir, { recursive: true });
-
-          const latest = path.join(shotsDir, 'latest.png');
-          fs.writeFileSync(latest, buf);
-
-          const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-          const archived = path.join(shotsDir, `shot-${stamp}.png`);
-          fs.writeFileSync(archived, buf);
-
-          res.statusCode = 200;
+    if (url === '/__debug/wt-identity' && req.method === 'GET') {
+      try {
+        if (!fs.existsSync(wtIdentityPath)) {
+          res.statusCode = 404;
           res.setHeader('Content-Type', 'application/json');
           res.end(
             JSON.stringify({
-              latest: path.relative(repoRoot, latest).replace(/\\/g, '/'),
-              archived: path.relative(repoRoot, archived).replace(/\\/g, '/'),
-              bytes: buf.length,
+              error: 'wt-identity missing; run cargo run -p game-server',
             }),
           );
-        } catch (err) {
-          res.statusCode = 500;
-          res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify({ error: String(err) }));
+          return;
         }
-      });
-    },
+        const body = fs.readFileSync(wtIdentityPath, 'utf8');
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(body);
+      } catch (err) {
+        res.statusCode = 500;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ error: String(err) }));
+      }
+      return;
+    }
+
+    if (url !== '/__debug/shot' || req.method !== 'POST') {
+      next();
+      return;
+    }
+
+    try {
+      const raw = await readBody(req);
+      const body = JSON.parse(raw) as { dataUrl?: string };
+      const dataUrl = body.dataUrl;
+      if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/png;base64,')) {
+        res.statusCode = 400;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ error: 'expected data:image/png;base64,...' }));
+        return;
+      }
+
+      const b64 = dataUrl.slice('data:image/png;base64,'.length);
+      const buf = Buffer.from(b64, 'base64');
+      fs.mkdirSync(shotsDir, { recursive: true });
+
+      const latest = path.join(shotsDir, 'latest.png');
+      fs.writeFileSync(latest, buf);
+
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const archived = path.join(shotsDir, `shot-${stamp}.png`);
+      fs.writeFileSync(archived, buf);
+
+      res.statusCode = 200;
+      res.setHeader('Content-Type', 'application/json');
+      res.end(
+        JSON.stringify({
+          latest: path.relative(repoRoot, latest).replace(/\\/g, '/'),
+          archived: path.relative(repoRoot, archived).replace(/\\/g, '/'),
+          bytes: buf.length,
+        }),
+      );
+    } catch (err) {
+      res.statusCode = 500;
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ error: String(err) }));
+    }
+  });
+}
+
+/** Local debug: shot sink + WebTransport identity for `mp join` (dev + preview). */
+function debugShotsPlugin(): Plugin {
+  return {
+    name: 'debug-shots',
+    configureServer: attachDebugMiddleware,
+    configurePreviewServer: attachDebugMiddleware,
   };
 }
 
