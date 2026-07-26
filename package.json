@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "description": "A WebGPU shooter game built with Rust and Vite",
   "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "cook": "node tools/cook.mjs",
     "dev": "npm run cook && npm run build-wasm && vite",
@@ -11,8 +14,9 @@
     "build-wasm": "cd crates/game-client && wasm-pack build --target web --out-dir ../../pkg",
     "build-wasm:release": "cd crates/game-client && wasm-pack build --target web --out-dir ../../pkg -- --no-default-features",
     "server": "cargo run -p game-server",
-    "format": "prettier --write \"web/**/*.{js,css,html}\" \"*.ts\" \"*.js\" \"tools/**/*.mjs\"",
-    "format:check": "prettier --check \"web/**/*.{js,css,html}\" \"*.ts\" \"*.js\" \"tools/**/*.mjs\"",
+    "format": "prettier --write --no-error-on-unmatched-pattern \"web/**/*.{js,css,html}\" \"*.ts\" \"*.js\" \"tools/**/*.mjs\"",
+    "format:check": "prettier --check --no-error-on-unmatched-pattern \"web/**/*.{js,css,html}\" \"*.ts\" \"*.js\" \"tools/**/*.mjs\"",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
     "prepare": "husky"
   },
   "lint-staged": {
@@ -20,6 +24,9 @@
       "prettier --write"
     ],
     "*.{js,ts}": [
+      "prettier --write"
+    ],
+    "tools/**/*.mjs": [
       "prettier --write"
     ]
   },

@@ -42,7 +42,7 @@ A WebGPU-powered shooter game built with Rust and Vite.
 ## Prerequisites
 
 - Rust (stable toolchain)
-- Node.js v16 or higher
+- Node.js 18 or higher
 - `wasm32-unknown-unknown` target for Rust
 - [`wasm-pack`](https://rustwasm.github.io/wasm-pack/) (builds the web WASM package under `pkg/`)
 - A WebGPU-capable browser for running the game (see [Browser Support](#browser-support))
@@ -94,10 +94,12 @@ npm run build
 
 | Command | Purpose |
 |---|---|
-| `cargo test` | Run Rust tests |
-| `cargo clippy --all-targets --all-features -- -D warnings` | Run Rust linting |
+| `cargo test` | Run Rust tests (includes host-runnable `game-client` unit tests) |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | Run Rust linting |
 | `cargo fmt --all` | Format Rust code |
-| `npm run format` | Format `web/` and root JS/TS with Prettier |
+| `npm run format` | Format `web/`, `tools/`, and root JS/TS with Prettier |
+| `npm run format:check` | Check Prettier formatting (CI) |
+| `npm run typecheck` | Typecheck `vite.config.ts` |
 
 ## Docker Builds
 

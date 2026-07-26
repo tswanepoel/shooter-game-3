@@ -370,7 +370,8 @@ mod tests {
         let mut v = ViewController::new();
         let s = SelfState::default_loadout();
         v.enter_flycam(&s, v.mounted_eye());
-        v.update_flycam(0.0, &FlyInput::default(), glam::Vec2::new(0.0, -400.0));
+        // Enough pitch that 1s at fly speed climbs >1 m (LOOK_SENS * dy).
+        v.update_flycam(0.0, &FlyInput::default(), glam::Vec2::new(0.0, -1200.0));
         let y0 = v.eye_and_forward().0.y;
         v.update_flycam(
             1.0,

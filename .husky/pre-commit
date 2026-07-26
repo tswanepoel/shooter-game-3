@@ -4,8 +4,8 @@ if command -v cargo >/dev/null 2>&1; then
   echo "Running cargo fmt..."
   cargo fmt --check
   echo "Running cargo clippy..."
-  cargo clippy --all-targets --all-features -- -D warnings
+  cargo clippy --all-targets --all-features --locked -- -D warnings
 fi
 
-# Format staged web / root JS-TS files
+# Format staged web / root JS-TS / tools files
 npx lint-staged

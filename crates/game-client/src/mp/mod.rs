@@ -4,12 +4,14 @@ mod apply;
 mod clock;
 mod cookie;
 mod drive;
+mod phase;
 mod remotes;
 mod session;
 
 pub use cookie::load_display_name_cookie;
 pub use drive::{drive_to_state, state_to_drive};
 pub use game_net::DEFAULT_ROOM_CODE;
+pub use phase::{CamIntent, MpPhase, PendingSpawn, StagedLoadout};
 pub use remotes::{RemoteKitKey, RemoteTable};
 
 use std::cell::RefCell;
@@ -28,98 +30,11 @@ use web_sys::WritableStreamDefaultWriter;
 use clock::ClockSync;
 #[cfg(feature = "debug-tools")]
 use cookie::load_display_name_cookie as load_cookie;
+use phase::{CamIntent, MpPhase, PendingSpawn};
 use session::{join_session, js_error_string};
 
 /// Resend Spawn while Ready after user confirm until YouSpawned.
 const SPAWN_RETRY_SECS: f32 = 0.5;
-
-/// Client product phase (UI/play gates). Server role/living is separate.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MpPhase {
-    Lobby,
-    Connecting,
-    Role,
-    Character,
-    /// Loadout + Spawn bench (053). First entry and post-death.
-    Ready,
-    Spectating,
-    Living,
-}
-
-impl MpPhase {
-    pub fn in_room(self) -> bool {
-        matches!(
-            self,
-            Self::Role | Self::Character | Self::Ready | Self::Spectating | Self::Living
-        )
-    }
-
-    pub fn blocks_play(self) -> bool {
-        !matches!(self, Self::Living)
-    }
-
-    pub fn forces_free_cursor(self) -> bool {
-        matches!(
-            self,
-            Self::Lobby | Self::Connecting | Self::Role | Self::Character | Self::Ready
-        )
-    }
-
-    pub fn is_spectating(self) -> bool {
-        self == Self::Spectating
-    }
-
-    pub fn can_go(self, to: Self) -> bool {
-        use MpPhase::*;
-        matches!(
-            (self, to),
-            (Lobby, Connecting)
-                | (Connecting, Role)
-                | (Connecting, Lobby)
-                | (Role, Character)
-                | (Role, Spectating)
-                | (Role, Lobby)
-                | (Character, Ready)
-                | (Character, Role)
-                | (Character, Spectating)
-                | (Character, Lobby)
-                | (Ready, Living)
-                | (Ready, Spectating)
-                | (Ready, Role)
-                | (Ready, Lobby)
-                | (Spectating, Character)
-                | (Spectating, Role)
-                | (Spectating, Lobby)
-                | (Living, Ready)
-                | (Living, Spectating)
-                | (Living, Lobby)
-        )
-    }
-}
-
-/// Per-frame camera intent (product phase + optional debug F8).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CamIntent {
-    Overview,
-    ProductFly,
-    DebugFly,
-    Mounted,
-}
-
-impl CamIntent {
-    pub fn derive(phase: MpPhase, debug_fly_wanted: bool) -> Self {
-        match phase {
-            MpPhase::Spectating => Self::ProductFly,
-            MpPhase::Living if debug_fly_wanted => Self::DebugFly,
-            MpPhase::Living => Self::Mounted,
-            _ => Self::Overview,
-        }
-    }
-
-    pub fn is_fly(self) -> bool {
-        matches!(self, Self::ProductFly | Self::DebugFly)
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct PeerProjectileBatch {
@@ -130,23 +45,6 @@ pub struct PeerProjectileBatch {
 #[derive(Debug, Clone)]
 pub struct PeerImpactHitBatch {
     pub hit: NetImpactHit,
-}
-
-#[derive(Debug, Clone)]
-pub struct PendingSpawn {
-    pub position: glam::Vec3,
-    pub yaw: f32,
-    pub primary: Option<u8>,
-    pub secondary: Option<u8>,
-    pub active: ActiveWeapon,
-}
-
-/// Staged bench loadout (empty until player chooses; no defaults).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct StagedLoadout {
-    pub primary: Option<u8>,
-    pub secondary: Option<u8>,
-    pub active: ActiveWeapon,
 }
 
 pub struct FrameEffects {
@@ -796,42 +694,4 @@ pub(crate) fn client_now_secs() -> f64 {
         .and_then(|w| w.performance())
         .map(|p| p.now() / 1000.0)
         .unwrap_or(0.0)
-}
-
-#[cfg(test)]
-mod phase_tests {
-    use super::*;
-
-    #[test]
-    fn transition_graph_core_paths() {
-        assert!(MpPhase::Lobby.can_go(MpPhase::Connecting));
-        assert!(MpPhase::Connecting.can_go(MpPhase::Role));
-        assert!(MpPhase::Role.can_go(MpPhase::Character));
-        assert!(MpPhase::Role.can_go(MpPhase::Spectating));
-        assert!(MpPhase::Character.can_go(MpPhase::Ready));
-        assert!(MpPhase::Ready.can_go(MpPhase::Living));
-        assert!(MpPhase::Spectating.can_go(MpPhase::Character));
-        assert!(MpPhase::Living.can_go(MpPhase::Spectating));
-        assert!(MpPhase::Living.can_go(MpPhase::Ready));
-        assert!(!MpPhase::Lobby.can_go(MpPhase::Living));
-        assert!(!MpPhase::Spectating.can_go(MpPhase::Living));
-        assert!(!MpPhase::Ready.can_go(MpPhase::Character));
-    }
-
-    #[test]
-    fn cam_intent_derives() {
-        assert_eq!(CamIntent::derive(MpPhase::Role, false), CamIntent::Overview);
-        assert_eq!(
-            CamIntent::derive(MpPhase::Spectating, true),
-            CamIntent::ProductFly
-        );
-        assert_eq!(
-            CamIntent::derive(MpPhase::Living, false),
-            CamIntent::Mounted
-        );
-        assert_eq!(
-            CamIntent::derive(MpPhase::Living, true),
-            CamIntent::DebugFly
-        );
-    }
 }

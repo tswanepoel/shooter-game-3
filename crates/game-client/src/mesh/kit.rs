@@ -93,12 +93,6 @@ pub fn muzzle_locals(letter_index: usize) -> &'static [[f32; 3]] {
     BLASTER_MUZZLE_POINTS[letter_index]
 }
 
-/// Primary muzzle in blaster-local units (muzzle FX / fire origin; not an aim basis — 015).
-#[allow(dead_code)]
-pub fn primary_muzzle_offset(letter_index: usize) -> Vec3 {
-    Vec3::from_array(muzzle_locals(letter_index)[0])
-}
-
 /// World-space image of every blaster-local muzzle under a held root (037).
 pub fn muzzle_world_points(held_blaster: Mat4, letter_index: usize) -> impl Iterator<Item = Vec3> {
     muzzle_locals(letter_index)

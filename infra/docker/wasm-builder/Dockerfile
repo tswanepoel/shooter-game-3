@@ -17,7 +17,7 @@ WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 
-RUN cargo build --release --target wasm32-unknown-unknown --locked
+RUN cargo build --release --target wasm32-unknown-unknown --locked -p game-client -p game-sim -p game-net
 
 # Slim image containing only the built WASM artifacts.
 FROM alpine:3.20

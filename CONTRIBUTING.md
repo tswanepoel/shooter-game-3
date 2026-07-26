@@ -79,7 +79,7 @@ npm run dev
    ```
 4. Run linting:
    ```bash
-   cargo clippy --all-targets --all-features -- -D warnings
+   cargo clippy --all-targets --all-features --locked -- -D warnings
    ```
 5. Run the test suite:
    ```bash
@@ -91,7 +91,7 @@ npm run dev
 ## Coding Standards
 
 - All Rust code must be formatted with `cargo fmt --all` before committing.
-- All Rust code must pass `cargo clippy --all-targets --all-features -- -D warnings` with no warnings.
+- All Rust code must pass `cargo clippy --all-targets --all-features --locked -- -D warnings` with no warnings.
 - Keep changes focused: each pull request should represent a single, coherent unit of work.
 - Comments should explain non-obvious intent, not restate the code. Prefer clear names over comments that only rename types or fields, cite feature numbers, or describe what the next line already shows.
 
@@ -154,7 +154,7 @@ Hooks are installed when you run `npm install` (`husky` via the `prepare` script
 
 | Hook | Checks |
 |------|--------|
-| **pre-commit** | `cargo fmt --check`, `cargo clippy … -D warnings`, `lint-staged` (Prettier on staged `web/` + root JS/TS) |
+| **pre-commit** | `cargo fmt --check`, `cargo clippy … --locked -D warnings`, `lint-staged` (Prettier on staged `web/`, `tools/`, root JS/TS) |
 | **commit-msg** | commitlint (type, **required scope**, header length) |
 
 You don't need to run these manually for a normal commit:

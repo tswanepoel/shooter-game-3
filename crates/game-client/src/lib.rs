@@ -1,53 +1,85 @@
 //! WebGPU client: mounted self view, input session, optional debug tools.
 
-#![cfg(target_arch = "wasm32")]
-
+#[cfg(target_arch = "wasm32")]
 mod body_hit;
+#[cfg(target_arch = "wasm32")]
 mod client;
-#[cfg(feature = "debug-tools")]
+#[cfg(all(target_arch = "wasm32", feature = "debug-tools"))]
 mod debug;
+#[cfg(target_arch = "wasm32")]
 mod emote_wheel;
+#[cfg(target_arch = "wasm32")]
 mod fire_fx;
+#[cfg(target_arch = "wasm32")]
 mod hit_marker;
+#[cfg(target_arch = "wasm32")]
 mod input;
-#[cfg(feature = "debug-tools")]
+#[cfg(all(target_arch = "wasm32", feature = "debug-tools"))]
 mod lineup;
+#[cfg(target_arch = "wasm32")]
 mod mesh;
+#[cfg(target_arch = "wasm32")]
 mod mp;
+#[cfg(target_arch = "wasm32")]
 mod pack;
+#[cfg(target_arch = "wasm32")]
 mod remote_present;
+#[cfg(target_arch = "wasm32")]
 mod renderer;
+#[cfg(target_arch = "wasm32")]
 mod reticle;
+#[cfg(target_arch = "wasm32")]
 mod self_present;
+#[cfg(target_arch = "wasm32")]
 mod ui_overlay;
+#[cfg(target_arch = "wasm32")]
 mod view;
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[allow(dead_code)]
+mod native_tests;
+
+#[cfg(target_arch = "wasm32")]
 use std::cell::RefCell;
+#[cfg(target_arch = "wasm32")]
 use std::rc::Rc;
 
+#[cfg(target_arch = "wasm32")]
 use game_sim::SelfState;
+#[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
+#[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
+#[cfg(target_arch = "wasm32")]
 use web_sys::HtmlCanvasElement;
 
-#[cfg(feature = "debug-tools")]
+#[cfg(all(target_arch = "wasm32", feature = "debug-tools"))]
 use client::load::maybe_kick_lineup_load;
+#[cfg(target_arch = "wasm32")]
 use client::load::{maybe_kick_remote_loads, maybe_kick_self_load};
+#[cfg(target_arch = "wasm32")]
 pub(crate) use client::ClientInner;
-#[cfg(feature = "debug-tools")]
+#[cfg(all(target_arch = "wasm32", feature = "debug-tools"))]
 use debug::{DebugHost, DebugTools};
+#[cfg(target_arch = "wasm32")]
 use input::install_input_handlers;
+#[cfg(target_arch = "wasm32")]
 use renderer::{canvas_buffer_size, Renderer};
+#[cfg(target_arch = "wasm32")]
 use ui_overlay::UiOverlay;
+#[cfg(target_arch = "wasm32")]
 use view::ViewController;
 
+#[cfg(target_arch = "wasm32")]
 type FrameCallback = Rc<RefCell<Option<Closure<dyn FnMut()>>>>;
 
+#[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub struct GameClient {
     inner: Rc<RefCell<ClientInner>>,
 }
 
+#[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 impl GameClient {
     #[wasm_bindgen(js_name = create)]

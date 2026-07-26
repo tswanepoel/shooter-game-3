@@ -2,8 +2,8 @@
 
 use game_net::{NetRole, NetVec3, PlayerId, RosterEntry};
 
+use super::phase::{MpPhase, PendingSpawn};
 use super::remotes::RemoteTable;
-use super::{MpPhase, PendingSpawn};
 
 /// Roster + remote membership. Remotes are non-local players only.
 pub fn apply_roster(
@@ -178,7 +178,7 @@ mod tests {
         assert!(MpPhase::Spectating.blocks_play());
         assert!(!MpPhase::Spectating.forces_free_cursor());
         assert!(!MpPhase::Living.blocks_play());
-        use crate::mp::CamIntent;
+        use super::super::phase::CamIntent;
         assert_eq!(
             CamIntent::derive(MpPhase::Ready, false),
             CamIntent::Overview

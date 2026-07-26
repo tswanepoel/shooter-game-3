@@ -87,6 +87,5 @@ pub enum LineupState {
     Idle,
     Loading,
     Ready(LineupGpu),
-    #[allow(dead_code)]
     Failed(String),
 }

@@ -21,7 +21,7 @@ impl RemoteKitKey {
 
 #[derive(Debug, Clone)]
 pub struct RemoteSample {
-    #[allow(dead_code)]
+    /// Server tick of this drive sample (present / adaptive delay).
     pub tick: u64,
     pub drive: DriveView,
 }
@@ -71,5 +71,35 @@ impl RemoteTable {
 impl Default for RemoteTable {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use game_net::DriveView;
+
+    #[test]
+    fn upsert_stores_tick() {
+        let mut table = RemoteTable::new();
+        let drive = DriveView {
+            position: game_net::NetVec3::new(0.0, 0.0, 0.0),
+            facing: 0.0,
+            look_offset_yaw: 0.0,
+            look_offset_pitch: 0.0,
+            character: b'a',
+            primary: None,
+            secondary: None,
+            active: game_net::NetActiveWeapon::Primary,
+            locomotion: game_net::NetLocomotion::Stand,
+            walk_phase: 0.0,
+            velocity_y: 0.0,
+            emote: None,
+            emote_age_s: 0.0,
+        };
+        table.upsert_drive(7, 42, drive);
+        let sample = table.samples().next().expect("sample");
+        assert_eq!(sample.0, 7);
+        assert_eq!(sample.1.tick, 42);
     }
 }

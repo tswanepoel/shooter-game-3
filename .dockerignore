@@ -14,7 +14,8 @@ infra
 *.md
 package.json
 package-lock.json
-commitlint.config.js
+commitlint.config.cjs
 vite.config.ts
+tsconfig.json
 .gitignore
 .prettierrc.json
