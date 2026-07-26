@@ -1,4 +1,5 @@
 //! Ammo owns round facts (mass). Blasters own which kind they fire and launch speed.
+//! Magazine capacity and spawn reserve drafts live here as tune tables (058).
 
 use crate::WeaponClass;
 
@@ -11,6 +12,65 @@ pub enum AmmoKind {
     ThickFoam,
     /// Launcher round.
     Grenade,
+}
+
+/// Rounds of each ammo kind carried outside any magazine (058).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ReserveAmmo {
+    pub light_foam: u16,
+    pub thick_foam: u16,
+    pub grenade: u16,
+}
+
+impl ReserveAmmo {
+    pub fn get(self, kind: AmmoKind) -> u16 {
+        match kind {
+            AmmoKind::LightFoam => self.light_foam,
+            AmmoKind::ThickFoam => self.thick_foam,
+            AmmoKind::Grenade => self.grenade,
+        }
+    }
+
+    pub fn set(&mut self, kind: AmmoKind, n: u16) {
+        match kind {
+            AmmoKind::LightFoam => self.light_foam = n,
+            AmmoKind::ThickFoam => self.thick_foam = n,
+            AmmoKind::Grenade => self.grenade = n,
+        }
+    }
+
+    /// Remove up to `n` rounds of `kind`; returns how many were removed.
+    pub fn take(&mut self, kind: AmmoKind, n: u16) -> u16 {
+        let have = self.get(kind);
+        let spent = have.min(n);
+        self.set(kind, have - spent);
+        spent
+    }
+
+    /// Add rounds of `kind` (saturating).
+    pub fn add(&mut self, kind: AmmoKind, n: u16) {
+        let sum = self.get(kind).saturating_add(n);
+        self.set(kind, sum);
+    }
+}
+
+/// Draft magazine capacity by weapon class (058).
+pub fn mag_capacity_for_class(class: WeaponClass) -> u16 {
+    match class {
+        WeaponClass::Launcher => 1,
+        WeaponClass::Pistol => 12,
+        WeaponClass::Smg | WeaponClass::AssaultRifle | WeaponClass::Shotgun => 30,
+        WeaponClass::SniperRifle => 5,
+    }
+}
+
+/// Spawn reserve draft for a kind the loadout uses (058).
+pub fn spawn_reserve_for(kind: AmmoKind) -> u16 {
+    match kind {
+        AmmoKind::LightFoam => 90,
+        AmmoKind::ThickFoam => 20,
+        AmmoKind::Grenade => 4,
+    }
 }
 
 /// Round-only facts. Mass is the source of truth here — not on the blaster.
@@ -90,5 +150,25 @@ mod tests {
             AmmoKind::ThickFoam
         );
         assert_eq!(ammo_for_class(WeaponClass::Launcher), AmmoKind::Grenade);
+    }
+
+    #[test]
+    fn mag_capacity_by_class() {
+        assert_eq!(mag_capacity_for_class(WeaponClass::Launcher), 1);
+        assert_eq!(mag_capacity_for_class(WeaponClass::Pistol), 12);
+        assert_eq!(mag_capacity_for_class(WeaponClass::Smg), 30);
+        assert_eq!(mag_capacity_for_class(WeaponClass::AssaultRifle), 30);
+        assert_eq!(mag_capacity_for_class(WeaponClass::Shotgun), 30);
+        assert_eq!(mag_capacity_for_class(WeaponClass::SniperRifle), 5);
+    }
+
+    #[test]
+    fn reserve_take_and_add() {
+        let mut r = ReserveAmmo::default();
+        r.add(AmmoKind::LightFoam, 10);
+        assert_eq!(r.take(AmmoKind::LightFoam, 4), 4);
+        assert_eq!(r.get(AmmoKind::LightFoam), 6);
+        assert_eq!(r.take(AmmoKind::LightFoam, 100), 6);
+        assert_eq!(r.get(AmmoKind::LightFoam), 0);
     }
 }

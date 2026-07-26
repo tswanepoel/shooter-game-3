@@ -1,10 +1,11 @@
-//! SelfState fields, loadout, health, and emote.
+//! SelfState fields, loadout, health, ammo, and emote.
 
 use glam::Vec3;
 
 use super::loco::STAMINA_MAX;
 use super::pose::HIT_FALL_S;
 use super::types::{ActiveWeapon, LocomotionMode, WeaponClass};
+use crate::{spawn_reserve_for, weapon_def, AmmoKind, ReserveAmmo};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelfState {
@@ -22,6 +23,12 @@ pub struct SelfState {
     pub secondary: Option<u8>,
     /// Which hand is active: a filled slot or unarmed (021).
     pub active: ActiveWeapon,
+    /// Magazine rounds in the primary blaster (058).
+    pub primary_mag: u16,
+    /// Magazine rounds in the secondary blaster (058).
+    pub secondary_mag: u16,
+    /// Reserve rounds keyed by ammo kind (058).
+    pub reserve: ReserveAmmo,
     pub alive: bool,
     pub health: f32,
     pub regen_block_s: f32,
@@ -85,7 +92,7 @@ impl Default for SelfState {
 
 impl SelfState {
     pub fn default_loadout() -> Self {
-        Self {
+        let mut s = Self {
             position: Vec3::ZERO,
             facing: 0.0,
             look_offset_yaw: 0.0,
@@ -94,6 +101,9 @@ impl SelfState {
             primary: Some(b'p'),
             secondary: Some(b'b'),
             active: ActiveWeapon::Primary,
+            primary_mag: 0,
+            secondary_mag: 0,
+            reserve: ReserveAmmo::default(),
             alive: true,
             health: crate::HEALTH_MAX,
             regen_block_s: 0.0,
@@ -127,7 +137,100 @@ impl SelfState {
             hit_fall_s: HIT_FALL_S,
             emote: None,
             emote_age_s: 0.0,
+        };
+        s.apply_spawn_ammo();
+        s
+    }
+
+    /// Fill magazines to capacity and draft reserve for kinds on this loadout (058 / 053).
+    pub fn apply_spawn_ammo(&mut self) {
+        self.primary_mag = Self::mag_capacity_of(self.primary);
+        self.secondary_mag = Self::mag_capacity_of(self.secondary);
+        self.reserve = ReserveAmmo::default();
+        for letter in [self.primary, self.secondary].into_iter().flatten() {
+            if let Some(def) = weapon_def(letter) {
+                let kind = def.ammo();
+                if self.reserve.get(kind) == 0 {
+                    self.reserve.set(kind, spawn_reserve_for(kind));
+                }
+            }
         }
+    }
+
+    fn mag_capacity_of(letter: Option<u8>) -> u16 {
+        letter
+            .and_then(weapon_def)
+            .map(|d| d.mag_capacity())
+            .unwrap_or(0)
+    }
+
+    /// Magazine rounds in the active blaster, if armed.
+    pub fn active_mag(&self) -> Option<u16> {
+        self.active_blaster()?;
+        Some(match self.active {
+            ActiveWeapon::Primary => self.primary_mag,
+            ActiveWeapon::Secondary => self.secondary_mag,
+        })
+    }
+
+    fn active_mag_mut(&mut self) -> Option<&mut u16> {
+        self.active_blaster()?;
+        Some(match self.active {
+            ActiveWeapon::Primary => &mut self.primary_mag,
+            ActiveWeapon::Secondary => &mut self.secondary_mag,
+        })
+    }
+
+    /// Capacity of the active blaster's magazine, if armed.
+    pub fn active_mag_capacity(&self) -> Option<u16> {
+        self.active_blaster()
+            .and_then(weapon_def)
+            .map(|d| d.mag_capacity())
+    }
+
+    /// Ammo kind of the active blaster, if armed.
+    pub fn active_ammo_kind(&self) -> Option<AmmoKind> {
+        self.active_blaster().and_then(weapon_def).map(|d| d.ammo())
+    }
+
+    /// Spend up to `want` rounds from the active magazine; returns how many spent.
+    pub fn spend_mag_rounds(&mut self, want: u16) -> u16 {
+        let Some(mag) = self.active_mag_mut() else {
+            return 0;
+        };
+        let spent = (*mag).min(want);
+        *mag -= spent;
+        spent
+    }
+
+    /// Fill active magazine from reserve of that ammo kind, up to capacity (058).
+    /// Returns true when any rounds moved.
+    pub fn try_reload(&mut self) -> bool {
+        if !self.alive {
+            return false;
+        }
+        let Some(letter) = self.active_blaster() else {
+            return false;
+        };
+        let Some(def) = weapon_def(letter) else {
+            return false;
+        };
+        let cap = def.mag_capacity();
+        let kind = def.ammo();
+        let mag = match self.active {
+            ActiveWeapon::Primary => &mut self.primary_mag,
+            ActiveWeapon::Secondary => &mut self.secondary_mag,
+        };
+        if *mag >= cap {
+            return false;
+        }
+        let need = cap - *mag;
+        let taken = self.reserve.take(kind, need);
+        if taken == 0 {
+            return false;
+        }
+        *mag += taken;
+        true
     }
 
     /// Letter of the active slot, if that slot is filled.
@@ -231,15 +334,20 @@ impl SelfState {
     }
 
     /// Set primary (any class, or clear). Invalid letter rejected.
+    /// Fills that slot's magazine to capacity when the letter changes (058).
     pub fn set_primary(&mut self, letter: Option<u8>) -> Result<(), &'static str> {
         if let Some(l) = letter {
             WeaponClass::from_letter(l).ok_or("unknown blaster letter")?;
         }
-        self.primary = letter;
+        if self.primary != letter {
+            self.primary = letter;
+            self.primary_mag = Self::mag_capacity_of(letter);
+        }
         Ok(())
     }
 
     /// Set secondary (launcher/pistol only, or clear). Invalid class rejected.
+    /// Fills that slot's magazine to capacity when the letter changes (058).
     pub fn set_secondary(&mut self, letter: Option<u8>) -> Result<(), &'static str> {
         if let Some(l) = letter {
             let class = WeaponClass::from_letter(l).ok_or("unknown blaster letter")?;
@@ -247,7 +355,10 @@ impl SelfState {
                 return Err("secondary only allows launcher or pistol");
             }
         }
-        self.secondary = letter;
+        if self.secondary != letter {
+            self.secondary = letter;
+            self.secondary_mag = Self::mag_capacity_of(letter);
+        }
         Ok(())
     }
 

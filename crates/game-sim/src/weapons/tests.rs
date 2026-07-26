@@ -30,6 +30,9 @@ fn table_covers_a_through_r() {
     assert_eq!(weapon_def(b'f').unwrap().ammo(), AmmoKind::ThickFoam);
     assert_eq!(weapon_def(b'b').unwrap().ammo(), AmmoKind::LightFoam);
     assert_eq!(weapon_def(b'k').unwrap().ammo(), AmmoKind::LightFoam);
+    assert_eq!(weapon_def(b'b').unwrap().mag_capacity(), 12);
+    assert_eq!(weapon_def(b'a').unwrap().mag_capacity(), 1);
+    assert_eq!(weapon_def(b'e').unwrap().mag_capacity(), 5);
 }
 
 #[test]

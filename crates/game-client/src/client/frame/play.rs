@@ -51,6 +51,7 @@ impl ClientInner {
             let (fwd, strafe) = self.move_input.axes();
             let mut sprint_tap = self.move_input.take_sprint();
             let jump = self.move_input.take_jump();
+            let reload = self.move_input.take_reload();
             let weapon_steps = self.move_input.take_weapon_cycle();
             let wdir = weapon_steps.signum();
 
@@ -71,6 +72,9 @@ impl ClientInner {
             self.self_state.wish_strafe = strafe.clamp(-1.0, 1.0);
             if jump && !wheel_open {
                 self.self_state.try_jump();
+            }
+            if reload && !wheel_open && !self.fire.blocks_weapon_side() {
+                let _ = self.self_state.try_reload();
             }
             if !self.fire.blocks_weapon_side() && !wheel_open {
                 for _ in 0..weapon_steps.unsigned_abs() {

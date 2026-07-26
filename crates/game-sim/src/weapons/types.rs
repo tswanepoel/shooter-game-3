@@ -84,6 +84,11 @@ impl WeaponDef {
     pub fn ammo(self) -> AmmoKind {
         ammo_for_class(self.class)
     }
+
+    /// Magazine capacity for this blaster (058 draft by class).
+    pub fn mag_capacity(self) -> u16 {
+        crate::mag_capacity_for_class(self.class)
+    }
 }
 
 /// Sprint→fire base tax before letter `T_ready` (038).

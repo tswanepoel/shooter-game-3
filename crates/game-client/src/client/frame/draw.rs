@@ -213,6 +213,17 @@ impl ClientInner {
                             if cont { "  cont" } else { "" },
                         ));
                     }
+                    if let (Some(mag), Some(cap)) = (
+                        self.self_state.active_mag(),
+                        self.self_state.active_mag_capacity(),
+                    ) {
+                        let rsv = self
+                            .self_state
+                            .active_ammo_kind()
+                            .map(|k| self.self_state.reserve.get(k))
+                            .unwrap_or(0);
+                        parts.push(format!("mag {mag}/{cap}  rsv {rsv}"));
+                    }
                     Some(parts.join("  |  "))
                 }
             };

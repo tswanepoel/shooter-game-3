@@ -72,6 +72,7 @@ impl ClientInner {
             self.self_state.primary = spawn.primary;
             self.self_state.secondary = spawn.secondary;
             self.self_state.active = spawn.active;
+            self.self_state.apply_spawn_ammo();
             self.self_state.position = spawn.position;
             self.self_state.set_drive_look(spawn.facing, 0.0, 0.0);
             self.self_state.alive = true;

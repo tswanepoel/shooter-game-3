@@ -202,7 +202,7 @@ impl FireState {
 
         let mut out = Vec::new();
 
-        // Burst continuation (string always finishes).
+        // Burst continuation (string always finishes while mag has rounds).
         if self.burst_active() {
             if self.gates_clear() {
                 if let Some(d) = self.spawn_discharge(
@@ -216,13 +216,16 @@ impl FireState {
                     self.burst_left = self.burst_left.saturating_sub(1);
                     self.cooldown_s = def.shot_interval_s();
                     out.push(d);
+                } else if self_state.active_mag() == Some(0) {
+                    self.burst_left = 0;
+                    self.burst_pending = false;
                 }
             }
             if self.burst_left == 0 {
                 // String ended: hold-to-chain or pending re-press (next shots wait on RPM).
                 let chain = self.fire_held || self.burst_pending;
                 self.burst_pending = false;
-                if chain {
+                if chain && self_state.active_mag() != Some(0) {
                     self.burst_left = def.burst_count;
                 }
             }
@@ -239,7 +242,6 @@ impl FireState {
         if want && self.gates_clear() {
             match def.mode {
                 FireMode::Burst => {
-                    self.burst_left = def.burst_count;
                     if let Some(d) = self.spawn_discharge(
                         def,
                         owner,
@@ -248,7 +250,7 @@ impl FireState {
                         muzzle_worlds,
                         self_state,
                     ) {
-                        self.burst_left = self.burst_left.saturating_sub(1);
+                        self.burst_left = def.burst_count.saturating_sub(1);
                         self.cooldown_s = def.shot_interval_s();
                         out.push(d);
                     }
@@ -281,6 +283,11 @@ impl FireState {
         muzzle_worlds: &[Vec3],
         self_state: &mut SelfState,
     ) -> Option<Discharge> {
+        let mag = self_state.active_mag().unwrap_or(0);
+        if mag == 0 {
+            return None;
+        }
+
         let weapon_line = {
             let len = weapon_line.length();
             if len < 1e-8 {
@@ -308,9 +315,19 @@ impl FireState {
             (idxs, fired)
         };
 
+        let want_pellets = (muzzle_indices.len() as u16).saturating_mul(def.pellets as u16);
+        let rounds = self_state.spend_mag_rounds(want_pellets);
+        if rounds == 0 {
+            return None;
+        }
+
         let mut projectiles = Vec::new();
-        for &mi in &muzzle_indices {
+        let mut spawned: u16 = 0;
+        'spawn: for &mi in &muzzle_indices {
             for _ in 0..def.pellets {
+                if spawned >= rounds {
+                    break 'spawn;
+                }
                 let dir =
                     scatter_direction(weapon_line, def.spread_half_deg, &mut || self.next_rand01());
                 let id = self.next_id;
@@ -327,6 +344,7 @@ impl FireState {
                     max_range: def.max_range,
                     muzzle_index: mi as u8,
                 });
+                spawned += 1;
             }
         }
 

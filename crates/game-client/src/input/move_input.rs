@@ -13,6 +13,8 @@ pub struct MoveInput {
     weapon_cycle: i8,
     /// Session LMB held (038 fire).
     fire_held: bool,
+    /// Session R edge (058 reload).
+    reload_edge: bool,
     /// Session B held (039 emote wheel).
     emote_held: bool,
     /// Rising edge of B this frame window.
@@ -50,6 +52,16 @@ impl MoveInput {
         let s = self.sprint_edge;
         self.sprint_edge = false;
         s
+    }
+
+    pub fn note_reload_press(&mut self) {
+        self.reload_edge = true;
+    }
+
+    pub fn take_reload(&mut self) -> bool {
+        let r = self.reload_edge;
+        self.reload_edge = false;
+        r
     }
 
     /// One wheel notch: positive `delta_y` (scroll down) advances primary→secondary→unarmed.
@@ -112,6 +124,10 @@ impl MoveInput {
 
     pub fn is_emote_key(code: &str) -> bool {
         code == "KeyB"
+    }
+
+    pub fn is_reload_key(code: &str) -> bool {
+        code == "KeyR"
     }
 
     pub fn clear_keys(&mut self) {

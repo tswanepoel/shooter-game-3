@@ -579,3 +579,77 @@ fn unarmed_has_no_weapon_line() {
     assert!(s.weapon_line().is_none());
     assert!(s.reticle_world(eye()).is_none());
 }
+
+#[test]
+fn empty_mag_blocks_fire() {
+    let mut fire = FireState::new();
+    let mut s = armed_self();
+    s.set_primary(Some(b'b')).unwrap();
+    s.primary_mag = 0;
+    fire.pay_ready(b'b');
+    fire.ready_s = 0.0;
+    let d = fire.tick(0.0, &mut s, true, 0, eye(), &muzzles());
+    assert!(d.is_empty());
+}
+
+#[test]
+fn fire_spends_mag_one_per_projectile() {
+    let mut fire = FireState::new();
+    let mut s = armed_self();
+    s.set_primary(Some(b'b')).unwrap();
+    let before = s.primary_mag;
+    fire.pay_ready(b'b');
+    fire.ready_s = 0.0;
+    let d = fire.tick(0.0, &mut s, true, 0, eye(), &muzzles());
+    assert_eq!(d.len(), 1);
+    assert_eq!(d[0].projectiles.len(), 1);
+    assert_eq!(s.primary_mag, before - 1);
+}
+
+#[test]
+fn multi_pellet_partial_mag() {
+    let mut fire = FireState::new();
+    let mut s = armed_self();
+    s.set_primary(Some(b'k')).unwrap();
+    s.primary_mag = 3;
+    fire.pay_ready(b'k');
+    fire.ready_s = 0.0;
+    let d = fire.tick(0.0, &mut s, true, 0, eye(), &muzzles());
+    assert_eq!(d.len(), 1);
+    assert_eq!(d[0].projectiles.len(), 3);
+    assert_eq!(s.primary_mag, 0);
+}
+
+#[test]
+fn reload_moves_reserve_into_mag() {
+    let mut s = armed_self();
+    s.set_primary(Some(b'b')).unwrap();
+    s.primary_mag = 0;
+    s.reserve.light_foam = 5;
+    assert!(s.try_reload());
+    assert_eq!(s.primary_mag, 5);
+    assert_eq!(s.reserve.light_foam, 0);
+    // Full mag: no more.
+    s.primary_mag = s.active_mag_capacity().unwrap();
+    s.reserve.light_foam = 10;
+    assert!(!s.try_reload());
+}
+
+#[test]
+fn spawn_ammo_fills_mag_and_draft_reserve() {
+    let mut s = SelfState::default_loadout();
+    s.primary = Some(b'e'); // sniper → thick foam
+    s.secondary = Some(b'a'); // launcher → grenade
+    s.apply_spawn_ammo();
+    assert_eq!(s.primary_mag, weapon_def(b'e').unwrap().mag_capacity());
+    assert_eq!(s.secondary_mag, weapon_def(b'a').unwrap().mag_capacity());
+    assert_eq!(
+        s.reserve.thick_foam,
+        crate::spawn_reserve_for(AmmoKind::ThickFoam)
+    );
+    assert_eq!(
+        s.reserve.grenade,
+        crate::spawn_reserve_for(AmmoKind::Grenade)
+    );
+    assert_eq!(s.reserve.light_foam, 0);
+}
