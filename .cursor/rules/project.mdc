@@ -1,0 +1,10 @@
+---
+description: Project truth and doc policy
+alwaysApply: true
+---
+
+# Project
+
+- Truth is the code tree and `docs/concepts.md`. Use concept names where a term exists.
+- `docs/features/` — append-only historical notes.
+- Do not invent free bags (`ocular`, AimPose, KickPose, parallel look-as-view).

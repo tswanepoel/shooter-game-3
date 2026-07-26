@@ -1,4 +1,4 @@
-//! Per-frame simulation, combat, and draw for ClientInner.
+//! Per-frame for ClientInner: play → combat → present → draw.
 
 mod combat;
 mod draw;

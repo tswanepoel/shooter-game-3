@@ -32,7 +32,8 @@ A WebGPU-powered shooter game built with Rust and Vite.
 ├── infra/docker/        # Docker configuration for WASM builds
 ├── docs/
 │   ├── concepts.md      # Sim ontology (terms + authoring rules)
-│   └── features/        # Append-only feature notes
+│   └── features/        # Append-only historical notes
+├── AGENTS.md            # Short agent routing
 ├── CONTRIBUTING.md      # Contribution guidelines
 ├── package.json
 ├── Cargo.toml
@@ -144,8 +145,9 @@ With `npm run dev`, press **`` ` ``** (backtick) for the in-game developer conso
 
 | Doc | Role |
 |-----|------|
-| [docs/concepts.md](docs/concepts.md) | Canonical sim ontology: authoring rules and terms (look, facing, joints, fire/hit impulse, loadout, loco, combat). Prefer these names in code and features. |
-| [docs/features/](docs/features/) | Append-only feature notes (what each change meant when it landed). |
+| [docs/concepts.md](docs/concepts.md) | Sim ontology (terms + authoring rules). Prefer these names in code. |
+| [docs/features/](docs/features/) | Append-only historical notes. |
+| [AGENTS.md](AGENTS.md) | Short agent routing (truth vs history). |
 
 ## Contributing
 

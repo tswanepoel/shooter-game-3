@@ -1,0 +1,9 @@
+---
+description: Client present and view ownership
+globs: crates/game-client/src/{view,self_present,remote_present,mp,client/frame}/**
+alwaysApply: false
+---
+
+# Present / view
+
+Frame order: play → combat → present → draw (`client/frame`). View mounts look from the posed head. No free-angle camera path beside that mount. Remotes use the same present path as self body.

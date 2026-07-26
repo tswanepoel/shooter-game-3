@@ -1,0 +1,9 @@
+---
+description: Sim ontology when editing game-sim
+globs: crates/game-sim/**/*
+alwaysApply: false
+---
+
+# Sim
+
+Before changing look, facing, joints, fire/hit, loadout, or drive: read the relevant terms in `docs/concepts.md` (Rules + Terms). Behaviour sits on the owning term; hand off with impulses — do not couple.
