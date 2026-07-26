@@ -1,4 +1,4 @@
-//! Health and impact damage (043 / 046).
+//! Health and impact damage.
 
 use glam::Vec3;
 

@@ -1,4 +1,4 @@
-//! Flight segment vs posed character part meshes (043).
+//! Flight segment vs posed character part meshes.
 
 use game_sim::SelfState;
 use glam::{Mat4, Vec3};

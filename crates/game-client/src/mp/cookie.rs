@@ -1,4 +1,4 @@
-//! Display-name cookie pre-fill (051).
+//! Display-name cookie pre-fill.
 
 use game_net::normalize_display_name;
 use wasm_bindgen::JsCast;

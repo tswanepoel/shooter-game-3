@@ -1,4 +1,4 @@
-//! Hit marker present flash (044): X on the reticle when you claim a hit.
+//! Hit marker present flash: X on the reticle when you claim a hit.
 //!
 //! Same world point as reticle / shots (weapon line). Present-only.
 

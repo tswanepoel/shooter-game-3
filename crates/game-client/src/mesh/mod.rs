@@ -1,9 +1,9 @@
-//! Kit meshes: load, hold pose, held-weapon attach (037), GPU upload.
+//! Kit meshes: load, hold pose, held-weapon attach, GPU upload.
 //!
-//! Characters and blasters use lit matte shading (018): albedo × (ambient + key × N·L).
+//! Characters and blasters use lit matte shading: albedo × (ambient + key × N·L).
 //! Solid debug batches (markers) stay unlit via a material flag.
 //!
-//! Held attach (feature 037):
+//! Held attach:
 //! `held_blaster = kit_to_world · arm_right · H · inv(G) · S_blaster`
 
 mod anim;

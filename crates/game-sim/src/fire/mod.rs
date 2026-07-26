@@ -1,4 +1,4 @@
-//! Weapon fire gates, modes, and projectile motion (038/042/048/049).
+//! Weapon fire gates, modes, and projectile motion.
 //!
 //! Cadence and discharge live here. Fire / hit / sway residual live on [SelfState].
 

@@ -1,5 +1,3 @@
-//! First-class ammo kinds (042).
-//!
 //! Ammo owns round facts (mass). Blasters own which kind they fire and launch speed.
 
 use crate::WeaponClass;

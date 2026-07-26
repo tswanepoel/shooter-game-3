@@ -1,4 +1,4 @@
-//! Emote catalog and self emote drive (039).
+//! Emote catalog and self emote drive.
 
 /// Wheel slot count (fixed v1).
 pub const EMOTE_SLOT_COUNT: u8 = 4;

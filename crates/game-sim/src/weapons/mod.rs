@@ -1,4 +1,4 @@
-//! Baked weapon fire table (038/040/041/042/048/049).
+//! Baked weapon fire table.
 //!
 //! Blaster owns initial velocity and ammo kind (via class). Ammo mass is on
 //! [`crate::AmmoKind`]. Fire-impulse size and base fall live here; continue-fall

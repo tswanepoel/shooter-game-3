@@ -1,4 +1,4 @@
-//! Emote wheel state + GPU radial overlay (039).
+//! Emote wheel state + GPU radial overlay.
 //!
 //! Hold B; mouse select; release commits or centre dead-zone cancels.
 //! Drawn in clip-space (NDC) after the scene — no DOM/CSS.

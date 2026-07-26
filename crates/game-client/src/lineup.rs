@@ -1,8 +1,8 @@
-//! Debug blaster lineup (features 011 + 012): each blaster held by a Kenney character,
+//! Debug blaster lineup: each blaster held by a Kenney character,
 //! with magenta balls at every muzzle point.
-//! Held attach and muzzle world: feature 037 (`held_blaster · muzzle_local`).
+//! Held attach and muzzle world: `held_blaster · muzzle_local`.
 //! Kit facts: `assets/source/characters/README.md`, `assets/source/blasters/README.md`.
-//! Loads via cook pack `kenney-core` (feature 010), not source paths.
+//! Loads via cook pack `kenney-core`, not source paths.
 
 use glam::{Mat4, Vec3};
 use wasm_bindgen::JsValue;

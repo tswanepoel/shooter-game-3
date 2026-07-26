@@ -1,4 +1,4 @@
-//! Cooked pack load (SGPK + manifest). See feature 010.
+//! Cooked pack load (SGPK + manifest).
 
 use std::collections::HashMap;
 
