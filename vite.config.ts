@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { defineConfig, type Plugin, type PreviewServer, type ViteDevServer } from 'vite';
+import basicSsl from '@vitejs/plugin-basic-ssl';
 import wasm from 'vite-plugin-wasm';
 import topLevelAwait from 'vite-plugin-top-level-await';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +10,8 @@ import { fileURLToPath } from 'node:url';
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
 const shotsDir = path.join(repoRoot, 'debug', 'shots');
 const wtIdentityPath = path.join(repoRoot, 'debug', 'wt-identity.json');
+/** LAN WebGPU needs HTTPS (`http://192.168…` is not a secure context). */
+const useHttps = process.env.DEV_HTTPS === '1';
 
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -114,6 +117,6 @@ export default defineConfig({
       allow: [repoRoot],
     },
   },
-  plugins: [wasm(), topLevelAwait(), debugShotsPlugin()],
+  plugins: [wasm(), topLevelAwait(), debugShotsPlugin(), ...(useHttps ? [basicSsl()] : [])],
   root: 'web',
 });

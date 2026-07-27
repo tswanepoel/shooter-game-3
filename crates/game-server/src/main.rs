@@ -21,6 +21,7 @@ use roster::Rooms;
 use session::handle_session;
 
 const DEFAULT_BIND: &str = "0.0.0.0:4433";
+const DEFAULT_PUBLIC_HOST: &str = "127.0.0.1";
 
 #[tokio::main]
 async fn main() {
@@ -36,12 +37,25 @@ async fn main() {
         .parse()
         .expect("GAME_SERVER_BIND must be host:port");
 
+    // Host browsers use for WebTransport (wt-identity.json). Keep bind on 0.0.0.0
+    // for LAN; set GAME_SERVER_PUBLIC_HOST to this machine's LAN IP.
+    let public_host =
+        std::env::var("GAME_SERVER_PUBLIC_HOST").unwrap_or_else(|_| DEFAULT_PUBLIC_HOST.into());
+
+    let mut sans = vec![
+        "localhost".to_string(),
+        "127.0.0.1".to_string(),
+        "::1".to_string(),
+    ];
+    if !sans.iter().any(|s| s == &public_host) {
+        sans.push(public_host.clone());
+    }
     let identity =
-        Identity::self_signed(["localhost", "127.0.0.1", "::1"]).expect("self-signed identity");
+        Identity::self_signed(sans.iter().map(String::as_str)).expect("self-signed identity");
     let cert_hash = identity.certificate_chain().as_slice()[0].hash();
     let hash_bytes = *cert_hash.as_ref();
 
-    write_identity_file(bind.port(), &hash_bytes);
+    write_identity_file(&public_host, bind.port(), &hash_bytes);
 
     let config = ServerConfig::builder()
         .with_bind_address(bind)
@@ -72,6 +86,7 @@ async fn main() {
 
     info!(
         %bind,
+        %public_host,
         tick_hz = TICK_HZ,
         protocol = PROTOCOL_VERSION,
         cert = %cert_hash.fmt(Sha256DigestFmt::DottedHex),
@@ -91,13 +106,13 @@ async fn main() {
     }
 }
 
-fn write_identity_file(port: u16, hash: &[u8; 32]) {
+fn write_identity_file(public_host: &str, port: u16, hash: &[u8; 32]) {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../debug/wt-identity.json");
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
     let doc = serde_json::json!({
-        "url": format!("https://127.0.0.1:{port}/"),
+        "url": format!("https://{public_host}:{port}/"),
         "hash_sha256": hash.as_slice(),
     });
     match std::fs::write(&path, serde_json::to_vec_pretty(&doc).unwrap()) {

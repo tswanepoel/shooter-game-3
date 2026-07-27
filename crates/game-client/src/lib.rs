@@ -90,6 +90,16 @@ impl GameClient {
     pub async fn create(canvas: HtmlCanvasElement) -> Result<GameClient, JsValue> {
         console_error_panic_hook::set_once();
 
+        // WebGPU is SecureContext-only; `http://LAN-IP` fails (localhost HTTP is fine).
+        if let Some(window) = web_sys::window() {
+            if !window.is_secure_context() {
+                return Err(JsValue::from_str(
+                    "WebGPU requires a secure context. Open via https:// (npm run dev:lan) \
+                     or http://localhost — not plain http:// on a LAN IP.",
+                ));
+            }
+        }
+
         let renderer = Renderer::new(canvas.clone()).await?;
         let self_state = SelfState::default_loadout();
         let view = ViewController::new();

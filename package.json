@@ -9,6 +9,7 @@
   "scripts": {
     "cook": "node tools/cook.mjs",
     "dev": "npm run cook && npm run build-wasm && vite",
+    "dev:lan": "npm run cook && npm run build-wasm && node tools/dev-lan.mjs",
     "build": "npm run cook && npm run build-wasm:release && vite build",
     "preview": "npm run build && vite preview",
     "build-wasm": "cd crates/game-client && wasm-pack build --target web --out-dir ../../pkg",
@@ -34,6 +35,7 @@
     "@commitlint/cli": "^21.2.1",
     "@commitlint/config-conventional": "^21.2.0",
     "@types/node": "^20.0.0",
+    "@vitejs/plugin-basic-ssl": "^1.2.0",
     "husky": "^9.1.7",
     "lint-staged": "^17.0.8",
     "prettier": "^3.0.0",

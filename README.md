@@ -69,12 +69,17 @@ A WebGPU-powered shooter game built with Rust and Vite.
    ```bash
    npm run dev
    ```
+   For LAN browsers, WebGPU needs HTTPS (plain `http://192.168…` is not a secure
+   context). Use `npm run dev:lan`, accept the self-signed cert warning, then open
+   `https://<lan-ip>:3000/`.
 
 5. (Optional) Multiplayer host (WebTransport, default `0.0.0.0:4433`):
    ```bash
    cargo run -p game-server
    ```
-   Override bind with `GAME_SERVER_BIND`. In the dev console (`` ` ``): `mp join` / `mp leave` / `mp status`.
+   Override bind with `GAME_SERVER_BIND`. For LAN clients, keep that default and set
+   `GAME_SERVER_PUBLIC_HOST` to this machine’s LAN IP (writes `debug/wt-identity.json`
+   and cert SANs). In the dev console (`` ` ``): `mp join` / `mp leave` / `mp status`.
 
 Running `npm run dev` cooks art packs, compiles the Rust WASM module, then starts the Vite dev server with hot-reload. See [Development Workflow](#development-workflow) for details.
 
