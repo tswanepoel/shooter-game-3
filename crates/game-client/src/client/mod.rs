@@ -17,7 +17,7 @@ use crate::corpse_present::CorpsePresent;
 use crate::debug::DebugTools;
 use crate::emote_wheel::EmoteWheel;
 use crate::hit_marker::HitMarker;
-use crate::input::{InputSession, MoveInput};
+use crate::input::{InputSession, MoveInput, SoftPointer};
 #[cfg(feature = "debug-tools")]
 use crate::lineup::LineupState;
 use crate::mp;
@@ -35,6 +35,7 @@ pub(crate) struct ClientInner {
     pub(crate) self_state: SelfState,
     pub(crate) view: ViewController,
     pub(crate) session: InputSession,
+    pub(crate) soft_pointer: SoftPointer,
     pub(crate) move_input: MoveInput,
     emote_wheel: EmoteWheel,
     hit_marker: HitMarker,
@@ -77,6 +78,7 @@ impl ClientInner {
             self_state,
             view,
             session: InputSession::new(),
+            soft_pointer: SoftPointer::new(),
             move_input: MoveInput::default(),
             emote_wheel: EmoteWheel::new(),
             hit_marker: HitMarker::new(),
@@ -158,5 +160,17 @@ impl ClientInner {
             }
             Err(e) => format!("blaster: {e}"),
         }
+    }
+
+    /// Soft pointer owns session mouse while product Gate/Panel chrome or debug console is up (061).
+    pub(crate) fn soft_pointer_armed(&self) -> bool {
+        if !self.session.is_active() {
+            return false;
+        }
+        #[cfg(feature = "debug-tools")]
+        if self.debug.is_open() {
+            return true;
+        }
+        self.ui.wants_ui_input(self.mp.phase())
     }
 }

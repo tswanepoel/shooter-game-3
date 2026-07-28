@@ -27,6 +27,7 @@ impl MpPhase {
         !matches!(self, Self::Living)
     }
 
+    /// Product Gate / Panel chrome: soft pointer + UI keys while the session is active (061).
     pub fn forces_free_cursor(self) -> bool {
         matches!(
             self,

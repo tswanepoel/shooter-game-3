@@ -57,7 +57,6 @@ pub struct UiOverlay {
     room_code: String,
     display_name: String,
     status: String,
-    ui_wants_pointer: bool,
     pick_character: u8,
 }
 
@@ -92,7 +91,6 @@ impl UiOverlay {
             room_code: JOIN_ROOM_PREFILL.into(),
             display_name: name,
             status: String::new(),
-            ui_wants_pointer: false,
             pick_character: DEFAULT_CHARACTER,
         }
     }
@@ -117,13 +115,9 @@ impl UiOverlay {
         self.pick_character = character;
     }
 
-    /// Full-frame gates take keyboard; living/spectate chrome uses pointer-over only.
+    /// Product Gate / Panel chrome takes keyboard (and soft pointer while locked).
     pub fn wants_ui_input(&self, phase: MpPhase) -> bool {
         phase.forces_free_cursor()
-    }
-
-    pub fn blocks_pointer_lock(&self, phase: MpPhase) -> bool {
-        phase.forces_free_cursor() || self.ui_wants_pointer
     }
 
     pub fn take_raw_input(&mut self, screen_w: f32, screen_h: f32, time: f64) -> egui::RawInput {
@@ -145,6 +139,7 @@ impl UiOverlay {
         raw_input: egui::RawInput,
         pixels_per_point: f32,
         session: ProductSession<'_>,
+        soft_cursor: Option<egui::Pos2>,
         mut debug: DebugDraw<'_>,
     ) -> (Option<egui::FullOutput>, ProductActions) {
         self.egui_ctx.set_pixels_per_point(pixels_per_point);
@@ -186,13 +181,17 @@ impl UiOverlay {
             }
 
             debug.draw(ctx);
+
+            if let Some(pos) = soft_cursor {
+                draw_soft_cursor(ctx, pos);
+            }
         });
 
-        self.ui_wants_pointer = self.egui_ctx.wants_pointer_input()
-            || self.egui_ctx.is_pointer_over_area()
-            || self.egui_ctx.wants_keyboard_input();
-
-        let any = phase != MpPhase::Living || show_score || debug.active() || has_names;
+        let any = phase != MpPhase::Living
+            || show_score
+            || debug.active()
+            || has_names
+            || soft_cursor.is_some();
         if any {
             (Some(full), actions)
         } else {
@@ -243,6 +242,30 @@ impl UiOverlay {
                 .render(&mut pass.forget_lifetime(), &tris, &screen_descriptor);
         }
     }
+}
+
+fn draw_soft_cursor(ctx: &egui::Context, pos: egui::Pos2) {
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Tooltip,
+        egui::Id::new("soft_pointer"),
+    ));
+    let fill = egui::Color32::from_rgb(250, 250, 245);
+    let outline = egui::Color32::from_rgb(20, 24, 32);
+    // Simple arrow cursor.
+    let tip = pos;
+    let base_l = pos + egui::vec2(0.0, 16.0);
+    let base_r = pos + egui::vec2(11.0, 11.0);
+    let notch = pos + egui::vec2(4.0, 11.0);
+    let points = vec![tip, base_l, notch, base_r];
+    painter.add(egui::Shape::convex_polygon(
+        points.clone(),
+        fill,
+        egui::Stroke::NONE,
+    ));
+    painter.add(egui::Shape::closed_line(
+        points,
+        egui::Stroke::new(1.5_f32, outline),
+    ));
 }
 
 fn draw_floating_names(ctx: &egui::Context, labels: &[FloatingNameLabel]) {

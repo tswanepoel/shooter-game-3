@@ -186,6 +186,7 @@ impl ClientInner {
                 .unwrap_or(0.0);
             let screen_w = width as f32 / ppp;
             let screen_h = height as f32 / ppp;
+            self.soft_pointer.set_bounds(screen_w, screen_h);
 
             let roster = self.mp.roster();
             let phase = self.mp.phase();
@@ -255,6 +256,13 @@ impl ClientInner {
                 }
             };
 
+            let soft_cursor = if self.soft_pointer_armed() {
+                let p = self.soft_pointer.pos();
+                Some(egui::pos2(p.x, p.y))
+            } else {
+                None
+            };
+
             #[cfg(feature = "debug-tools")]
             let debug_draw = {
                 let hud = hud_owned.as_deref();
@@ -281,6 +289,7 @@ impl ClientInner {
                     staged: self.mp.staged_loadout(),
                     floating_names: &floating_names,
                 },
+                soft_cursor,
                 debug_draw,
             );
 

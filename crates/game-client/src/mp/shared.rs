@@ -35,7 +35,6 @@ pub struct LootGrantBatch {
 pub struct FrameEffects {
     pub pending_spawn: Option<PendingSpawn>,
     pub error: Option<String>,
-    pub release_pointer_lock: bool,
 }
 
 pub(crate) struct Shared {

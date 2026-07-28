@@ -1,4 +1,4 @@
-//! DOM listeners for pointer lock, play keys, look, weapon wheel, and fire.
+//! DOM listeners for pointer lock, play keys, look, soft pointer, weapon wheel, and fire.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -10,7 +10,10 @@ use web_sys::{Document, HtmlCanvasElement, KeyboardEvent, MouseEvent, WheelEvent
 
 use crate::ClientInner;
 
-use super::egui_bridge::{install_egui_pointer, push_egui_key, update_egui_modifiers};
+use super::egui_bridge::{
+    egui_os_pointer, install_egui_pointer, push_egui_key, push_soft_pointer_button,
+    update_egui_modifiers,
+};
 use super::move_input::MoveInput;
 
 /// Prefer raw mouse deltas (no OS accel). Fall back if the browser rejects it.
@@ -52,22 +55,11 @@ pub fn install_input_handlers(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCanv
     let document = window.document().expect("document");
 
     {
-        let inner = inner.clone();
         let canvas_el = canvas.clone();
         let on_click = Closure::<dyn FnMut(MouseEvent)>::new(move |event: MouseEvent| {
             if event.button() != 0 {
                 return;
             }
-            let client = inner.borrow();
-            // Join / spawn panels need a free cursor (forms, buttons).
-            if client.ui.blocks_pointer_lock(client.mp.phase()) {
-                return;
-            }
-            #[cfg(feature = "debug-tools")]
-            if client.debug.is_open() {
-                return;
-            }
-            drop(client);
             request_pointer_lock_raw(&canvas_el);
         });
         canvas
@@ -76,7 +68,7 @@ pub fn install_input_handlers(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCanv
         on_click.forget();
     }
 
-    // Session LMB fire (038): held while pointer-locked; ignored when debug shell is open.
+    // Session LMB fire (038): held while pointer-locked and soft pointer disarmed.
     {
         let inner = inner.clone();
         let on_down = Closure::<dyn FnMut(MouseEvent)>::new(move |event: MouseEvent| {
@@ -84,8 +76,8 @@ pub fn install_input_handlers(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCanv
                 return;
             }
             let mut client = inner.borrow_mut();
-            #[cfg(feature = "debug-tools")]
-            if client.debug.is_open() {
+            if client.soft_pointer_armed() {
+                push_soft_pointer_button(&mut client, true, event.button());
                 return;
             }
             if client.session.is_active() {
@@ -103,11 +95,49 @@ pub fn install_input_handlers(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCanv
             if event.button() != 0 {
                 return;
             }
-            inner.borrow_mut().move_input.set_fire_held(false);
+            let mut client = inner.borrow_mut();
+            if client.soft_pointer_armed() {
+                push_soft_pointer_button(&mut client, false, event.button());
+            }
+            client.move_input.set_fire_held(false);
         });
         window
             .add_event_listener_with_callback("mouseup", on_up.as_ref().unchecked_ref())
             .expect("fire mouseup");
+        on_up.forget();
+    }
+
+    // Non-primary buttons for soft pointer (egui secondary etc.).
+    {
+        let inner = inner.clone();
+        let on_down = Closure::<dyn FnMut(MouseEvent)>::new(move |event: MouseEvent| {
+            if event.button() == 0 {
+                return;
+            }
+            let mut client = inner.borrow_mut();
+            if client.soft_pointer_armed() {
+                push_soft_pointer_button(&mut client, true, event.button());
+            }
+        });
+        window
+            .add_event_listener_with_callback("mousedown", on_down.as_ref().unchecked_ref())
+            .expect("soft mousedown other");
+        on_down.forget();
+    }
+    {
+        let inner = inner.clone();
+        let on_up = Closure::<dyn FnMut(MouseEvent)>::new(move |event: MouseEvent| {
+            if event.button() == 0 {
+                return;
+            }
+            let mut client = inner.borrow_mut();
+            if client.soft_pointer_armed() {
+                push_soft_pointer_button(&mut client, false, event.button());
+            }
+        });
+        window
+            .add_event_listener_with_callback("mouseup", on_up.as_ref().unchecked_ref())
+            .expect("soft mouseup other");
         on_up.forget();
     }
 
@@ -120,6 +150,13 @@ pub fn install_input_handlers(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCanv
             let mut client = inner.borrow_mut();
             let was = client.session.is_active();
             client.session.set_active(active);
+            if active && !was {
+                // Prefer last OS-synced position; if never moved, start mid-view.
+                let p = client.soft_pointer.pos();
+                if p.x <= 0.0 && p.y <= 0.0 {
+                    client.soft_pointer.center();
+                }
+            }
             if was && !active {
                 client.move_input.clear_keys();
                 client.move_input.set_fire_held(false);
@@ -155,7 +192,15 @@ pub fn install_input_handlers(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCanv
             }
             let dx = event.movement_x() as f32;
             let dy = event.movement_y() as f32;
-            if dx != 0.0 || dy != 0.0 {
+            if dx == 0.0 && dy == 0.0 {
+                return;
+            }
+            if client.soft_pointer_armed() {
+                client.soft_pointer.add_delta(dx, dy);
+                let p = client.soft_pointer.pos();
+                let pos = egui::pos2(p.x, p.y);
+                client.ui.push_event(egui::Event::PointerMoved(pos));
+            } else {
                 client.session.add_look_px(dx, dy);
             }
         });
@@ -192,8 +237,8 @@ pub fn install_input_handlers(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCanv
         let on_wheel = Closure::<dyn FnMut(WheelEvent)>::new(move |event: WheelEvent| {
             let mut client = inner.borrow_mut();
 
-            #[cfg(feature = "debug-tools")]
-            if client.debug.is_open() {
+            let ui_wheel = client.soft_pointer_armed() || egui_os_pointer(&client);
+            if ui_wheel {
                 event.prevent_default();
                 let delta = match event.delta_mode() {
                     1 => egui::vec2(event.delta_x() as f32, event.delta_y() as f32) * 8.0,
@@ -279,8 +324,7 @@ fn on_session_key_down(inner: &Rc<RefCell<ClientInner>>, event: &KeyboardEvent) 
         }
     }
 
-    let ui = client.ui.wants_ui_input(client.mp.phase());
-    if ui && !client.session.is_active() {
+    if client.ui.wants_ui_input(client.mp.phase()) {
         event.prevent_default();
         push_egui_key(&mut client, event, true);
         return;
@@ -339,7 +383,7 @@ fn on_session_key_up(inner: &Rc<RefCell<ClientInner>>, event: &KeyboardEvent) {
         return;
     }
 
-    if client.ui.wants_ui_input(client.mp.phase()) && !client.session.is_active() {
+    if client.ui.wants_ui_input(client.mp.phase()) {
         push_egui_key(&mut client, event, false);
         return;
     }

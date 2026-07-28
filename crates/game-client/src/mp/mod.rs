@@ -198,13 +198,12 @@ impl MpClient {
         std::mem::take(&mut self.shared.borrow_mut().pending_loot_grants)
     }
 
-    /// Drain spawn/error/cursor side effects for the frame loop.
+    /// Drain spawn/error side effects for the frame loop.
     pub fn drain_frame_effects(&mut self) -> FrameEffects {
         let mut s = self.shared.borrow_mut();
         FrameEffects {
             pending_spawn: s.pending_spawn.take(),
             error: s.last_error.take(),
-            release_pointer_lock: s.phase.forces_free_cursor(),
         }
     }
 

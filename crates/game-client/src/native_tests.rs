@@ -23,3 +23,6 @@ mod drive;
 mod phase;
 #[path = "mp/remotes.rs"]
 mod remotes;
+
+#[path = "input/soft_pointer.rs"]
+mod soft_pointer;

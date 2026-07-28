@@ -49,11 +49,6 @@ impl ClientInner {
         let session_ok = self.session.is_active();
 
         let effects = self.mp.drain_frame_effects();
-        if effects.release_pointer_lock && self.session.is_active() {
-            if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-                doc.exit_pointer_lock();
-            }
-        }
         if let Some(spawn) = effects.pending_spawn {
             let character = self.mp.character();
             // SelfGpu only uploads blaster batches at load. Spawn applies staged

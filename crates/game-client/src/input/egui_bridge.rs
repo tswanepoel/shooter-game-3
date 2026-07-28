@@ -1,4 +1,4 @@
-//! Bridge browser pointer/keyboard events into egui when UI wants input.
+//! Bridge browser pointer/keyboard events into egui (OS mouse when unlocked, soft pointer when locked).
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -70,12 +70,28 @@ fn map_pointer_button(button: i16) -> egui::PointerButton {
     }
 }
 
-fn egui_wants_pointer(client: &ClientInner) -> bool {
+/// Absolute OS mouse → egui while the session is inactive (pre-lock / after eject).
+pub(super) fn egui_os_pointer(client: &ClientInner) -> bool {
+    if client.session.is_active() {
+        return false;
+    }
     #[cfg(feature = "debug-tools")]
     if client.debug.is_open() {
         return true;
     }
-    client.ui.wants_ui_input(client.mp.phase()) && !client.session.is_active()
+    client.ui.wants_ui_input(client.mp.phase())
+}
+
+pub(super) fn push_soft_pointer_button(client: &mut ClientInner, pressed: bool, button: i16) {
+    let p = client.soft_pointer.pos();
+    let pos = egui::pos2(p.x, p.y);
+    let modifiers = client.ui.modifiers();
+    client.ui.push_event(egui::Event::PointerButton {
+        pos,
+        button: map_pointer_button(button),
+        pressed,
+        modifiers,
+    });
 }
 
 pub(super) fn install_egui_pointer(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCanvasElement) {
@@ -84,7 +100,7 @@ pub(super) fn install_egui_pointer(inner: Rc<RefCell<ClientInner>>, canvas: &Htm
         let canvas_el = canvas.clone();
         let on_move = Closure::<dyn FnMut(MouseEvent)>::new(move |event: MouseEvent| {
             let mut client = inner.borrow_mut();
-            if !egui_wants_pointer(&client) {
+            if !egui_os_pointer(&client) {
                 return;
             }
             let rect = canvas_el.get_bounding_client_rect();
@@ -92,6 +108,10 @@ pub(super) fn install_egui_pointer(inner: Rc<RefCell<ClientInner>>, canvas: &Htm
                 (event.client_x() as f64 - rect.left()) as f32,
                 (event.client_y() as f64 - rect.top()) as f32,
             );
+            client
+                .soft_pointer
+                .set_bounds(rect.width() as f32, rect.height() as f32);
+            client.soft_pointer.set_pos(pos.x, pos.y);
             client.ui.push_event(egui::Event::PointerMoved(pos));
         });
         canvas
@@ -105,7 +125,7 @@ pub(super) fn install_egui_pointer(inner: Rc<RefCell<ClientInner>>, canvas: &Htm
         let canvas_el = canvas.clone();
         let on_down = Closure::<dyn FnMut(MouseEvent)>::new(move |event: MouseEvent| {
             let mut client = inner.borrow_mut();
-            if !egui_wants_pointer(&client) {
+            if !egui_os_pointer(&client) {
                 return;
             }
             event.prevent_default();
@@ -135,7 +155,7 @@ pub(super) fn install_egui_pointer(inner: Rc<RefCell<ClientInner>>, canvas: &Htm
         let canvas_el = canvas.clone();
         let on_up = Closure::<dyn FnMut(MouseEvent)>::new(move |event: MouseEvent| {
             let mut client = inner.borrow_mut();
-            if !egui_wants_pointer(&client) {
+            if !egui_os_pointer(&client) {
                 return;
             }
             let rect = canvas_el.get_bounding_client_rect();
