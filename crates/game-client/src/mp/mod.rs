@@ -16,7 +16,7 @@ mod tick;
 pub use claims::{ammo_kind_from_wire, net_spawn_to_projectile};
 pub use cookie::load_display_name_cookie;
 pub use drive::drive_to_state;
-pub use phase::{CamIntent, MpPhase, StagedLoadout};
+pub use phase::{CamIntent, MpPhase, ProductSurfaceKind, StagedLoadout};
 pub use remotes::{RemoteKitKey, RemoteTable};
 pub use shared::{FrameEffects, LootGrantBatch, PeerImpactHitBatch, PeerProjectileBatch};
 // Named type for `FrameEffects::pending_spawn` (phase module is private).

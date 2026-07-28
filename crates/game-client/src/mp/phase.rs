@@ -29,10 +29,12 @@ impl MpPhase {
 
     /// Product Gate / Panel chrome: soft pointer + UI keys while the session is active (061).
     pub fn forces_free_cursor(self) -> bool {
-        matches!(
-            self,
-            Self::Lobby | Self::Connecting | Self::Role | Self::Character | Self::Ready
-        )
+        self.surface_kind()
+            .is_some_and(ProductSurfaceKind::arms_soft_pointer)
+    }
+
+    pub fn surface_kind(self) -> Option<ProductSurfaceKind> {
+        ProductSurfaceKind::from_phase(self)
     }
 
     pub fn is_spectating(self) -> bool {
@@ -64,6 +66,28 @@ impl MpPhase {
                 | (Living, Spectating)
                 | (Living, Lobby)
         )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProductSurfaceKind {
+    Gate,
+    Panel,
+}
+
+impl ProductSurfaceKind {
+    pub fn from_phase(phase: MpPhase) -> Option<Self> {
+        match phase {
+            MpPhase::Lobby | MpPhase::Connecting | MpPhase::Role | MpPhase::Character => {
+                Some(Self::Gate)
+            }
+            MpPhase::Ready => Some(Self::Panel),
+            MpPhase::Spectating | MpPhase::Living => None,
+        }
+    }
+
+    pub fn arms_soft_pointer(self) -> bool {
+        matches!(self, Self::Gate | Self::Panel)
     }
 }
 
@@ -126,6 +150,21 @@ mod tests {
         assert!(!MpPhase::Lobby.can_go(MpPhase::Living));
         assert!(!MpPhase::Spectating.can_go(MpPhase::Living));
         assert!(!MpPhase::Ready.can_go(MpPhase::Character));
+    }
+
+    #[test]
+    fn surface_kind_maps_phases() {
+        assert_eq!(
+            MpPhase::Lobby.surface_kind(),
+            Some(ProductSurfaceKind::Gate)
+        );
+        assert_eq!(
+            MpPhase::Ready.surface_kind(),
+            Some(ProductSurfaceKind::Panel)
+        );
+        assert!(MpPhase::Living.surface_kind().is_none());
+        assert!(ProductSurfaceKind::Gate.arms_soft_pointer());
+        assert!(!MpPhase::Spectating.forces_free_cursor());
     }
 
     #[test]

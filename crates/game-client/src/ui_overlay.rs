@@ -3,10 +3,29 @@
 use game_net::{character_catalog, NetRole, RosterEntry, DEFAULT_CHARACTER};
 use game_sim::{ActiveWeapon, WeaponClass};
 
-use crate::mp::{self, MpPhase, StagedLoadout, JOIN_ROOM_PREFILL};
+use crate::mp::{self, MpPhase, ProductSurfaceKind, StagedLoadout, JOIN_ROOM_PREFILL};
 
 #[cfg(feature = "debug-tools")]
 use crate::debug::DebugShell;
+
+mod theme {
+    use egui::Color32;
+
+    pub const GATE_FIELD: Color32 = Color32::from_rgb(235, 244, 255);
+    pub const PANEL_CARD: Color32 = Color32::from_rgb(255, 255, 252);
+    pub const PANEL_SCRIM: Color32 = Color32::from_rgba_premultiplied(10, 15, 23, 100);
+    pub const SKY_PRIMARY: Color32 = Color32::from_rgb(52, 148, 230);
+    pub const LIME_SECONDARY: Color32 = Color32::from_rgb(118, 205, 88);
+    pub const CORAL_DANGER: Color32 = Color32::from_rgb(255, 108, 88);
+    pub const TEXT_DARK: Color32 = Color32::from_rgb(28, 38, 54);
+    pub const TEXT_MUTED: Color32 = Color32::from_rgb(88, 102, 120);
+    pub const TEXT_ON_FILL: Color32 = Color32::WHITE;
+    pub const CHROME_BG: Color32 = Color32::from_rgba_premultiplied(255, 255, 252, 215);
+    pub const CHROME_STROKE: Color32 = Color32::from_rgba_premultiplied(52, 148, 230, 80);
+    pub const NAME_ALLY: Color32 = Color32::from_rgb(52, 148, 230);
+    pub const NAME_OPPONENT: Color32 = Color32::from_rgb(255, 108, 88);
+    pub const NAME_OUTLINE: Color32 = Color32::from_rgb(255, 255, 252);
+}
 
 pub struct OverlayGpu<'a> {
     pub device: &'a wgpu::Device,
@@ -64,24 +83,7 @@ impl UiOverlay {
     pub fn new(device: &wgpu::Device, surface_format: wgpu::TextureFormat) -> Self {
         let egui_renderer = egui_wgpu::Renderer::new(device, surface_format, None, 1, false);
         let egui_ctx = egui::Context::default();
-        egui_ctx.set_visuals(egui::Visuals::dark());
-        egui_ctx.style_mut(|style| {
-            style.spacing.item_spacing = egui::vec2(8.0, 6.0);
-            style.spacing.window_margin = egui::Margin::same(12);
-            let mono = egui::FontId::new(14.0, egui::FontFamily::Monospace);
-            let body = egui::FontId::new(16.0, egui::FontFamily::Proportional);
-            style.text_styles.insert(egui::TextStyle::Body, body);
-            style
-                .text_styles
-                .insert(egui::TextStyle::Monospace, mono.clone());
-            style
-                .text_styles
-                .insert(egui::TextStyle::Button, mono.clone());
-            style.text_styles.insert(
-                egui::TextStyle::Heading,
-                egui::FontId::new(22.0, egui::FontFamily::Proportional),
-            );
-        });
+        apply_product_theme(&egui_ctx);
         let name = mp::load_display_name_cookie().unwrap_or_default();
         Self {
             egui_ctx,
@@ -115,9 +117,10 @@ impl UiOverlay {
         self.pick_character = character;
     }
 
-    /// Product Gate / Panel chrome takes keyboard (and soft pointer while locked).
     pub fn wants_ui_input(&self, phase: MpPhase) -> bool {
-        phase.forces_free_cursor()
+        phase
+            .surface_kind()
+            .is_some_and(ProductSurfaceKind::arms_soft_pointer)
     }
 
     pub fn take_raw_input(&mut self, screen_w: f32, screen_h: f32, time: f64) -> egui::RawInput {
@@ -244,14 +247,130 @@ impl UiOverlay {
     }
 }
 
+fn apply_product_theme(ctx: &egui::Context) {
+    let mut visuals = egui::Visuals::light();
+    visuals.override_text_color = Some(theme::TEXT_DARK);
+    visuals.widgets.noninteractive.fg_stroke.color = theme::TEXT_DARK;
+    visuals.widgets.inactive.fg_stroke.color = theme::TEXT_ON_FILL;
+    visuals.widgets.inactive.bg_fill = theme::SKY_PRIMARY;
+    visuals.widgets.hovered.fg_stroke.color = theme::TEXT_ON_FILL;
+    visuals.widgets.hovered.bg_fill = theme::SKY_PRIMARY.gamma_multiply(0.92);
+    visuals.widgets.active.fg_stroke.color = theme::TEXT_ON_FILL;
+    visuals.widgets.active.bg_fill = theme::SKY_PRIMARY.gamma_multiply(0.85);
+    visuals.selection.bg_fill = theme::LIME_SECONDARY.gamma_multiply(0.35);
+    visuals.selection.stroke.color = theme::SKY_PRIMARY;
+    visuals.window_fill = theme::PANEL_CARD;
+    visuals.panel_fill = theme::GATE_FIELD;
+    ctx.set_visuals(visuals);
+    ctx.style_mut(|style| {
+        style.spacing.item_spacing = egui::vec2(10.0, 8.0);
+        style.spacing.window_margin = egui::Margin::same(12);
+        style.spacing.button_padding = egui::vec2(14.0, 8.0);
+        let body = egui::FontId::new(16.0, egui::FontFamily::Proportional);
+        let button = egui::FontId::new(17.0, egui::FontFamily::Proportional);
+        let heading = egui::FontId::new(24.0, egui::FontFamily::Proportional);
+        let mono = egui::FontId::new(14.0, egui::FontFamily::Monospace);
+        style.text_styles.insert(egui::TextStyle::Body, body);
+        style.text_styles.insert(egui::TextStyle::Button, button);
+        style.text_styles.insert(egui::TextStyle::Heading, heading);
+        style.text_styles.insert(egui::TextStyle::Monospace, mono);
+    });
+}
+
+fn primary_button(text: &str) -> egui::Button<'static> {
+    egui::Button::new(
+        egui::RichText::new(text)
+            .color(theme::TEXT_ON_FILL)
+            .strong(),
+    )
+    .fill(theme::SKY_PRIMARY)
+    .min_size(egui::vec2(180.0, 44.0))
+}
+
+fn secondary_button(text: &str) -> egui::Button<'static> {
+    egui::Button::new(egui::RichText::new(text).color(theme::TEXT_DARK).strong())
+        .fill(theme::LIME_SECONDARY)
+        .min_size(egui::vec2(160.0, 40.0))
+}
+
+fn chrome_frame() -> egui::Frame {
+    egui::Frame::NONE
+        .fill(theme::CHROME_BG)
+        .stroke(egui::Stroke::new(1.5_f32, theme::CHROME_STROKE))
+        .inner_margin(egui::Margin::same(10))
+        .corner_radius(8.0)
+}
+
+fn gate_narrow_shell(ctx: &egui::Context, title: &str, add: impl FnOnce(&mut egui::Ui)) {
+    egui::CentralPanel::default()
+        .frame(egui::Frame::NONE.fill(theme::GATE_FIELD))
+        .show(ctx, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space(ui.available_height() * 0.14);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(380.0, ui.available_height()),
+                    egui::Layout::top_down(egui::Align::Center),
+                    |ui| {
+                        ui.set_max_width(380.0);
+                        ui.heading(title);
+                        ui.add_space(20.0);
+                        add(ui);
+                    },
+                );
+            });
+        });
+}
+
+fn gate_field_shell(ctx: &egui::Context, title: &str, add: impl FnOnce(&mut egui::Ui)) {
+    egui::CentralPanel::default()
+        .frame(
+            egui::Frame::NONE
+                .fill(theme::GATE_FIELD)
+                .inner_margin(egui::Margin::symmetric(32, 28)),
+        )
+        .show(ctx, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.heading(title);
+                ui.add_space(16.0);
+                add(ui);
+            });
+        });
+}
+
+fn panel_card_shell(ctx: &egui::Context, title: &str, add: impl FnOnce(&mut egui::Ui)) {
+    egui::CentralPanel::default()
+        .frame(egui::Frame::NONE.fill(theme::PANEL_SCRIM))
+        .show(ctx, |ui| {
+            ui.vertical_centered(|ui| {
+                let max_w = 720.0_f32.min(ui.available_width() * 0.92);
+                let card_h = ui.available_height() * 0.82;
+                egui::Frame::NONE
+                    .fill(theme::PANEL_CARD)
+                    .stroke(egui::Stroke::new(2.0_f32, theme::CHROME_STROKE))
+                    .inner_margin(egui::Margin::symmetric(28, 24))
+                    .corner_radius(12.0)
+                    .show(ui, |ui| {
+                        ui.set_max_width(max_w);
+                        ui.set_min_width(max_w.min(480.0));
+                        ui.heading(title);
+                        ui.add_space(12.0);
+                        egui::ScrollArea::vertical()
+                            .max_height(card_h - 56.0)
+                            .show(ui, |ui| {
+                                add(ui);
+                            });
+                    });
+            });
+        });
+}
+
 fn draw_soft_cursor(ctx: &egui::Context, pos: egui::Pos2) {
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Tooltip,
         egui::Id::new("soft_pointer"),
     ));
-    let fill = egui::Color32::from_rgb(250, 250, 245);
-    let outline = egui::Color32::from_rgb(20, 24, 32);
-    // Simple arrow cursor.
+    let fill = egui::Color32::from_rgb(255, 255, 252);
+    let outline = theme::TEXT_DARK;
     let tip = pos;
     let base_l = pos + egui::vec2(0.0, 16.0);
     let base_r = pos + egui::vec2(11.0, 11.0);
@@ -269,9 +388,6 @@ fn draw_soft_cursor(ctx: &egui::Context, pos: egui::Pos2) {
 }
 
 fn draw_floating_names(ctx: &egui::Context, labels: &[FloatingNameLabel]) {
-    const FILL_ALLY: egui::Color32 = egui::Color32::from_rgb(80, 150, 255);
-    const FILL_OPPONENT: egui::Color32 = egui::Color32::from_rgb(230, 70, 70);
-    const OUTLINE: egui::Color32 = egui::Color32::from_rgb(8, 10, 14);
     const OUTLINE_OFFSETS: [(f32, f32); 8] = [
         (-1.0, 0.0),
         (1.0, 0.0),
@@ -291,7 +407,11 @@ fn draw_floating_names(ctx: &egui::Context, labels: &[FloatingNameLabel]) {
         if !screen.contains(label.pos) {
             continue;
         }
-        let fill = if label.ally { FILL_ALLY } else { FILL_OPPONENT };
+        let fill = if label.ally {
+            theme::NAME_ALLY
+        } else {
+            theme::NAME_OPPONENT
+        };
         let font = egui::FontId::new(label.font_size, egui::FontFamily::Proportional);
         for (ox, oy) in OUTLINE_OFFSETS {
             painter.text(
@@ -299,7 +419,7 @@ fn draw_floating_names(ctx: &egui::Context, labels: &[FloatingNameLabel]) {
                 egui::Align2::CENTER_BOTTOM,
                 &label.name,
                 font.clone(),
-                OUTLINE,
+                theme::NAME_OUTLINE,
             );
         }
         painter.text(
@@ -324,33 +444,37 @@ fn draw_score(
     egui::Area::new(egui::Id::new("score_roster"))
         .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-12.0, 12.0))
         .show(ctx, |ui| {
-            egui::Frame::NONE
-                .fill(egui::Color32::from_rgba_unmultiplied(8, 10, 14, 200))
-                .inner_margin(egui::Margin::same(8))
-                .show(ui, |ui| {
-                    ui.label(
-                        egui::RichText::new("FFA")
-                            .strong()
-                            .color(egui::Color32::from_rgb(180, 220, 160)),
-                    );
-                    for e in roster {
-                        let mark = if e.living {
-                            "●"
-                        } else if e.role == NetRole::Spectator {
-                            "◎"
-                        } else {
-                            "○"
-                        };
-                        let kit = e.character as char;
-                        ui.label(format!("{mark} {}  {}  [{kit}]", e.display_name, e.score));
+            chrome_frame().show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new("FFA")
+                        .strong()
+                        .color(theme::SKY_PRIMARY),
+                );
+                for e in roster {
+                    let mark = if e.living {
+                        "●"
+                    } else if e.role == NetRole::Spectator {
+                        "◎"
+                    } else {
+                        "○"
+                    };
+                    let kit = e.character as char;
+                    ui.label(format!("{mark} {}  {}  [{kit}]", e.display_name, e.score));
+                }
+                if phase == MpPhase::Living {
+                    ui.add_space(6.0);
+                    if ui
+                        .add(
+                            egui::Button::new("Spectate")
+                                .fill(theme::LIME_SECONDARY)
+                                .min_size(egui::vec2(80.0, 28.0)),
+                        )
+                        .clicked()
+                    {
+                        actions.spectate = true;
                     }
-                    if phase == MpPhase::Living {
-                        ui.add_space(6.0);
-                        if ui.small_button("Spectate").clicked() {
-                            actions.spectate = true;
-                        }
-                    }
-                });
+                }
+            });
         });
 }
 
@@ -362,7 +486,7 @@ fn draw_join(
     status: &str,
     actions: &mut ProductActions,
 ) {
-    full_frame_shell(ctx, "Join room", |ui| {
+    gate_narrow_shell(ctx, "Join room", |ui| {
         egui::Grid::new("join_grid")
             .num_columns(2)
             .spacing([12.0, 12.0])
@@ -385,40 +509,27 @@ fn draw_join(
         ui.add_space(16.0);
         let join_btn = ui.add_enabled(
             !connecting,
-            egui::Button::new(if connecting { "Joining…" } else { "Join" })
-                .min_size(egui::vec2(160.0, 36.0)),
+            primary_button(if connecting { "Joining…" } else { "Join" }),
         );
         if join_btn.clicked() {
             actions.join = Some((room.clone(), name.clone()));
         }
         if !status.is_empty() {
             ui.add_space(12.0);
-            ui.colored_label(egui::Color32::from_rgb(220, 140, 120), status);
+            ui.colored_label(theme::CORAL_DANGER, status);
         }
     });
 }
 
 fn draw_role(ctx: &egui::Context, actions: &mut ProductActions) {
-    full_frame_shell(ctx, "Choose role", |ui| {
-        ui.label("Free-for-all · empty map");
+    gate_narrow_shell(ctx, "Choose role", |ui| {
+        ui.label(egui::RichText::new("Free-for-all · empty map").color(theme::TEXT_MUTED));
         ui.add_space(20.0);
-        if ui
-            .add(
-                egui::Button::new(egui::RichText::new("  Play  ").size(20.0))
-                    .min_size(egui::vec2(200.0, 44.0)),
-            )
-            .clicked()
-        {
+        if ui.add(primary_button("Play")).clicked() {
             actions.play = true;
         }
         ui.add_space(12.0);
-        if ui
-            .add(
-                egui::Button::new(egui::RichText::new("  Spectate  ").size(18.0))
-                    .min_size(egui::vec2(200.0, 40.0)),
-            )
-            .clicked()
-        {
+        if ui.add(secondary_button("Spectate")).clicked() {
             actions.spectate = true;
         }
         ui.add_space(24.0);
@@ -429,33 +540,39 @@ fn draw_role(ctx: &egui::Context, actions: &mut ProductActions) {
 }
 
 fn draw_character(ctx: &egui::Context, pick: &mut u8, actions: &mut ProductActions) {
-    full_frame_shell(ctx, "Character", |ui| {
-        ui.label("Pick a body kit (shared kits allowed)");
-        ui.add_space(12.0);
-        egui::ScrollArea::vertical()
-            .max_height(280.0)
+    gate_field_shell(ctx, "Character", |ui| {
+        ui.label(
+            egui::RichText::new("Pick a body kit (shared kits allowed)").color(theme::TEXT_MUTED),
+        );
+        ui.add_space(16.0);
+        egui::Frame::NONE
+            .fill(theme::PANEL_CARD)
+            .stroke(egui::Stroke::new(2.5_f32, theme::SKY_PRIMARY))
+            .inner_margin(egui::Margin::symmetric(56, 36))
+            .corner_radius(10.0)
             .show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    for id in character_catalog() {
-                        let label = format!("  {}  ", id as char);
-                        let selected = *pick == id;
-                        let btn = ui.selectable_label(selected, label);
-                        if btn.clicked() {
-                            *pick = id;
-                        }
-                    }
+                ui.vertical_centered(|ui| {
+                    ui.label(
+                        egui::RichText::new(format!("{}", *pick as char))
+                            .size(88.0)
+                            .strong()
+                            .color(theme::SKY_PRIMARY),
+                    );
                 });
             });
         ui.add_space(16.0);
-        ui.label(format!("Selected: {}", *pick as char));
-        ui.add_space(12.0);
-        if ui
-            .add(
-                egui::Button::new(egui::RichText::new("  Confirm  ").size(18.0))
-                    .min_size(egui::vec2(180.0, 40.0)),
-            )
-            .clicked()
-        {
+        ui.horizontal_wrapped(|ui| {
+            for id in character_catalog() {
+                let label = format!("  {}  ", id as char);
+                let selected = *pick == id;
+                let btn = ui.selectable_label(selected, label);
+                if btn.clicked() {
+                    *pick = id;
+                }
+            }
+        });
+        ui.add_space(16.0);
+        if ui.add(primary_button("Confirm")).clicked() {
             actions.confirm_character = Some(*pick);
         }
         ui.add_space(16.0);
@@ -479,7 +596,7 @@ fn draw_loadout(
     staged: StagedLoadout,
     actions: &mut ProductActions,
 ) {
-    full_frame_shell(ctx, "Loadout", |ui| {
+    panel_card_shell(ctx, "Loadout", |ui| {
         ui.label(format!(
             "Character {} · pick primary / secondary / hand, then Spawn",
             character as char
@@ -549,13 +666,7 @@ fn draw_loadout(
         ui.label(summary);
 
         ui.add_space(16.0);
-        if ui
-            .add(
-                egui::Button::new(egui::RichText::new("  Spawn  ").size(20.0))
-                    .min_size(egui::vec2(200.0, 44.0)),
-            )
-            .clicked()
-        {
+        if ui.add(primary_button("Spawn")).clicked() {
             actions.spawn = true;
         }
         ui.add_space(16.0);
@@ -580,40 +691,20 @@ fn draw_spectate_chrome(ctx: &egui::Context, actions: &mut ProductActions) {
     egui::Area::new(egui::Id::new("spectate_chrome"))
         .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(12.0, -12.0))
         .show(ctx, |ui| {
-            egui::Frame::NONE
-                .fill(egui::Color32::from_rgba_unmultiplied(8, 10, 14, 210))
-                .inner_margin(egui::Margin::same(10))
-                .show(ui, |ui| {
-                    ui.label(
-                        egui::RichText::new("Spectating · WASD fly · click to look")
-                            .color(egui::Color32::from_rgb(180, 200, 220)),
-                    );
-                    ui.add_space(6.0);
-                    ui.horizontal(|ui| {
-                        if ui.button("Play").clicked() {
-                            actions.play = true;
-                        }
-                        if ui.button("Leave").clicked() {
-                            actions.leave = true;
-                        }
-                    });
+            chrome_frame().show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new("Spectating · WASD fly · click to look")
+                        .color(theme::TEXT_MUTED),
+                );
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui.add(primary_button("Play")).clicked() {
+                        actions.play = true;
+                    }
+                    if ui.button("Leave").clicked() {
+                        actions.leave = true;
+                    }
                 });
-        });
-}
-
-fn full_frame_shell(ctx: &egui::Context, title: &str, add: impl FnOnce(&mut egui::Ui)) {
-    egui::CentralPanel::default()
-        .frame(
-            egui::Frame::NONE
-                .fill(egui::Color32::from_rgba_unmultiplied(6, 8, 12, 230))
-                .inner_margin(egui::Margin::symmetric(48, 36)),
-        )
-        .show(ctx, |ui| {
-            ui.vertical_centered(|ui| {
-                ui.add_space(ui.available_height() * 0.12);
-                ui.heading(title);
-                ui.add_space(20.0);
-                add(ui);
             });
         });
 }
