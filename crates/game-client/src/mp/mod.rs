@@ -16,7 +16,7 @@ mod tick;
 pub use claims::{ammo_kind_from_wire, net_spawn_to_projectile};
 pub use cookie::load_display_name_cookie;
 pub use drive::drive_to_state;
-pub use phase::{CamIntent, MpPhase, ProductSurfaceKind, StagedLoadout};
+pub use phase::{CamIntent, MpPhase, StagedLoadout};
 pub use remotes::{RemoteKitKey, RemoteTable};
 pub use shared::{FrameEffects, LootGrantBatch, PeerImpactHitBatch, PeerProjectileBatch};
 // Named type for `FrameEffects::pending_spawn` (phase module is private).
@@ -102,23 +102,24 @@ impl MpClient {
     #[cfg(feature = "debug-tools")]
     pub fn status_line(&self) -> String {
         let s = self.shared.borrow();
+        let lead = if s.room_leader { " lead" } else { "" };
         match s.phase {
             MpPhase::Lobby => "mp: lobby".into(),
             MpPhase::Connecting => "mp: connecting…".into(),
             MpPhase::Role => {
                 let name = s.display_name.as_deref().unwrap_or("—");
-                format!("mp: role name={name}")
+                format!("mp: role name={name}{lead}")
             }
-            MpPhase::Character => format!("mp: character {}", s.character as char),
+            MpPhase::Character => format!("mp: character {}{lead}", s.character as char),
             MpPhase::Ready => {
                 let p = s.staged_primary.map(|c| c as char).unwrap_or('·');
                 let sec = s.staged_secondary.map(|c| c as char).unwrap_or('·');
                 format!(
-                    "mp: loadout kit={} p={p} s={sec} act={:?}",
+                    "mp: loadout kit={} p={p} s={sec} act={:?}{lead}",
                     s.character as char, s.staged_active
                 )
             }
-            MpPhase::Spectating => "mp: spectating".into(),
+            MpPhase::Spectating => format!("mp: spectating{lead}"),
             MpPhase::Living => {
                 let id = s
                     .player_id
@@ -144,7 +145,7 @@ impl MpClient {
                     .and_then(|id| s.roster.iter().find(|e| e.id == id).map(|e| e.score))
                     .unwrap_or(0);
                 format!(
-                    "mp: living id={id} tick={tick} score={score} remotes={} offset={off} delay={delay} samples={}",
+                    "mp: living id={id} tick={tick} score={score} remotes={} offset={off} delay={delay} samples={}{lead}",
                     s.remotes.count(),
                     s.clock.sample_count()
                 )
@@ -168,6 +169,14 @@ impl MpClient {
 
     pub fn player_id(&self) -> Option<PlayerId> {
         self.shared.borrow().player_id
+    }
+
+    pub fn match_started(&self) -> bool {
+        self.shared.borrow().match_view.started
+    }
+
+    pub fn match_map(&self) -> Option<u8> {
+        self.shared.borrow().match_view.map
     }
 
     pub fn take_peer_projectiles(&mut self) -> Vec<PeerProjectileBatch> {

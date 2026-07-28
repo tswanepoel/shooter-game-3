@@ -3,7 +3,7 @@
 use game_net::{character_catalog, NetRole, RosterEntry, DEFAULT_CHARACTER};
 use game_sim::{ActiveWeapon, WeaponClass};
 
-use crate::mp::{self, MpPhase, ProductSurfaceKind, StagedLoadout, JOIN_ROOM_PREFILL};
+use crate::mp::{self, MpPhase, StagedLoadout, JOIN_ROOM_PREFILL};
 
 #[cfg(feature = "debug-tools")]
 use crate::debug::DebugShell;
@@ -118,9 +118,7 @@ impl UiOverlay {
     }
 
     pub fn wants_ui_input(&self, phase: MpPhase) -> bool {
-        phase
-            .surface_kind()
-            .is_some_and(ProductSurfaceKind::arms_soft_pointer)
+        phase.forces_free_cursor()
     }
 
     pub fn take_raw_input(&mut self, screen_w: f32, screen_h: f32, time: f64) -> egui::RawInput {

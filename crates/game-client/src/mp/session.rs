@@ -200,16 +200,25 @@ fn handle_s2c(shared: &Rc<RefCell<Shared>>, msg: ServerToClient, t4: f64) {
                 loadout,
             );
         }
-        ServerToClient::Roster { entries, .. } => {
+        ServerToClient::Roster {
+            entries,
+            match_view,
+            ..
+        } => {
             let mut s = shared.borrow_mut();
             let player_id = s.player_id;
             {
                 let Shared {
-                    roster, remotes, ..
+                    roster,
+                    remotes,
+                    match_view: mv,
+                    ..
                 } = &mut *s;
+                *mv = match_view;
                 apply_roster(roster, remotes, player_id, entries);
             }
             s.reconcile_self_from_roster();
+            s.reconcile_match_setup();
         }
         ServerToClient::PeerDrive { tick, id, drive } => {
             let mut s = shared.borrow_mut();

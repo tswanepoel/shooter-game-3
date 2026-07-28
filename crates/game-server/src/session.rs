@@ -286,6 +286,10 @@ async fn handle_control_msg(
         ClientToServer::SetCharacter { character } => {
             handle_set_character(player_id, character, clock, rooms).await;
         }
+        ClientToServer::PickMap { map } => {
+            handle_pick_map(player_id, map, clock, rooms).await;
+        }
+        ClientToServer::StartMatch => handle_start_match(player_id, clock, rooms).await,
         _ => {}
     }
 }
@@ -401,6 +405,8 @@ async fn handle_datagram(
         ClientToServer::Spawn { .. }
         | ClientToServer::SetRole { .. }
         | ClientToServer::SetCharacter { .. }
+        | ClientToServer::PickMap { .. }
+        | ClientToServer::StartMatch
         | ClientToServer::Hello { .. } => false,
     }
 }
@@ -427,6 +433,22 @@ async fn handle_set_character(
     let tick = clock.tick();
     let mut guard = rooms.lock().await;
     if guard.set_character(player_id, character) {
+        guard.broadcast_roster(player_id, tick);
+    }
+}
+
+async fn handle_pick_map(player_id: PlayerId, map: u8, clock: &SharedClock, rooms: &Mutex<Rooms>) {
+    let tick = clock.tick();
+    let mut guard = rooms.lock().await;
+    if guard.try_pick_map(player_id, map) {
+        guard.broadcast_roster(player_id, tick);
+    }
+}
+
+async fn handle_start_match(player_id: PlayerId, clock: &SharedClock, rooms: &Mutex<Rooms>) {
+    let tick = clock.tick();
+    let mut guard = rooms.lock().await;
+    if guard.try_start_match(player_id) {
         guard.broadcast_roster(player_id, tick);
     }
 }

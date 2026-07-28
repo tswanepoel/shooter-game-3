@@ -19,6 +19,8 @@ mod input;
 #[cfg(all(target_arch = "wasm32", feature = "debug-tools"))]
 mod lineup;
 #[cfg(target_arch = "wasm32")]
+mod map_present;
+#[cfg(target_arch = "wasm32")]
 mod mesh;
 #[cfg(target_arch = "wasm32")]
 mod mp;
@@ -62,7 +64,9 @@ use web_sys::HtmlCanvasElement;
 #[cfg(all(target_arch = "wasm32", feature = "debug-tools"))]
 use client::load::maybe_kick_lineup_load;
 #[cfg(target_arch = "wasm32")]
-use client::load::{maybe_kick_corpse_loads, maybe_kick_remote_loads, maybe_kick_self_load};
+use client::load::{
+    maybe_kick_corpse_loads, maybe_kick_map_load, maybe_kick_remote_loads, maybe_kick_self_load,
+};
 #[cfg(target_arch = "wasm32")]
 pub(crate) use client::ClientInner;
 #[cfg(all(target_arch = "wasm32", feature = "debug-tools"))]
@@ -153,6 +157,7 @@ impl GameClient {
             maybe_kick_self_load(&client);
             maybe_kick_remote_loads(&client);
             maybe_kick_corpse_loads(&client);
+            maybe_kick_map_load(&client);
             #[cfg(feature = "debug-tools")]
             maybe_kick_lineup_load(&client);
 

@@ -20,6 +20,7 @@ use crate::hit_marker::HitMarker;
 use crate::input::{InputSession, MoveInput, SoftPointer};
 #[cfg(feature = "debug-tools")]
 use crate::lineup::LineupState;
+use crate::map_present::MapPresentState;
 use crate::mp;
 use crate::preferences::MouseSensitivity;
 use crate::remote_present::RemotePresent;
@@ -49,6 +50,7 @@ pub(crate) struct ClientInner {
     health_by_id: HashMap<PlayerId, PlayerHealth>,
     world_loot: WorldLoot,
     next_local_drop_id: u64,
+    map_present: MapPresentState,
     /// Edge detect local death dump (059).
     was_alive: bool,
     last_frame_secs: f64,
@@ -93,6 +95,7 @@ impl ClientInner {
             health_by_id: HashMap::new(),
             world_loot: WorldLoot::default(),
             next_local_drop_id: 1,
+            map_present: MapPresentState::Idle,
             was_alive: true,
             last_frame_secs: 0.0,
             #[cfg(feature = "debug-tools")]

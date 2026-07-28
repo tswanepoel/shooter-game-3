@@ -318,6 +318,7 @@ impl Renderer {
     pub(crate) fn render_scene(
         &mut self,
         draw_grid: bool,
+        map: Option<&crate::map_present::MapGpu>,
         self_body: Option<&SelfGpu>,
         remotes: Option<&RemotePresent>,
         corpses: Option<&CorpsePresent>,
@@ -362,6 +363,10 @@ impl Renderer {
                 occlusion_query_set: None,
                 timestamp_writes: None,
             });
+
+            if let Some(map) = map {
+                map.draw(&mut pass);
+            }
 
             if let Some(body) = self_body {
                 body.draw(&mut pass);

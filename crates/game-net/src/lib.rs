@@ -7,13 +7,16 @@ pub const TICK_HZ: u32 = 180;
 pub const TICK_DURATION_SECS: f64 = 1.0 / TICK_HZ as f64;
 
 /// Alpha wire; bumped when variants change (no distributed compat promise).
-pub const PROTOCOL_VERSION: u16 = 14;
+pub const PROTOCOL_VERSION: u16 = 15;
 
 /// Max display-name length after trim (051).
 pub const DISPLAY_NAME_MAX_CHARS: usize = 24;
 
 /// Default body kit letter (051 / 052 — Kenney character-a).
 pub const DEFAULT_CHARACTER: u8 = b'a';
+
+/// Default map letter (064 — map-a).
+pub const DEFAULT_MAP: u8 = b'a';
 
 /// Inclusive kit letter range in the cooked character pack (`character-a` … `character-r`).
 pub const CHARACTER_FIRST: u8 = b'a';
@@ -29,6 +32,10 @@ pub enum NetRole {
 
 pub fn is_known_character(id: u8) -> bool {
     (CHARACTER_FIRST..=CHARACTER_LAST).contains(&id)
+}
+
+pub fn is_known_map(id: u8) -> bool {
+    id == DEFAULT_MAP
 }
 
 pub fn character_catalog() -> impl Iterator<Item = u8> {
@@ -133,6 +140,13 @@ pub struct NetAmmoDropSpawn {
     pub rounds: u16,
 }
 
+/// Room match snapshot on roster (064).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MatchView {
+    pub map: Option<u8>,
+    pub started: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RosterEntry {
     pub id: PlayerId,
@@ -142,6 +156,7 @@ pub struct RosterEntry {
     pub role: NetRole,
     /// Last committed kit (kept while spectating).
     pub character: u8,
+    pub room_leader: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -194,6 +209,12 @@ pub enum ClientToServer {
         secondary: Option<u8>,
         active: NetActiveWeapon,
     },
+    /// Room leader picks map before match start (064).
+    PickMap {
+        map: u8,
+    },
+    /// Room leader starts the match after map pick (064).
+    StartMatch,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -222,6 +243,7 @@ pub enum ServerToClient {
     /// Sole membership / score / living / role / kit truth.
     Roster {
         tick: u64,
+        match_view: MatchView,
         entries: Vec<RosterEntry>,
     },
     PeerDrive {
@@ -368,6 +390,7 @@ mod tests {
             living: true,
             role: NetRole::Player,
             character: b'a',
+            room_leader: true,
         }
     }
 
@@ -470,6 +493,10 @@ mod tests {
 
         let roster = ServerToClient::Roster {
             tick: 3,
+            match_view: MatchView {
+                map: Some(DEFAULT_MAP),
+                started: true,
+            },
             entries: vec![sample_roster_entry()],
         };
         let b = encode_s2c(&roster).unwrap();
@@ -641,6 +668,10 @@ mod tests {
         };
         let b = ServerToClient::Roster {
             tick: 3,
+            match_view: MatchView {
+                map: None,
+                started: false,
+            },
             entries: vec![RosterEntry {
                 id: 2,
                 display_name: "A".into(),
@@ -648,6 +679,7 @@ mod tests {
                 living: false,
                 role: NetRole::Spectator,
                 character: b'b',
+                room_leader: false,
             }],
         };
         let mut buf = encode_s2c_frame(&a).unwrap();

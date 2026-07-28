@@ -4,6 +4,7 @@ use wasm_bindgen::prelude::*;
 
 #[cfg(feature = "debug-tools")]
 use crate::lineup::LineupState;
+use crate::map_present::MapPresentState;
 use crate::mp::{self, CamIntent};
 use crate::self_present::SelfPresentState;
 use crate::ui_overlay::{DebugDraw, FloatingNameLabel, OverlayGpu, ProductSession};
@@ -114,6 +115,13 @@ impl ClientInner {
         } else {
             None
         };
+        let map_ref = match &self.map_present {
+            MapPresentState::Ready(gpu) if self.mp.match_started() => Some(gpu),
+            _ => None,
+        };
+        if let Some(gpu) = map_ref {
+            gpu.write_view_proj(&self.renderer.queue, view_proj);
+        }
 
         #[cfg(feature = "debug-tools")]
         let draw_grid = self.debug.draw_grid();
@@ -155,6 +163,7 @@ impl ClientInner {
             };
             self.renderer.render_scene(
                 draw_grid,
+                map_ref,
                 self_ref,
                 remotes_ref,
                 corpses_ref,
@@ -167,6 +176,7 @@ impl ClientInner {
         #[cfg(not(feature = "debug-tools"))]
         let frame = self.renderer.render_scene(
             draw_grid,
+            map_ref,
             self_ref,
             remotes_ref,
             corpses_ref,

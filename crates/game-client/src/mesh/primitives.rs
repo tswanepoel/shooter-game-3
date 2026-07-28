@@ -21,6 +21,44 @@ pub fn transform_vertex(v: &mut MeshVertex, m: Mat4) {
     };
 }
 
+pub fn box_prim(half: glam::Vec3, color: [f32; 4]) -> CpuPrim {
+    let hx = half.x;
+    let hy = half.y;
+    let hz = half.z;
+    let corners = [
+        [-hx, -hy, -hz],
+        [hx, -hy, -hz],
+        [hx, hy, -hz],
+        [-hx, hy, -hz],
+        [-hx, -hy, hz],
+        [hx, -hy, hz],
+        [hx, hy, hz],
+        [-hx, hy, hz],
+    ];
+    let faces: [([f32; 3], [usize; 4]); 6] = [
+        ([0.0, 0.0, -1.0], [0, 1, 2, 3]),
+        ([0.0, 0.0, 1.0], [4, 7, 6, 5]),
+        ([-1.0, 0.0, 0.0], [0, 3, 7, 4]),
+        ([1.0, 0.0, 0.0], [1, 5, 6, 2]),
+        ([0.0, -1.0, 0.0], [0, 4, 5, 1]),
+        ([0.0, 1.0, 0.0], [3, 2, 6, 7]),
+    ];
+    let mut verts = Vec::with_capacity(24);
+    let mut indices = Vec::with_capacity(36);
+    for (normal, quad) in faces {
+        let base = verts.len() as u32;
+        for i in quad {
+            verts.push(MeshVertex {
+                position: corners[i],
+                normal,
+                uv: [0.0, 0.0],
+            });
+        }
+        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+    (verts, indices, color)
+}
+
 #[cfg(feature = "debug-tools")]
 pub fn unit_sphere_prim(segments: u32, rings: u32) -> CpuPrim {
     let segments = segments.max(3);

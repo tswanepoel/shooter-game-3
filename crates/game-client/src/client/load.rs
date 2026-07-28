@@ -11,6 +11,7 @@ use web_sys::HtmlCanvasElement;
 
 #[cfg(feature = "debug-tools")]
 use crate::lineup::{LineupGpu, LineupState};
+use crate::map_present::{MapGpu, MapPresentState};
 use crate::renderer::MSAA_SAMPLE_COUNT;
 use crate::self_present::{SelfGpu, SelfPresentState};
 
@@ -182,6 +183,59 @@ pub(crate) fn maybe_kick_corpse_loads(inner: &Rc<RefCell<ClientInner>>) {
             c.corpse_present.finish_load(corpse_id, character, result);
         });
     }
+}
+
+pub(crate) fn maybe_kick_map_load(inner: &Rc<RefCell<ClientInner>>) {
+    let should_start = {
+        let c = inner.borrow();
+        c.mp.match_started()
+            && c.mp.match_map() == Some(game_net::DEFAULT_MAP)
+            && matches!(c.map_present, MapPresentState::Idle)
+    };
+    if !should_start {
+        let mut c = inner.borrow_mut();
+        if !c.mp.in_room() || !c.mp.match_started() {
+            if !matches!(c.map_present, MapPresentState::Idle) {
+                c.map_present = MapPresentState::Idle;
+            }
+        }
+        return;
+    }
+
+    {
+        let mut c = inner.borrow_mut();
+        c.map_present = MapPresentState::Loading;
+    }
+
+    let (device, queue, format) = {
+        let c = inner.borrow();
+        (
+            c.renderer.device.clone(),
+            c.renderer.queue.clone(),
+            c.renderer.config.format,
+        )
+    };
+
+    let inner = inner.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        let result = MapGpu::load_map_a(&device, &queue, format, MSAA_SAMPLE_COUNT).await;
+        let mut c = inner.borrow_mut();
+        if !c.mp.match_started() {
+            c.map_present = MapPresentState::Idle;
+            return;
+        }
+        match result {
+            Ok(gpu) => {
+                web_sys::console::log_1(&"map: map-a ready".into());
+                c.map_present = MapPresentState::Ready(gpu);
+            }
+            Err(err) => {
+                let msg = err.as_string().unwrap_or_else(|| format!("{err:?}"));
+                web_sys::console::error_1(&format!("map load failed: {msg}").into());
+                c.map_present = MapPresentState::Failed;
+            }
+        }
+    });
 }
 
 #[cfg(feature = "debug-tools")]

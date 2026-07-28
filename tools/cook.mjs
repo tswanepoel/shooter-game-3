@@ -64,6 +64,19 @@ const PACKS = [
       return out;
     },
   },
+  {
+    id: 'maps-a',
+    sources: ['maps/a'],
+    assets() {
+      return [
+        {
+          id: 'map-a.def',
+          path: path.join(sourceRoot, 'maps', 'a', 'map.json'),
+          kind: 'json',
+        },
+      ];
+    },
+  },
 ];
 
 function sha256File(filePath) {

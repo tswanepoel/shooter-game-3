@@ -76,6 +76,7 @@ mod tests {
             living,
             role,
             character,
+            room_leader: false,
         }
     }
 

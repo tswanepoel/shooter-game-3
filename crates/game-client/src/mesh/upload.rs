@@ -184,7 +184,6 @@ pub fn upload_batch(
     })
 }
 
-#[cfg(feature = "debug-tools")]
 pub fn upload_solid_batch(
     gpu: &UploadCtx<'_>,
     prim: CpuPrim,

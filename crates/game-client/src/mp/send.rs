@@ -1,6 +1,6 @@
 //! Reliable/datagram C2S helpers while Shared is borrowed.
 
-use game_net::{encode_c2s, ClientToServer, NetActiveWeapon};
+use game_net::{encode_c2s, ClientToServer, NetActiveWeapon, DEFAULT_MAP};
 use game_sim::ActiveWeapon;
 use js_sys::Uint8Array;
 
@@ -21,6 +21,14 @@ pub(crate) fn send_spawn_locked(s: &Shared) {
             },
         },
     );
+}
+
+pub(crate) fn send_pick_map_locked(s: &Shared) {
+    send_reliable_locked(s, &ClientToServer::PickMap { map: DEFAULT_MAP });
+}
+
+pub(crate) fn send_start_match_locked(s: &Shared) {
+    send_reliable_locked(s, &ClientToServer::StartMatch);
 }
 
 pub(crate) fn send_reliable_locked(s: &Shared, msg: &ClientToServer) {

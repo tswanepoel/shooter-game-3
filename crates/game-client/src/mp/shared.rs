@@ -1,8 +1,8 @@
 //! Shared WebTransport session state (Rc cell for async join + frame).
 
 use game_net::{
-    NetAmmoDropSpawn, NetCorpseSpawn, NetImpactHit, NetProjectileSpawn, NetRole, PlayerId,
-    RosterEntry, DEFAULT_CHARACTER,
+    MatchView, NetAmmoDropSpawn, NetCorpseSpawn, NetImpactHit, NetProjectileSpawn, NetRole,
+    PlayerId, RosterEntry, DEFAULT_CHARACTER,
 };
 use game_sim::ActiveWeapon;
 use web_sys::WritableStreamDefaultWriter;
@@ -68,6 +68,10 @@ pub(crate) struct Shared {
     pub(crate) staged_primary: Option<u8>,
     pub(crate) staged_secondary: Option<u8>,
     pub(crate) staged_active: ActiveWeapon,
+    pub(crate) match_view: MatchView,
+    pub(crate) room_leader: bool,
+    pub(crate) pick_map_sent: bool,
+    pub(crate) start_match_sent: bool,
 }
 
 impl Shared {
@@ -103,6 +107,13 @@ impl Shared {
             staged_primary: None,
             staged_secondary: None,
             staged_active: ActiveWeapon::Primary,
+            match_view: MatchView {
+                map: None,
+                started: false,
+            },
+            room_leader: false,
+            pick_map_sent: false,
+            start_match_sent: false,
         }
     }
 
@@ -134,6 +145,13 @@ impl Shared {
         self.staged_primary = None;
         self.staged_secondary = None;
         self.staged_active = ActiveWeapon::Primary;
+        self.match_view = MatchView {
+            map: None,
+            started: false,
+        };
+        self.room_leader = false;
+        self.pick_map_sent = false;
+        self.start_match_sent = false;
     }
 
     pub(crate) fn staged_loadout(&self) -> StagedLoadout {
@@ -154,6 +172,17 @@ impl Shared {
         };
         self.character = me.character;
         self.role = me.role;
+        self.room_leader = me.room_leader;
+    }
+
+    /// Align local setup flags with server match truth (064).
+    pub(crate) fn reconcile_match_setup(&mut self) {
+        if self.match_view.map.is_some() {
+            self.pick_map_sent = true;
+        }
+        if self.match_view.started {
+            self.start_match_sent = true;
+        }
     }
 }
 

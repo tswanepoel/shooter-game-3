@@ -233,7 +233,11 @@ Ends by [team](#team) [score](#score) — first to the limit, or highest when ti
 
 ### Match
 
-One bout of play in a [room](#room) on a [map](#map) as [free-for-all](#free-for-all) or [team deathmatch](#team-deathmatch). Starts and ends. [Players](#player) in it have a [figure](#figure) while alive.
+One bout of play in a [room](#room) on a [map](#map) as [free-for-all](#free-for-all) or [team deathmatch](#team-deathmatch). [Players](#player) in it have a [figure](#figure) while alive.
+
+### Room leader
+
+The [member](#member) in a [room](#room) that sets up and starts that room’s [match](#match).
 
 ### Opponent
 

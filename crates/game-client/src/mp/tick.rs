@@ -8,7 +8,9 @@ use js_sys::Uint8Array;
 
 use super::drive::state_to_drive;
 use super::phase::MpPhase;
-use super::send::{send_spawn_locked, SPAWN_RETRY_SECS};
+use super::send::{
+    send_pick_map_locked, send_spawn_locked, send_start_match_locked, SPAWN_RETRY_SECS,
+};
 use super::shared::{client_now_secs, Shared};
 
 pub(crate) fn on_frame(shared: &RefCell<Shared>, dt: f32, self_state: &SelfState) {
@@ -25,11 +27,23 @@ pub(crate) fn on_frame(shared: &RefCell<Shared>, dt: f32, self_state: &SelfState
     let ready = s.phase == MpPhase::Ready;
 
     let mut send_spawn = false;
+    let mut send_pick_map = false;
+    let mut send_start_match = false;
     if ready && s.spawn_requested {
         s.spawn_retry_accum += dt;
         if s.spawn_retry_accum >= SPAWN_RETRY_SECS {
             s.spawn_retry_accum = 0.0;
             send_spawn = true;
+        }
+    }
+
+    if s.room_leader {
+        if s.match_view.map.is_none() && !s.pick_map_sent {
+            send_pick_map = true;
+            s.pick_map_sent = true;
+        } else if s.match_view.map.is_some() && !s.match_view.started && !s.start_match_sent {
+            send_start_match = true;
+            s.start_match_sent = true;
         }
     }
 
@@ -52,6 +66,12 @@ pub(crate) fn on_frame(shared: &RefCell<Shared>, dt: f32, self_state: &SelfState
 
     if send_spawn {
         send_spawn_locked(&s);
+    }
+    if send_pick_map {
+        send_pick_map_locked(&s);
+    }
+    if send_start_match {
+        send_start_match_locked(&s);
     }
     drop(s);
 

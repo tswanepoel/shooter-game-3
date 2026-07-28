@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 
 use game_net::{
-    display_name_key, encode_s2c_frame, is_known_character, DriveView, NetImpactHit, NetRole,
-    NetVec3, PlayerId, RosterEntry, ServerToClient,
+    display_name_key, encode_s2c_frame, is_known_character, is_known_map, DriveView, MatchView,
+    NetImpactHit, NetRole, NetVec3, PlayerId, RosterEntry, ServerToClient,
 };
 use game_sim::{impact_damage, AmmoKind, HitBodyPart, WeaponClass, HEALTH_MAX};
 use tokio::sync::mpsc;
@@ -80,6 +80,9 @@ pub struct PeerEntry {
 pub struct Roster {
     peers: HashMap<PlayerId, PeerEntry>,
     loot: RoomLoot,
+    room_leader: PlayerId,
+    map_id: Option<u8>,
+    match_started: bool,
 }
 
 /// Host map of room code → roster. Membership routes a player to their room.
@@ -163,10 +166,11 @@ impl Rooms {
 
     pub fn insert(&mut self, room_code: String, id: PlayerId, entry: PeerEntry) {
         self.membership.insert(id, room_code.clone());
-        self.rooms
-            .entry(room_code)
-            .or_insert_with(Roster::new)
-            .insert(id, entry);
+        let roster = self.rooms.entry(room_code).or_insert_with(Roster::new);
+        if roster.is_empty() {
+            roster.room_leader = id;
+        }
+        roster.insert(id, entry);
     }
 
     /// Remove the member. Drops the room when empty. Broadcasts roster when peers remain.
@@ -208,6 +212,14 @@ impl Rooms {
     pub fn try_spawn(&mut self, id: PlayerId, primary: Option<u8>, secondary: Option<u8>) -> bool {
         self.room_mut(id)
             .is_some_and(|r| r.try_spawn(id, primary, secondary))
+    }
+
+    pub fn try_pick_map(&mut self, id: PlayerId, map: u8) -> bool {
+        self.room_mut(id).is_some_and(|r| r.try_pick_map(id, map))
+    }
+
+    pub fn try_start_match(&mut self, id: PlayerId) -> bool {
+        self.room_mut(id).is_some_and(|r| r.try_start_match(id))
     }
 
     pub fn set_role(&mut self, id: PlayerId, role: NetRole) -> bool {
@@ -308,6 +320,9 @@ impl Roster {
         Self {
             peers: HashMap::new(),
             loot: RoomLoot::default(),
+            room_leader: 0,
+            map_id: None,
+            match_started: false,
         }
     }
 
@@ -326,7 +341,13 @@ impl Roster {
     }
 
     pub fn remove(&mut self, id: PlayerId) -> bool {
-        self.peers.remove(&id).is_some()
+        if !self.peers.remove(&id).is_some() {
+            return false;
+        }
+        if self.room_leader == id {
+            self.room_leader = self.peers.keys().min().copied().unwrap_or(0);
+        }
+        true
     }
 
     pub fn living(&self, id: PlayerId) -> bool {
@@ -425,6 +446,9 @@ impl Roster {
     }
 
     pub fn try_spawn(&mut self, id: PlayerId, primary: Option<u8>, secondary: Option<u8>) -> bool {
+        if !self.match_started {
+            return false;
+        }
         let Some(peer) = self.peers.get_mut(&id) else {
             return false;
         };
@@ -435,6 +459,22 @@ impl Roster {
             primary,
             secondary,
         )
+    }
+
+    pub fn try_pick_map(&mut self, id: PlayerId, map: u8) -> bool {
+        if self.room_leader != id || self.match_started || !is_known_map(map) {
+            return false;
+        }
+        self.map_id = Some(map);
+        true
+    }
+
+    pub fn try_start_match(&mut self, id: PlayerId) -> bool {
+        if self.room_leader != id || self.match_started || self.map_id.is_none() {
+            return false;
+        }
+        self.match_started = true;
+        true
     }
 
     pub fn set_role(&mut self, id: PlayerId, role: NetRole) -> bool {
@@ -458,7 +498,17 @@ impl Roster {
 
     /// Apply a claimed hit in place. Returns true when a kill was scored.
     pub fn apply_impact(&mut self, firer: PlayerId, hit: &NetImpactHit) -> bool {
+        if !self.match_started {
+            return false;
+        }
         apply_impact_store(self, firer, hit)
+    }
+
+    pub fn match_view(&self) -> MatchView {
+        MatchView {
+            map: self.map_id,
+            started: self.match_started,
+        }
     }
 
     pub fn roster_entries(&self) -> Vec<RosterEntry> {
@@ -472,6 +522,7 @@ impl Roster {
                 living: p.combat.living,
                 role: p.role,
                 character: p.character,
+                room_leader: id == self.room_leader,
             })
             .collect();
         entries.sort_by_key(|e| e.id);
@@ -481,6 +532,7 @@ impl Roster {
     pub fn roster_frame(&self, tick: u64) -> Option<Vec<u8>> {
         encode_s2c_frame(&ServerToClient::Roster {
             tick,
+            match_view: self.match_view(),
             entries: self.roster_entries(),
         })
         .ok()
@@ -608,6 +660,19 @@ fn unit_turn(seed: u64, shift: u32) -> f32 {
 mod tests {
     use super::*;
     use game_net::{display_name_key, normalize_display_name, NetImpactHit, NetRole};
+
+    #[test]
+    fn room_leader_picks_map_and_starts_match() {
+        let mut roster = Roster::new();
+        roster.room_leader = 1;
+        assert!(roster.try_pick_map(1, game_net::DEFAULT_MAP));
+        assert_eq!(roster.map_id, Some(game_net::DEFAULT_MAP));
+        assert!(!roster.match_started);
+        assert!(roster.try_start_match(1));
+        assert!(roster.match_started);
+        assert!(!roster.try_pick_map(1, game_net::DEFAULT_MAP));
+        assert!(!roster.try_start_match(2));
+    }
 
     #[test]
     fn enter_map_blocks_while_living_allows_after_death() {
