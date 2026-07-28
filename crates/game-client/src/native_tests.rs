@@ -26,3 +26,6 @@ mod remotes;
 
 #[path = "input/soft_pointer.rs"]
 mod soft_pointer;
+
+#[path = "preferences.rs"]
+mod preferences;

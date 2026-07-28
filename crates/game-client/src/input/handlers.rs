@@ -190,8 +190,9 @@ pub fn install_input_handlers(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCanv
             if !client.session.is_active() {
                 return;
             }
-            let dx = event.movement_x() as f32;
-            let dy = event.movement_y() as f32;
+            let sens = client.mouse_sens.multiplier();
+            let dx = event.movement_x() as f32 * sens;
+            let dy = event.movement_y() as f32 * sens;
             if dx == 0.0 && dy == 0.0 {
                 return;
             }

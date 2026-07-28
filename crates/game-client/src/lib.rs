@@ -25,6 +25,8 @@ mod mp;
 #[cfg(target_arch = "wasm32")]
 mod pack;
 #[cfg(target_arch = "wasm32")]
+mod preferences;
+#[cfg(target_arch = "wasm32")]
 mod remote_present;
 #[cfg(target_arch = "wasm32")]
 mod renderer;

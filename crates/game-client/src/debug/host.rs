@@ -24,7 +24,7 @@ impl DebugHost {
     /// Run a console line (same path as the in-engine shell).
     #[wasm_bindgen]
     pub fn exec(&self, line: &str) -> String {
-        self.inner.borrow_mut().debug.execute(line)
+        self.inner.borrow_mut().debug_execute(line)
     }
 
     /// Whether the debug shell is open.

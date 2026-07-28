@@ -21,6 +21,7 @@ use crate::input::{InputSession, MoveInput, SoftPointer};
 #[cfg(feature = "debug-tools")]
 use crate::lineup::LineupState;
 use crate::mp;
+use crate::preferences::MouseSensitivity;
 use crate::remote_present::RemotePresent;
 use crate::renderer::Renderer;
 use crate::self_present::SelfPresentState;
@@ -36,6 +37,7 @@ pub(crate) struct ClientInner {
     pub(crate) view: ViewController,
     pub(crate) session: InputSession,
     pub(crate) soft_pointer: SoftPointer,
+    pub(crate) mouse_sens: MouseSensitivity,
     pub(crate) move_input: MoveInput,
     emote_wheel: EmoteWheel,
     hit_marker: HitMarker,
@@ -79,6 +81,7 @@ impl ClientInner {
             view,
             session: InputSession::new(),
             soft_pointer: SoftPointer::new(),
+            mouse_sens: MouseSensitivity::new(),
             move_input: MoveInput::default(),
             emote_wheel: EmoteWheel::new(),
             hit_marker: HitMarker::new(),
@@ -135,6 +138,12 @@ impl ClientInner {
         }
         // Optional debug tracers (038).
         self.renderer.fire_fx.show_tracers = self.debug.draw_tracers();
+    }
+
+    #[cfg(feature = "debug-tools")]
+    pub(crate) fn debug_execute(&mut self, line: &str) -> String {
+        let mouse_sens = &mut self.mouse_sens;
+        self.debug.execute(line, mouse_sens)
     }
 
     #[cfg(feature = "debug-tools")]

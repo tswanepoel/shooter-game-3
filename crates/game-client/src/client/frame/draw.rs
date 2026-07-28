@@ -341,7 +341,7 @@ impl ClientInner {
             #[cfg(feature = "debug-tools")]
             {
                 if let Some(cmd) = self.debug.shell.take_pending_command() {
-                    let _ = self.debug.execute(&cmd);
+                    let _ = self.debug_execute(&cmd);
                 }
                 self.drain_debug_host_requests();
             }

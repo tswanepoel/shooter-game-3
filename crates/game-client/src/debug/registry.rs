@@ -138,6 +138,7 @@ impl DebugRegistry {
             "  screenshot|shot   capture frame (F9)".into(),
             "  mp join|leave|status  WebTransport shared tick + remotes".into(),
             "  blaster <a-r>     equip letter on active slot (038; flips if needed)".into(),
+            "  mousesens [value]  print or set mouse.sens multiplier (062)".into(),
             "cvars (get: name · set: name <value>):".into(),
         ];
         for (name, cvar) in &self.cvars {
@@ -309,5 +310,12 @@ mod tests {
         assert_eq!(r.get_bool("hud.residual"), Some(true));
         assert!(r.execute("help").contains("residualhud"));
         assert!(r.execute("help").contains("hud.residual"));
+    }
+
+    #[test]
+    fn help_lists_mousesens() {
+        let mut r = DebugRegistry::new();
+        r.register_defaults();
+        assert!(r.execute("help").contains("mousesens"));
     }
 }

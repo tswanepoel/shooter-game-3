@@ -8,7 +8,7 @@ const FLY_SPEED_M_S: f32 = 6.0;
 /// Sprint multiplier while Shift is held.
 const FLY_SPRINT_MULT: f32 = 3.0;
 /// Mouse look sensitivity (radians per pixel). Shared with mounted drive.
-pub const LOOK_SENS_RAD_PER_PX: f32 = 0.00015;
+pub const LOOK_SENS_RAD_PER_PX: f32 = 0.002;
 /// Flycam pitch matches look elev cap (±90°). View matrix stays stable at the poles.
 /// Bootstrap only until present samples look from the posed head.
 const DEFAULT_MOUNTED_EYE_M: Vec3 = Vec3::new(0.0, 1.52, 0.27);

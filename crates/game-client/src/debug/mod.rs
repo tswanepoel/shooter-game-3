@@ -40,7 +40,17 @@ impl DebugTools {
         }
     }
 
-    pub fn execute(&mut self, line: &str) -> String {
+    pub fn execute(
+        &mut self,
+        line: &str,
+        mouse_sens: &mut crate::preferences::MouseSensitivity,
+    ) -> String {
+        if let Some(out) = crate::preferences::execute_mouse_sens_command(line, mouse_sens) {
+            if !out.is_empty() {
+                self.shell.push_log(out.clone());
+            }
+            return out;
+        }
         let out = self.registry.execute(line);
         let msg = match out.as_str() {
             "__REQUEST_SCREENSHOT__" => {
