@@ -39,6 +39,38 @@ impl MapBox {
         let cz = dz.max(0.0);
         cx * cx + cz * cz <= radius * radius
     }
+
+    /// Slab-based segment test. Returns true when the segment `from`→`to`
+    /// passes through this box (endpoints inside also count).
+    pub fn intersects_segment(self, from: Vec3, to: Vec3) -> bool {
+        let min = self.center - self.half;
+        let max = self.center + self.half;
+        let d = to - from;
+        let mut t_min = 0.0_f32;
+        let mut t_max = 1.0_f32;
+        for axis in 0..3 {
+            let origin = from[axis];
+            let dir = d[axis];
+            let lo = min[axis];
+            let hi = max[axis];
+            if dir.abs() < 1e-8 {
+                if origin < lo || origin > hi {
+                    return false;
+                }
+            } else {
+                let inv = 1.0 / dir;
+                let t1 = (lo - origin) * inv;
+                let t2 = (hi - origin) * inv;
+                let (ta, tb) = if t1 < t2 { (t1, t2) } else { (t2, t1) };
+                t_min = t_min.max(ta);
+                t_max = t_max.min(tb);
+                if t_min > t_max {
+                    return false;
+                }
+            }
+        }
+        true
+    }
 }
 
 /// Ramp footprint on XZ: height rises along local +Z from 0 to `height`.
@@ -109,6 +141,11 @@ impl MapWorld {
             }
         }
         y
+    }
+
+    /// True when the segment `from`→`to` passes through any solid box.
+    pub fn segment_hits_solid(&self, from: Vec3, to: Vec3) -> bool {
+        self.boxes.iter().any(|b| b.intersects_segment(from, to))
     }
 
     /// Sole sample is inside a solid volume (below its top).

@@ -193,17 +193,22 @@ pub struct ImpactHit {
 }
 
 impl ProjectileWorld {
-    /// Step own projectiles; `hit_test(from, to)` → `(target_id, contact, part)`.
+    /// Step own projectiles; `hit_test(origin, from, to)` → `(target_id, contact, part)`.
+    ///
+    /// `origin` is the projectile's spawn point; `from`→`to` is the current step segment.
+    /// Passing origin lets callers do a full-path occlusion test (origin→contact) instead
+    /// of only the per-tick step.
     /// No health apply. Peer VFX projectiles (`owner != firer_id`) are skipped.
     pub fn tick_hits_with<F>(&mut self, dt: f32, firer_id: u32, mut hit_test: F) -> Vec<ImpactHit>
     where
-        F: FnMut(Vec3, Vec3) -> Option<(u32, Vec3, HitBodyPart)>,
+        F: FnMut(Vec3, Vec3, Vec3) -> Option<(u32, Vec3, HitBodyPart)>,
     {
         let dt = dt.max(0.0);
         let mut hits = Vec::new();
         let mut spent = Vec::new();
 
         for (idx, p) in self.projectiles.iter_mut().enumerate() {
+            let origin = p.origin;
             let from = p.position;
             p.velocity += crate::PROJECTILE_GRAVITY * dt;
             let step = p.velocity * dt;
@@ -212,7 +217,7 @@ impl ProjectileWorld {
 
             let mut hit_this = false;
             if p.owner == firer_id {
-                if let Some((target_id, contact, part)) = hit_test(from, to) {
+                if let Some((target_id, contact, part)) = hit_test(origin, from, to) {
                     if target_id != firer_id {
                         hits.push(ImpactHit {
                             target_id,
@@ -265,7 +270,7 @@ mod tests {
     }
 
     /// Stand-in for client mesh collide: hit target 2 if segment crosses z ∈ [4, 6] at y≈0.9.
-    fn mock_mesh_hit(from: Vec3, to: Vec3) -> Option<(u32, Vec3, HitBodyPart)> {
+    fn mock_mesh_hit(_origin: Vec3, from: Vec3, to: Vec3) -> Option<(u32, Vec3, HitBodyPart)> {
         let dz = to.z - from.z;
         if dz.abs() < 1e-8 {
             return None;
@@ -372,8 +377,8 @@ mod tests {
             AmmoKind::LightFoam,
         ));
         // hit_test returns firer id 2 → rejected.
-        let hits = world.tick_hits_with(0.1, 2, |from, to| {
-            mock_mesh_hit(from, to).map(|(_, p, part)| (2, p, part))
+        let hits = world.tick_hits_with(0.1, 2, |origin, from, to| {
+            mock_mesh_hit(origin, from, to).map(|(_, p, part)| (2, p, part))
         });
         assert!(hits.is_empty());
         assert_eq!(world.projectiles.len(), 1);
@@ -388,7 +393,7 @@ mod tests {
             1,
             AmmoKind::LightFoam,
         ));
-        let hits = world.tick_hits_with(0.1, 1, |_from, _to| None);
+        let hits = world.tick_hits_with(0.1, 1, |_origin, _from, _to| None);
         assert!(hits.is_empty());
         assert_eq!(world.projectiles.len(), 1);
     }

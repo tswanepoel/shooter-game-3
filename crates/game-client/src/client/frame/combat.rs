@@ -164,21 +164,37 @@ impl ClientInner {
         let hits = {
             let remote_present = &self.remote_present;
             let states = &remote_hit_states;
-            self.projectiles.tick_hits_with(dt, firer_id, |from, to| {
-                let mut best: Option<(f32, PlayerId, glam::Vec3, HitBodyPart)> = None;
-                for (id, state) in states {
-                    let Some(hit) = remote_present.trace_segment(*id, state, from, to) else {
-                        continue;
-                    };
-                    let Some(part) = HitBodyPart::from_kit_name(&hit.part) else {
-                        continue;
-                    };
-                    if best.map(|(bt, _, _, _)| hit.t < bt).unwrap_or(true) {
-                        best = Some((hit.t, *id, hit.position, part));
+            let map_world = &self.map_world;
+            self.projectiles
+                .tick_hits_with(dt, firer_id, |origin, from, to| {
+                    let mut best: Option<(f32, PlayerId, glam::Vec3, HitBodyPart)> = None;
+                    for (id, state) in states {
+                        let Some(hit) = remote_present.trace_segment(*id, state, from, to) else {
+                            continue;
+                        };
+                        let Some(part) = HitBodyPart::from_kit_name(&hit.part) else {
+                            continue;
+                        };
+                        // Block if any solid lies between the spawn origin and just
+                        // short of the contact point. Pulling the endpoint back by a
+                        // small margin prevents the box surface itself from occluding
+                        // a shot at a target standing on or against that box.
+                        let ray = hit.position - origin;
+                        let ray_len = ray.length();
+                        let check_end = if ray_len > 0.3 {
+                            origin + ray * ((ray_len - 0.15) / ray_len)
+                        } else {
+                            hit.position
+                        };
+                        if map_world.segment_hits_solid(origin, check_end) {
+                            continue;
+                        }
+                        if best.map(|(bt, _, _, _)| hit.t < bt).unwrap_or(true) {
+                            best = Some((hit.t, *id, hit.position, part));
+                        }
                     }
-                }
-                best.map(|(_, id, p, part)| (id, p, part))
-            })
+                    best.map(|(_, id, p, part)| (id, p, part))
+                })
         };
         for h in &hits {
             let dmg = apply_impact_in_present(

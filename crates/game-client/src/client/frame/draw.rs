@@ -210,6 +210,7 @@ impl ClientInner {
                 view_proj,
                 screen_w,
                 screen_h,
+                &self.map_world,
             );
             let raw = self.ui.take_raw_input(screen_w, screen_h, time);
 
@@ -411,6 +412,7 @@ fn collect_floating_names(
     view_proj: glam::Mat4,
     screen_w: f32,
     screen_h: f32,
+    map_world: &game_sim::MapWorld,
 ) -> Vec<FloatingNameLabel> {
     const REF_DIST_M: f32 = 8.0;
     const REF_SIZE: f32 = 16.0;
@@ -426,6 +428,18 @@ fn collect_floating_names(
             continue;
         };
         if entry.display_name.is_empty() {
+            continue;
+        }
+        // Pull the endpoint back slightly so a name anchor that sits just above
+        // a box top doesn't get occluded by the box itself.
+        let to_anchor = world - cam_eye;
+        let anchor_dist = to_anchor.length();
+        let name_check_end = if anchor_dist > 0.3 {
+            cam_eye + to_anchor * ((anchor_dist - 0.15) / anchor_dist)
+        } else {
+            world
+        };
+        if map_world.segment_hits_solid(cam_eye, name_check_end) {
             continue;
         }
         let Some(pos) = world_to_screen(view_proj, world, screen_w, screen_h) else {
