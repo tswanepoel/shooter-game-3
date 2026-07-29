@@ -86,7 +86,8 @@ impl ClientInner {
                     }
                 }
             }
-            self.self_state.apply_move(dt, fwd, strafe, sprint_tap);
+            self.self_state
+                .apply_move_world(dt, fwd, strafe, sprint_tap, &self.map_world);
         } else {
             if !play_ok {
                 self.move_input.clear_keys();
@@ -94,7 +95,8 @@ impl ClientInner {
                 self.move_input.set_emote_held(false);
                 self.emote_wheel.close();
             }
-            self.self_state.apply_move(dt, 0.0, 0.0, false);
+            self.self_state
+                .apply_move_world(dt, 0.0, 0.0, false, &self.map_world);
         }
 
         fire_held

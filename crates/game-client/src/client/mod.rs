@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use game_net::PlayerId;
 #[cfg(feature = "debug-tools")]
 use game_sim::equip_blaster_letter;
-use game_sim::{FireState, PlayerHealth, ProjectileWorld, SelfState};
+use game_sim::{FireState, MapWorld, PlayerHealth, ProjectileWorld, SelfState};
 use web_sys::HtmlCanvasElement;
 
 use crate::corpse_present::CorpsePresent;
@@ -51,6 +51,8 @@ pub(crate) struct ClientInner {
     world_loot: WorldLoot,
     next_local_drop_id: u64,
     map_present: MapPresentState,
+    /// Sim collide/support for the loaded map (066). Empty until map ready.
+    map_world: MapWorld,
     /// Edge detect local death dump (059).
     was_alive: bool,
     last_frame_secs: f64,
@@ -96,6 +98,7 @@ impl ClientInner {
             world_loot: WorldLoot::default(),
             next_local_drop_id: 1,
             map_present: MapPresentState::Idle,
+            map_world: MapWorld::empty(),
             was_alive: true,
             last_frame_secs: 0.0,
             #[cfg(feature = "debug-tools")]

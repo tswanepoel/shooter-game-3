@@ -59,6 +59,58 @@ pub fn box_prim(half: glam::Vec3, color: [f32; 4]) -> CpuPrim {
     (verts, indices, color)
 }
 
+/// Wedge ramp: footprint `±half_x` × `±half_z`, top rises from y=0 at −z to `height` at +z.
+pub fn ramp_prim(half_x: f32, half_z: f32, height: f32, color: [f32; 4]) -> CpuPrim {
+    let hx = half_x;
+    let hz = half_z;
+    let h = height.max(0.0);
+    // Bottom rectangle + sloping top + sides.
+    let bl = [-hx, 0.0, -hz];
+    let br = [hx, 0.0, -hz];
+    let fl = [-hx, 0.0, hz];
+    let fr = [hx, 0.0, hz];
+    let ull = [-hx, h, hz];
+    let ur = [hx, h, hz];
+
+    let mut verts = Vec::new();
+    let mut indices = Vec::new();
+    let mut push_tri = |a: [f32; 3], b: [f32; 3], c: [f32; 3]| {
+        let ab = Vec3::from_array(b) - Vec3::from_array(a);
+        let ac = Vec3::from_array(c) - Vec3::from_array(a);
+        let n = ab.cross(ac);
+        let n = if n.length_squared() > 1e-12 {
+            n.normalize().to_array()
+        } else {
+            [0.0, 1.0, 0.0]
+        };
+        let base = verts.len() as u32;
+        for p in [a, b, c] {
+            verts.push(MeshVertex {
+                position: p,
+                normal: n,
+                uv: [0.0, 0.0],
+            });
+        }
+        indices.extend_from_slice(&[base, base + 1, base + 2]);
+    };
+
+    // Bottom (y=0), winding so normal −Y.
+    push_tri(bl, fl, br);
+    push_tri(br, fl, fr);
+    // Sloped top (low end at y=0, high end at y=h).
+    push_tri(bl, br, ur);
+    push_tri(bl, ur, ull);
+    // High end vertical.
+    push_tri(fl, ull, fr);
+    push_tri(fr, ull, ur);
+    // −X side.
+    push_tri(bl, ull, fl);
+    // +X side.
+    push_tri(br, fr, ur);
+
+    (verts, indices, color)
+}
+
 #[cfg(feature = "debug-tools")]
 pub fn unit_sphere_prim(segments: u32, rings: u32) -> CpuPrim {
     let segments = segments.max(3);

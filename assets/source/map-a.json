@@ -1,0 +1,35 @@
+{
+  "id": "a",
+  "landmark": {
+    "position": [8.0, 1.22, 0.0],
+    "half_extents": [1.22, 1.22, 3.04]
+  },
+  "boxes": [
+    {
+      "position": [2.5, 0.175, 1.5],
+      "half_extents": [0.7, 0.175, 0.7]
+    },
+    {
+      "position": [2.5, 0.45, -1.5],
+      "half_extents": [0.7, 0.45, 0.7]
+    },
+    {
+      "position": [4.5, 0.12, 3.0],
+      "half_extents": [0.35, 0.12, 0.3]
+    },
+    {
+      "position": [5.0, 0.24, 3.0],
+      "half_extents": [0.35, 0.24, 0.3]
+    },
+    {
+      "position": [5.5, 0.36, 3.0],
+      "half_extents": [0.35, 0.36, 0.3]
+    }
+  ],
+  "ramp": {
+    "position": [2.5, 0.0, 4.5],
+    "half_extents": [1.0, 2.0],
+    "height": 1.0,
+    "yaw": 0.0
+  }
+}

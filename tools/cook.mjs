@@ -66,12 +66,12 @@ const PACKS = [
   },
   {
     id: 'maps-a',
-    sources: ['maps/a'],
+    sources: ['map-a.json'],
     assets() {
       return [
         {
           id: 'map-a.def',
-          path: path.join(sourceRoot, 'maps', 'a', 'map.json'),
+          path: path.join(sourceRoot, 'map-a.json'),
           kind: 'json',
         },
       ];

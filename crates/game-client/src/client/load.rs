@@ -194,10 +194,11 @@ pub(crate) fn maybe_kick_map_load(inner: &Rc<RefCell<ClientInner>>) {
     };
     if !should_start {
         let mut c = inner.borrow_mut();
-        if !c.mp.in_room() || !c.mp.match_started() {
-            if !matches!(c.map_present, MapPresentState::Idle) {
-                c.map_present = MapPresentState::Idle;
-            }
+        if (!c.mp.in_room() || !c.mp.match_started())
+            && !matches!(c.map_present, MapPresentState::Idle)
+        {
+            c.map_present = MapPresentState::Idle;
+            c.map_world = game_sim::MapWorld::empty();
         }
         return;
     }
@@ -222,17 +223,20 @@ pub(crate) fn maybe_kick_map_load(inner: &Rc<RefCell<ClientInner>>) {
         let mut c = inner.borrow_mut();
         if !c.mp.match_started() {
             c.map_present = MapPresentState::Idle;
+            c.map_world = game_sim::MapWorld::empty();
             return;
         }
         match result {
-            Ok(gpu) => {
+            Ok((gpu, world)) => {
                 web_sys::console::log_1(&"map: map-a ready".into());
                 c.map_present = MapPresentState::Ready(gpu);
+                c.map_world = world;
             }
             Err(err) => {
                 let msg = err.as_string().unwrap_or_else(|| format!("{err:?}"));
                 web_sys::console::error_1(&format!("map load failed: {msg}").into());
                 c.map_present = MapPresentState::Failed;
+                c.map_world = game_sim::MapWorld::empty();
             }
         }
     });

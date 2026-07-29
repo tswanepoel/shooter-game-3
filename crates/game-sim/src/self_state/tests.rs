@@ -654,3 +654,115 @@ fn tiny_mouse_yaw_moves_facing() {
     let deg = (s.facing - before).to_degrees().abs();
     assert!(deg > 0.01, "expected >0.01 deg, got {deg}");
 }
+
+#[test]
+fn step_up_onto_low_box_without_jump() {
+    use crate::{MapBox, MapWorld, STEP_UP_M};
+    let top = STEP_UP_M * 0.8;
+    let world = MapWorld {
+        boxes: vec![MapBox {
+            center: Vec3::new(0.0, top * 0.5, 2.0),
+            half: Vec3::new(1.0, top * 0.5, 1.0),
+        }],
+        ramps: vec![],
+    };
+    let mut s = SelfState::default_loadout();
+    let mut peaked = 0.0_f32;
+    for _ in 0..120 {
+        s.apply_move_world(1.0 / 60.0, 1.0, 0.0, false, &world);
+        peaked = peaked.max(s.position.y);
+        if s.is_grounded() && s.position.y > top * 0.5 {
+            break;
+        }
+    }
+    assert!(s.is_grounded());
+    assert!(
+        (s.position.y - top).abs() < 0.05,
+        "y={} peaked={peaked} want ~{top}",
+        s.position.y
+    );
+}
+
+#[test]
+fn tall_box_blocks_without_jump() {
+    use crate::{MapBox, MapWorld};
+    let world = MapWorld {
+        boxes: vec![MapBox {
+            center: Vec3::new(0.0, 0.6, 2.0),
+            half: Vec3::new(1.0, 0.6, 1.0),
+        }],
+        ramps: vec![],
+    };
+    let mut s = SelfState::default_loadout();
+    for _ in 0..180 {
+        s.apply_move_world(1.0 / 60.0, 1.0, 0.0, false, &world);
+    }
+    assert!(s.position.y.abs() < 0.05, "y={}", s.position.y);
+    assert!(
+        s.position.z < 1.2,
+        "should not walk through tall box, z={}",
+        s.position.z
+    );
+}
+
+#[test]
+fn jump_onto_mid_box_and_land_grounded() {
+    use crate::{MapBox, MapWorld};
+    let top = 0.9_f32;
+    let world = MapWorld {
+        boxes: vec![MapBox {
+            center: Vec3::new(0.0, top * 0.5, 2.0),
+            half: Vec3::new(1.5, top * 0.5, 1.5),
+        }],
+        ramps: vec![],
+    };
+    let mut s = SelfState::default_loadout();
+    // Walk up to the face, jump, coast onto the top.
+    for _ in 0..40 {
+        s.apply_move_world(1.0 / 60.0, 1.0, 0.0, false, &world);
+    }
+    s.try_jump();
+    for _ in 0..180 {
+        s.apply_move_world(1.0 / 60.0, 1.0, 0.0, false, &world);
+        if s.is_grounded() && s.position.y > top * 0.5 {
+            break;
+        }
+    }
+    assert!(s.is_grounded());
+    assert!(
+        (s.position.y - top).abs() < 0.08,
+        "y={} want ~{top}",
+        s.position.y
+    );
+}
+
+#[test]
+fn walk_up_ramp_to_height() {
+    use crate::{MapRamp, MapWorld};
+    let world = MapWorld {
+        boxes: vec![],
+        ramps: vec![MapRamp {
+            center_x: 0.0,
+            center_z: 2.0,
+            half_x: 1.0,
+            half_z: 2.0,
+            height: 1.0,
+            yaw: 0.0,
+        }],
+    };
+    let mut s = SelfState::default_loadout();
+    let mut peaked = 0.0_f32;
+    for _ in 0..200 {
+        s.apply_move_world(1.0 / 60.0, 1.0, 0.0, false, &world);
+        peaked = peaked.max(s.position.y);
+        if s.is_grounded() && s.position.y > 0.7 {
+            break;
+        }
+    }
+    assert!(s.is_grounded());
+    assert!(
+        s.position.y > 0.7,
+        "expected ramp height, y={} peaked={peaked}",
+        s.position.y
+    );
+}

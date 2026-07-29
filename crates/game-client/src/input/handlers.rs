@@ -64,28 +64,25 @@ fn enter_session_capture(document: &Document, canvas: &HtmlCanvasElement) {
         .ok()
         .and_then(|v| v.dyn_into::<Function>().ok())
     {
-        match func.call0(el) {
-            Ok(result) => {
-                if let Ok(promise) = result.dyn_into::<Promise>() {
-                    let canvas_ok = canvas.clone();
-                    let canvas_err = canvas.clone();
-                    let on_ok = Closure::once(move |_v: JsValue| {
-                        request_pointer_lock_raw(&canvas_ok);
-                    });
-                    let on_err = Closure::once(move |_err: JsValue| {
-                        // Fullscreen denied — still try lock from this gesture chain.
-                        request_pointer_lock_raw(&canvas_err);
-                    });
-                    let _ = promise.then(&on_ok).catch(&on_err);
-                    on_ok.forget();
-                    on_err.forget();
-                } else {
-                    // Invoked without a Promise — wait for the change event.
-                    lock_after_fullscreen_change(document, canvas);
-                }
-                return;
+        if let Ok(result) = func.call0(el) {
+            if let Ok(promise) = result.dyn_into::<Promise>() {
+                let canvas_ok = canvas.clone();
+                let canvas_err = canvas.clone();
+                let on_ok = Closure::once(move |_v: JsValue| {
+                    request_pointer_lock_raw(&canvas_ok);
+                });
+                let on_err = Closure::once(move |_err: JsValue| {
+                    // Fullscreen denied — still try lock from this gesture chain.
+                    request_pointer_lock_raw(&canvas_err);
+                });
+                let _ = promise.then(&on_ok).catch(&on_err);
+                on_ok.forget();
+                on_err.forget();
+            } else {
+                // Invoked without a Promise — wait for the change event.
+                lock_after_fullscreen_change(document, canvas);
             }
-            Err(_) => {}
+            return;
         }
     }
 
