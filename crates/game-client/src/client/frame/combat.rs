@@ -12,6 +12,20 @@ use super::super::impact::apply_impact_in_present;
 use super::super::ClientInner;
 
 impl ClientInner {
+    /// Floor pickup may introduce a letter the current self mesh never loaded.
+    fn kick_self_present_if_loadout_uncovered(&mut self) {
+        let need = match &self.self_present {
+            SelfPresentState::Ready(gpu) => {
+                !gpu.covers_loadout(self.self_state.primary, self.self_state.secondary)
+            }
+            SelfPresentState::Idle | SelfPresentState::Loading => false,
+            SelfPresentState::Failed => true,
+        };
+        if need {
+            self.self_present = SelfPresentState::Idle;
+        }
+    }
+
     pub(super) fn tick_combat(&mut self, dt: f32, fire_held: bool) {
         self.self_state.tick_emote(dt);
 
@@ -251,26 +265,35 @@ impl ClientInner {
             h.tick_regen(dt);
         }
 
-        // Death dump → victim AmmoDump / solo local drop (059).
         if self.was_alive && !self.self_state.alive {
-            let pos = self.self_state.position;
+            let feet = self.self_state.position;
+            let facing = self.self_state.facing;
             if let Some((kind, rounds)) = self.self_state.dump_death_ammo() {
                 if self.mp.in_room() {
-                    self.mp.claim_ammo_dump(kind, rounds, pos);
+                    self.mp.claim_ammo_dump(kind, rounds, feet);
                 } else if rounds > 0 {
                     let id = self.next_local_drop_id;
                     self.next_local_drop_id = self.next_local_drop_id.saturating_add(1);
-                    self.world_loot.spawn_local_drop(id, pos, kind, rounds);
+                    self.world_loot.spawn_local_drop(id, feet, kind, rounds);
+                }
+            }
+            if self.mp.is_living() {
+                self.mp.return_to_bench_after_death();
+            }
+            if let Some((letter, mag)) = self.self_state.take_active_blaster_drop() {
+                let drop_pos = game_sim::death_blaster_drop_position(feet, facing);
+                if self.mp.in_room() {
+                    self.mp.claim_blaster_dump(letter, mag, drop_pos);
+                } else {
+                    let id = self.next_local_drop_id;
+                    self.next_local_drop_id = self.next_local_drop_id.saturating_add(1);
+                    self.world_loot
+                        .spawn_local_blaster_drop(id, drop_pos, letter, mag);
                 }
             }
         }
         self.was_alive = self.self_state.alive;
 
-        if self.mp.is_living() && !self.self_state.alive {
-            self.mp.return_to_bench_after_death(&self.self_state);
-        }
-
-        // Ingest room loot announces / ends / grants.
         for c in self.mp.take_corpse_spawns() {
             self.world_loot.note_corpse_spawn(&c);
         }
@@ -294,18 +317,74 @@ impl ClientInner {
                 }
             }
         }
+        for d in self.mp.take_blaster_drop_spawns() {
+            self.world_loot.note_blaster_drop_spawn(&d);
+        }
+        for id in self.mp.take_blaster_drop_ends() {
+            self.world_loot.note_blaster_drop_end(id);
+        }
+        for g in self.mp.take_blaster_grants() {
+            self.world_loot.note_blaster_drop_end(g.drop_id);
+            if local_id == Some(g.player_id) {
+                if let Ok(displaced) = self.self_state.grant_floor_blaster(g.letter, g.mag) {
+                    if let Some(letter) = self.self_state.active_blaster() {
+                        self.fire.pay_ready(letter);
+                    } else {
+                        self.fire.sync_active_letter(None);
+                    }
+                    self.kick_self_present_if_loadout_uncovered();
+                    if let Some((letter, mag)) = displaced {
+                        let pos = game_sim::swap_blaster_drop_position(
+                            self.self_state.position,
+                            self.self_state.look_yaw(),
+                        );
+                        self.mp.claim_blaster_dump(letter, mag, pos);
+                    }
+                }
+            }
+        }
 
         self.world_loot.tick(dt);
 
-        // Walk-over: MP claims; solo grants locally.
+        let interact = self.move_input.take_interact();
         if self.self_state.alive {
             if self.mp.is_living() {
                 for (drop_id, room) in self.world_loot.overlapping_claimable(&self.self_state) {
                     self.mp.claim_loot(drop_id, self.self_state.position, room);
                     self.world_loot.mark_claimed(drop_id);
                 }
+                if interact {
+                    if let Some(drop_id) = self.world_loot.overlapping_blaster(&self.self_state) {
+                        self.mp.claim_blaster(drop_id, self.self_state.position);
+                    }
+                }
             } else if !self.mp.in_room() {
                 let _ = self.world_loot.try_solo_take(&mut self.self_state);
+                if interact {
+                    if let Some(drop_id) = self.world_loot.overlapping_blaster(&self.self_state) {
+                        if let Some(displaced) = self
+                            .world_loot
+                            .try_solo_blaster_take(&mut self.self_state, drop_id)
+                        {
+                            if let Some(letter) = self.self_state.active_blaster() {
+                                self.fire.pay_ready(letter);
+                            } else {
+                                self.fire.sync_active_letter(None);
+                            }
+                            self.kick_self_present_if_loadout_uncovered();
+                            if let Some((letter, mag)) = displaced {
+                                let id = self.next_local_drop_id;
+                                self.next_local_drop_id = self.next_local_drop_id.saturating_add(1);
+                                let pos = game_sim::swap_blaster_drop_position(
+                                    self.self_state.position,
+                                    self.self_state.look_yaw(),
+                                );
+                                self.world_loot
+                                    .spawn_local_blaster_drop(id, pos, letter, mag);
+                            }
+                        }
+                    }
+                }
             }
         }
 

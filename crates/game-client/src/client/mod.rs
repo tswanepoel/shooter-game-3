@@ -12,6 +12,7 @@ use game_sim::equip_blaster_letter;
 use game_sim::{FireState, MapWorld, PlayerHealth, ProjectileWorld, SelfState};
 use web_sys::HtmlCanvasElement;
 
+use crate::blaster_drop_present::BlasterDropPresent;
 use crate::corpse_present::CorpsePresent;
 #[cfg(feature = "debug-tools")]
 use crate::debug::DebugTools;
@@ -45,6 +46,7 @@ pub(crate) struct ClientInner {
     self_present: SelfPresentState,
     remote_present: RemotePresent,
     corpse_present: CorpsePresent,
+    blaster_drop_present: BlasterDropPresent,
     fire: FireState,
     projectiles: ProjectileWorld,
     health_by_id: HashMap<PlayerId, PlayerHealth>,
@@ -92,6 +94,7 @@ impl ClientInner {
             self_present: SelfPresentState::Idle,
             remote_present: RemotePresent::new(),
             corpse_present: CorpsePresent::new(),
+            blaster_drop_present: BlasterDropPresent::new(),
             fire: FireState::new(),
             projectiles: ProjectileWorld::new(),
             health_by_id: HashMap::new(),
@@ -128,6 +131,7 @@ impl ClientInner {
                     self.mp.leave();
                     self.remote_present.clear();
                     self.corpse_present.clear();
+                    self.blaster_drop_present.clear();
                     self.world_loot.clear();
                     self.health_by_id.clear();
                     self.debug.shell.push_log("mp: left (lobby)");

@@ -18,7 +18,9 @@ pub use cookie::load_display_name_cookie;
 pub use drive::drive_to_state;
 pub use phase::{CamIntent, MpPhase, StagedLoadout};
 pub use remotes::{RemoteKitKey, RemoteTable};
-pub use shared::{FrameEffects, LootGrantBatch, PeerImpactHitBatch, PeerProjectileBatch};
+pub use shared::{
+    BlasterGrantBatch, FrameEffects, LootGrantBatch, PeerImpactHitBatch, PeerProjectileBatch,
+};
 // Named type for `FrameEffects::pending_spawn` (phase module is private).
 #[allow(unused_imports)]
 pub use shared::PendingSpawn;
@@ -31,7 +33,7 @@ pub(crate) use shared::{client_now_secs, Shared};
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use game_net::{NetAmmoDropSpawn, NetCorpseSpawn, PlayerId, RosterEntry};
+use game_net::{NetAmmoDropSpawn, NetBlasterDropSpawn, NetCorpseSpawn, PlayerId, RosterEntry};
 use game_sim::{ActiveWeapon, AmmoKind, ImpactHit, Projectile, SelfState};
 
 pub struct MpClient {
@@ -207,6 +209,18 @@ impl MpClient {
         std::mem::take(&mut self.shared.borrow_mut().pending_loot_grants)
     }
 
+    pub fn take_blaster_drop_spawns(&mut self) -> Vec<NetBlasterDropSpawn> {
+        std::mem::take(&mut self.shared.borrow_mut().pending_blaster_drop_spawns)
+    }
+
+    pub fn take_blaster_drop_ends(&mut self) -> Vec<u64> {
+        std::mem::take(&mut self.shared.borrow_mut().pending_blaster_drop_ends)
+    }
+
+    pub fn take_blaster_grants(&mut self) -> Vec<BlasterGrantBatch> {
+        std::mem::take(&mut self.shared.borrow_mut().pending_blaster_grants)
+    }
+
     /// Drain spawn/error side effects for the frame loop.
     pub fn drain_frame_effects(&mut self) -> FrameEffects {
         let mut s = self.shared.borrow_mut();
@@ -230,6 +244,14 @@ impl MpClient {
 
     pub fn claim_loot(&self, drop_id: u64, position: glam::Vec3, room: u16) {
         claims::claim_loot(&self.shared, drop_id, position, room);
+    }
+
+    pub fn claim_blaster_dump(&self, letter: u8, mag: u16, position: glam::Vec3) {
+        claims::claim_blaster_dump(&self.shared, letter, mag, position);
+    }
+
+    pub fn claim_blaster(&self, drop_id: u64, position: glam::Vec3) {
+        claims::claim_blaster(&self.shared, drop_id, position);
     }
 
     /// Debug-console join with cookie name and default room.
@@ -275,8 +297,8 @@ impl MpClient {
     }
 
     /// Death accepted → loadout bench; staged loadout defaults to what they died with.
-    pub fn return_to_bench_after_death(&self, state: &SelfState) {
-        lobby::return_to_bench_after_death(&self.shared, state);
+    pub fn return_to_bench_after_death(&self) {
+        lobby::return_to_bench_after_death(&self.shared);
     }
 
     pub fn request_spawn(&self) {

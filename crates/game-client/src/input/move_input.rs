@@ -15,6 +15,8 @@ pub struct MoveInput {
     fire_held: bool,
     /// Session R edge (058 reload).
     reload_edge: bool,
+    /// Session F edge (067 blaster pickup).
+    interact_edge: bool,
     /// Session B held (039 emote wheel).
     emote_held: bool,
     /// Rising edge of B this frame window.
@@ -62,6 +64,16 @@ impl MoveInput {
         let r = self.reload_edge;
         self.reload_edge = false;
         r
+    }
+
+    pub fn note_interact_press(&mut self) {
+        self.interact_edge = true;
+    }
+
+    pub fn take_interact(&mut self) -> bool {
+        let v = self.interact_edge;
+        self.interact_edge = false;
+        v
     }
 
     /// One wheel notch: positive `delta_y` (scroll down) advances primary→secondary→unarmed.
@@ -128,6 +140,10 @@ impl MoveInput {
 
     pub fn is_reload_key(code: &str) -> bool {
         code == "KeyR"
+    }
+
+    pub fn is_interact_key(code: &str) -> bool {
+        code == "KeyF"
     }
 
     pub fn clear_keys(&mut self) {

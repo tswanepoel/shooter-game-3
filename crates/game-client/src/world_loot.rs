@@ -1,9 +1,12 @@
-//! Client world corpses and ammo drops (059).
+//! Client world corpses, ammo drops (059), and blaster drops (067).
 
 use std::collections::HashMap;
 
-use game_net::{NetAmmoDropSpawn, NetCorpseSpawn};
-use game_sim::{in_take_radius, AmmoDrop, AmmoKind, SelfState};
+use game_net::{NetAmmoDropSpawn, NetBlasterDropSpawn, NetCorpseSpawn};
+use game_sim::{
+    in_take_radius, look_forward_dir, looking_at_blaster, loot_look_origin, AmmoDrop, AmmoKind,
+    BlasterDrop, SelfState,
+};
 use glam::Vec3;
 
 #[derive(Debug, Clone)]
@@ -22,7 +25,8 @@ const CLAIM_RETRY_S: f32 = 0.35;
 pub struct WorldLoot {
     pub corpses: HashMap<u64, WorldCorpse>,
     pub drops: HashMap<u64, AmmoDrop>,
-    /// Seconds since last claim send per drop (throttle while overlapping).
+    pub blaster_drops: HashMap<u64, BlasterDrop>,
+    /// Seconds since last ammo claim send per drop (throttle while overlapping).
     claim_age_s: HashMap<u64, f32>,
 }
 
@@ -30,6 +34,7 @@ impl WorldLoot {
     pub fn clear(&mut self) {
         self.corpses.clear();
         self.drops.clear();
+        self.blaster_drops.clear();
         self.claim_age_s.clear();
     }
 
@@ -67,6 +72,22 @@ impl WorldLoot {
         self.claim_age_s.remove(&drop_id);
     }
 
+    pub fn note_blaster_drop_spawn(&mut self, d: &NetBlasterDropSpawn) {
+        self.blaster_drops.insert(
+            d.drop_id,
+            BlasterDrop::new(
+                d.drop_id,
+                Vec3::new(d.position.x, d.position.y, d.position.z),
+                d.letter,
+                d.mag,
+            ),
+        );
+    }
+
+    pub fn note_blaster_drop_end(&mut self, drop_id: u64) {
+        self.blaster_drops.remove(&drop_id);
+    }
+
     pub fn apply_grant_shrink(&mut self, drop_id: u64, rounds: u16) {
         let empty = if let Some(d) = self.drops.get_mut(&drop_id) {
             d.take_rounds(rounds);
@@ -87,13 +108,46 @@ impl WorldLoot {
         for age in self.claim_age_s.values_mut() {
             *age += dt;
         }
+        let expired: Vec<u64> = self
+            .blaster_drops
+            .values_mut()
+            .map(|d| {
+                d.tick(dt);
+                d
+            })
+            .filter(|d| d.expired())
+            .map(|d| d.id)
+            .collect();
+        for id in expired {
+            self.note_blaster_drop_end(id);
+        }
+        // Solo ammo drops age locally too.
+        let ammo_expired: Vec<u64> = self
+            .drops
+            .values_mut()
+            .map(|d| {
+                d.tick(dt);
+                d
+            })
+            .filter(|d| d.expired())
+            .map(|d| d.id)
+            .collect();
+        for id in ammo_expired {
+            self.note_drop_end(id);
+        }
     }
 
-    /// Solo: spawn a local drop with the given id.
+    /// Solo: spawn a local ammo drop with the given id.
     pub fn spawn_local_drop(&mut self, id: u64, position: Vec3, kind: AmmoKind, rounds: u16) {
         self.drops
             .insert(id, AmmoDrop::new(id, position, kind, rounds));
         self.claim_age_s.remove(&id);
+    }
+
+    /// Solo: spawn a local blaster drop.
+    pub fn spawn_local_blaster_drop(&mut self, id: u64, position: Vec3, letter: u8, mag: u16) {
+        self.blaster_drops
+            .insert(id, BlasterDrop::new(id, position, letter, mag));
     }
 
     /// Drops the living player overlaps with reserve room and may claim now.
@@ -131,6 +185,24 @@ impl WorldLoot {
             out.push((d.id, room));
         }
         out
+    }
+
+    /// Blaster drop under the living player that they are looking at (F pickup, 067).
+    pub fn overlapping_blaster(&self, state: &SelfState) -> Option<u64> {
+        if !state.alive {
+            return None;
+        }
+        let eye = loot_look_origin(state.position);
+        let look = look_forward_dir(state.look_yaw(), state.look_pitch());
+        self.blaster_drops.values().find_map(|d| {
+            if !in_take_radius(d.position, state.position) {
+                return None;
+            }
+            if !looking_at_blaster(eye, look, d.position) {
+                return None;
+            }
+            Some(d.id)
+        })
     }
 
     /// Dev HUD: drop count and nearest distance (m), if any.
@@ -184,5 +256,30 @@ impl WorldLoot {
         } else {
             Some((kind, added))
         }
+    }
+
+    /// Solo F take: equip floor blaster; returns displaced letter+mag for a new floor drop.
+    pub fn try_solo_blaster_take(
+        &mut self,
+        state: &mut SelfState,
+        drop_id: u64,
+    ) -> Option<Option<(u8, u16)>> {
+        if !state.alive {
+            return None;
+        }
+        let drop = self.blaster_drops.get(&drop_id)?;
+        if !in_take_radius(drop.position, state.position) {
+            return None;
+        }
+        let eye = loot_look_origin(state.position);
+        let look = look_forward_dir(state.look_yaw(), state.look_pitch());
+        if !looking_at_blaster(eye, look, drop.position) {
+            return None;
+        }
+        let letter = drop.letter;
+        let mag = drop.mag;
+        self.note_blaster_drop_end(drop_id);
+        let displaced = state.grant_floor_blaster(letter, mag).ok()?;
+        Some(displaced)
     }
 }

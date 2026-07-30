@@ -401,6 +401,20 @@ async fn handle_datagram(
             guard.accept_loot_claim(player_id, drop_id, position, room, tick);
             false
         }
+        ClientToServer::BlasterDump { tick, dump } => {
+            let mut guard = rooms.lock().await;
+            guard.accept_blaster_dump(player_id, dump.letter, dump.mag, dump.position, tick);
+            false
+        }
+        ClientToServer::BlasterClaim {
+            tick,
+            drop_id,
+            position,
+        } => {
+            let mut guard = rooms.lock().await;
+            guard.accept_blaster_claim(player_id, drop_id, position, tick);
+            false
+        }
         // Reliable-stream only.
         ClientToServer::Spawn { .. }
         | ClientToServer::SetRole { .. }

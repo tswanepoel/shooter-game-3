@@ -1,8 +1,8 @@
 //! Shared WebTransport session state (Rc cell for async join + frame).
 
 use game_net::{
-    MatchView, NetAmmoDropSpawn, NetCorpseSpawn, NetImpactHit, NetProjectileSpawn, NetRole,
-    PlayerId, RosterEntry, DEFAULT_CHARACTER,
+    MatchView, NetAmmoDropSpawn, NetBlasterDropSpawn, NetCorpseSpawn, NetImpactHit,
+    NetProjectileSpawn, NetRole, PlayerId, RosterEntry, DEFAULT_CHARACTER,
 };
 use game_sim::ActiveWeapon;
 use web_sys::WritableStreamDefaultWriter;
@@ -32,6 +32,14 @@ pub struct LootGrantBatch {
     pub rounds: u16,
 }
 
+#[derive(Debug, Clone)]
+pub struct BlasterGrantBatch {
+    pub drop_id: u64,
+    pub player_id: PlayerId,
+    pub letter: u8,
+    pub mag: u16,
+}
+
 pub struct FrameEffects {
     pub pending_spawn: Option<PendingSpawn>,
     pub error: Option<String>,
@@ -59,6 +67,9 @@ pub(crate) struct Shared {
     pub(crate) pending_drop_spawns: Vec<NetAmmoDropSpawn>,
     pub(crate) pending_drop_ends: Vec<u64>,
     pub(crate) pending_loot_grants: Vec<LootGrantBatch>,
+    pub(crate) pending_blaster_drop_spawns: Vec<NetBlasterDropSpawn>,
+    pub(crate) pending_blaster_drop_ends: Vec<u64>,
+    pub(crate) pending_blaster_grants: Vec<BlasterGrantBatch>,
     pub(crate) pending_spawn: Option<PendingSpawn>,
     pub(crate) spawn_requested: bool,
     pub(crate) join_room: String,
@@ -98,6 +109,9 @@ impl Shared {
             pending_drop_spawns: Vec::new(),
             pending_drop_ends: Vec::new(),
             pending_loot_grants: Vec::new(),
+            pending_blaster_drop_spawns: Vec::new(),
+            pending_blaster_drop_ends: Vec::new(),
+            pending_blaster_grants: Vec::new(),
             pending_spawn: None,
             spawn_requested: false,
             join_room: String::new(),

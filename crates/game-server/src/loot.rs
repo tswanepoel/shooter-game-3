@@ -1,11 +1,14 @@
-//! Room corpses and ammo drops (059). Server owns spawn, elect, and lifetime end.
+//! Room corpses, ammo drops (059), and blaster drops (067).
 
 use std::collections::HashMap;
 
-use game_net::{encode_s2c, NetAmmoDropSpawn, NetCorpseSpawn, NetVec3, PlayerId, ServerToClient};
+use game_net::{
+    encode_s2c, NetAmmoDropSpawn, NetBlasterDropSpawn, NetCorpseSpawn, NetVec3, PlayerId,
+    ServerToClient,
+};
 use game_sim::{
-    clamp_dump_rounds, reserve_capacity_for, AmmoKind, AMMO_DROP_LIFETIME_S, CORPSE_LIFETIME_S,
-    LOOT_TAKE_RADIUS_M,
+    clamp_blaster_dump, clamp_dump_rounds, reserve_capacity_for, AmmoKind, AMMO_DROP_LIFETIME_S,
+    BLASTER_DROP_LIFETIME_S, CORPSE_LIFETIME_S, LOOT_TAKE_RADIUS_M,
 };
 
 use super::roster::ammo_from_wire;
@@ -18,6 +21,8 @@ pub struct CorpseRecord {
     pub drop_id: Option<u64>,
     /// Victim already sent an ammo dump for this corpse.
     pub dumped: bool,
+    /// Victim already sent a blaster dump for this corpse.
+    pub blaster_dumped: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -30,18 +35,33 @@ pub struct DropRecord {
     pub age_s: f32,
 }
 
+#[derive(Debug, Clone)]
+pub struct BlasterDropRecord {
+    pub drop_id: u64,
+    /// 0 when not death-linked (displace dump). Kept for spawn echo.
+    #[allow(dead_code)]
+    pub corpse_id: u64,
+    pub position: NetVec3,
+    pub letter: u8,
+    pub mag: u16,
+    pub age_s: f32,
+}
+
 #[derive(Debug, Default)]
 pub struct RoomLoot {
     next_corpse_id: u64,
     next_drop_id: u64,
+    next_blaster_drop_id: u64,
     pub corpses: HashMap<u64, CorpseRecord>,
     pub drops: HashMap<u64, DropRecord>,
+    pub blaster_drops: HashMap<u64, BlasterDropRecord>,
 }
 
 #[derive(Debug, Clone)]
 pub struct LootTickEvents {
     pub corpse_ends: Vec<u64>,
     pub drop_ends: Vec<u64>,
+    pub blaster_drop_ends: Vec<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -51,6 +71,14 @@ pub struct LootGrantEvent {
     pub ammo: AmmoKind,
     pub rounds: u16,
     pub drop_empty: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct BlasterGrantEvent {
+    pub drop_id: u64,
+    pub player_id: PlayerId,
+    pub letter: u8,
+    pub mag: u16,
 }
 
 impl RoomLoot {
@@ -78,20 +106,28 @@ impl RoomLoot {
                 age_s: 0.0,
                 drop_id: None,
                 dumped: false,
+                blaster_dumped: false,
             },
         );
         spawn
     }
 
-    /// Latest open corpse for `victim` that has not yet received a dump.
-    fn open_corpse_mut(&mut self, victim: PlayerId) -> Option<&mut CorpseRecord> {
+    /// Latest open corpse for `victim` that has not yet received an ammo dump.
+    fn open_ammo_corpse_mut(&mut self, victim: PlayerId) -> Option<&mut CorpseRecord> {
         self.corpses
             .values_mut()
             .filter(|c| c.victim == victim && !c.dumped)
             .max_by_key(|c| c.corpse_id)
     }
 
-    /// Accept victim dump. Returns drop spawn when payload is above zero.
+    fn open_blaster_corpse_mut(&mut self, victim: PlayerId) -> Option<&mut CorpseRecord> {
+        self.corpses
+            .values_mut()
+            .filter(|c| c.victim == victim && !c.blaster_dumped)
+            .max_by_key(|c| c.corpse_id)
+    }
+
+    /// Accept victim ammo dump. Returns drop spawn when payload is above zero.
     pub fn accept_dump(
         &mut self,
         victim: PlayerId,
@@ -101,7 +137,7 @@ impl RoomLoot {
     ) -> Option<NetAmmoDropSpawn> {
         let kind = ammo_from_wire(ammo_wire)?;
         let rounds = clamp_dump_rounds(kind, rounds);
-        let corpse = self.open_corpse_mut(victim)?;
+        let corpse = self.open_ammo_corpse_mut(victim)?;
         corpse.dumped = true;
         if rounds == 0 {
             return None;
@@ -130,6 +166,61 @@ impl RoomLoot {
             ammo: ammo_wire,
             rounds,
         })
+    }
+
+    /// Death blaster dump: requires open corpse. Always mints (mag may be 0).
+    pub fn accept_blaster_death_dump(
+        &mut self,
+        victim: PlayerId,
+        letter: u8,
+        mag: u16,
+        position: NetVec3,
+    ) -> Option<NetBlasterDropSpawn> {
+        let (letter, mag) = clamp_blaster_dump(letter, mag)?;
+        let corpse = self.open_blaster_corpse_mut(victim)?;
+        corpse.blaster_dumped = true;
+        let corpse_id = corpse.corpse_id;
+        Some(self.mint_blaster_drop(corpse_id, position, letter, mag))
+    }
+
+    /// Living displace dump: always mints a floor blaster (no corpse).
+    pub fn accept_blaster_floor_dump(
+        &mut self,
+        letter: u8,
+        mag: u16,
+        position: NetVec3,
+    ) -> Option<NetBlasterDropSpawn> {
+        let (letter, mag) = clamp_blaster_dump(letter, mag)?;
+        Some(self.mint_blaster_drop(0, position, letter, mag))
+    }
+
+    fn mint_blaster_drop(
+        &mut self,
+        corpse_id: u64,
+        position: NetVec3,
+        letter: u8,
+        mag: u16,
+    ) -> NetBlasterDropSpawn {
+        self.next_blaster_drop_id = self.next_blaster_drop_id.saturating_add(1);
+        let drop_id = self.next_blaster_drop_id;
+        self.blaster_drops.insert(
+            drop_id,
+            BlasterDropRecord {
+                drop_id,
+                corpse_id,
+                position,
+                letter,
+                mag,
+                age_s: 0.0,
+            },
+        );
+        NetBlasterDropSpawn {
+            drop_id,
+            corpse_id,
+            position,
+            letter,
+            mag,
+        }
     }
 
     /// First valid claim wins this take. Takes at most `room` rounds (remaining reserve space).
@@ -177,15 +268,45 @@ impl RoomLoot {
         })
     }
 
+    /// First valid F claim wins the whole blaster drop (067).
+    pub fn elect_blaster_claim(
+        &mut self,
+        claimant: PlayerId,
+        drop_id: u64,
+        claimant_pos: NetVec3,
+        living: bool,
+    ) -> Option<BlasterGrantEvent> {
+        if !living {
+            return None;
+        }
+        let drop = self.blaster_drops.get(&drop_id)?;
+        if !within_take_radius(drop.position, claimant_pos) {
+            return None;
+        }
+        let letter = drop.letter;
+        let mag = drop.mag;
+        self.blaster_drops.remove(&drop_id);
+        Some(BlasterGrantEvent {
+            drop_id,
+            player_id: claimant,
+            letter,
+            mag,
+        })
+    }
+
     pub fn tick(&mut self, dt: f32) -> LootTickEvents {
         let dt = dt.max(0.0);
         let mut corpse_ends = Vec::new();
         let mut drop_ends = Vec::new();
+        let mut blaster_drop_ends = Vec::new();
 
         for c in self.corpses.values_mut() {
             c.age_s += dt;
         }
         for d in self.drops.values_mut() {
+            d.age_s += dt;
+        }
+        for d in self.blaster_drops.values_mut() {
             d.age_s += dt;
         }
 
@@ -221,9 +342,22 @@ impl RoomLoot {
             }
         }
 
+        let expired_blasters: Vec<u64> = self
+            .blaster_drops
+            .values()
+            .filter(|d| d.age_s >= BLASTER_DROP_LIFETIME_S)
+            .map(|d| d.drop_id)
+            .collect();
+        for id in expired_blasters {
+            if self.blaster_drops.remove(&id).is_some() {
+                blaster_drop_ends.push(id);
+            }
+        }
+
         LootTickEvents {
             corpse_ends,
             drop_ends,
+            blaster_drop_ends,
         }
     }
 }
@@ -272,6 +406,31 @@ pub fn encode_loot_grant(
         player_id,
         ammo: ammo_to_wire(ammo),
         rounds,
+    })
+    .ok()
+}
+
+pub fn encode_blaster_drop_spawn(tick: u64, drop: NetBlasterDropSpawn) -> Option<Vec<u8>> {
+    encode_s2c(&ServerToClient::BlasterDropSpawn { tick, drop }).ok()
+}
+
+pub fn encode_blaster_drop_end(tick: u64, drop_id: u64) -> Option<Vec<u8>> {
+    encode_s2c(&ServerToClient::BlasterDropEnd { tick, drop_id }).ok()
+}
+
+pub fn encode_blaster_grant(
+    tick: u64,
+    drop_id: u64,
+    player_id: PlayerId,
+    letter: u8,
+    mag: u16,
+) -> Option<Vec<u8>> {
+    encode_s2c(&ServerToClient::BlasterGrant {
+        tick,
+        drop_id,
+        player_id,
+        letter,
+        mag,
     })
     .ok()
 }
@@ -343,5 +502,40 @@ mod tests {
         assert!(ev.drop_ends.contains(&drop.drop_id));
         assert!(loot.corpses.is_empty());
         assert!(loot.drops.is_empty());
+    }
+
+    #[test]
+    fn blaster_death_dump_and_claim() {
+        let mut loot = RoomLoot::default();
+        let corpse = loot.spawn_corpse(2, b'a', NetVec3::new(0.0, 0.0, 0.0), 0.0);
+        let drop = loot
+            .accept_blaster_death_dump(2, b'b', 4, NetVec3::new(0.0, 0.0, 0.0))
+            .expect("blaster");
+        assert_eq!(drop.corpse_id, corpse.corpse_id);
+        assert_eq!(drop.mag, 4);
+        let grant = loot
+            .elect_blaster_claim(1, drop.drop_id, NetVec3::new(0.2, 0.0, 0.0), true)
+            .expect("grant");
+        assert_eq!(grant.letter, b'b');
+        assert_eq!(grant.mag, 4);
+        assert!(loot.blaster_drops.is_empty());
+    }
+
+    #[test]
+    fn blaster_floor_dump_independent_of_corpse_timer() {
+        let mut loot = RoomLoot::default();
+        let corpse = loot.spawn_corpse(2, b'a', NetVec3::new(0.0, 0.0, 0.0), 0.0);
+        let _ = loot.accept_blaster_floor_dump(b'p', 10, NetVec3::new(1.0, 0.0, 0.0));
+        // Corpse end does not remove floor blasters (067 independent lifetime).
+        let ev = loot.tick(CORPSE_LIFETIME_S + 0.1);
+        assert!(ev.corpse_ends.contains(&corpse.corpse_id));
+        // Re-mint after ages may have cleared prior floor drops.
+        let drop = loot
+            .accept_blaster_floor_dump(b'p', 10, NetVec3::new(1.0, 0.0, 0.0))
+            .unwrap();
+        assert!(loot.blaster_drops.contains_key(&drop.drop_id));
+        let ev = loot.tick(BLASTER_DROP_LIFETIME_S + 0.1);
+        assert!(ev.blaster_drop_ends.contains(&drop.drop_id));
+        assert!(!loot.blaster_drops.contains_key(&drop.drop_id));
     }
 }

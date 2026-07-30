@@ -185,6 +185,66 @@ pub(crate) fn maybe_kick_corpse_loads(inner: &Rc<RefCell<ClientInner>>) {
     }
 }
 
+pub(crate) fn maybe_kick_blaster_drop_loads(inner: &Rc<RefCell<ClientInner>>) {
+    let loads = {
+        let mut c = inner.borrow_mut();
+        if !c.mp.in_room() && c.world_loot.blaster_drops.is_empty() {
+            c.blaster_drop_present.clear();
+            return;
+        }
+        let drops = c.world_loot.blaster_drops.clone();
+        c.blaster_drop_present.plan_loads(&drops)
+    };
+    if loads.is_empty() {
+        return;
+    }
+
+    let (device, queue, format) = {
+        let c = inner.borrow();
+        (
+            c.renderer.device.clone(),
+            c.renderer.queue.clone(),
+            c.renderer.config.format,
+        )
+    };
+
+    for (drop_id, letter, position) in loads {
+        let inner = inner.clone();
+        let device = device.clone();
+        let queue = queue.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = crate::blaster_drop_present::load_floor_blaster(
+                &device,
+                &queue,
+                format,
+                MSAA_SAMPLE_COUNT,
+                letter,
+                position,
+            )
+            .await;
+            let mut c = inner.borrow_mut();
+            match &result {
+                Ok(_) => {
+                    web_sys::console::log_1(
+                        &format!(
+                            "loot: blaster drop id={drop_id} letter={} ready",
+                            letter as char
+                        )
+                        .into(),
+                    );
+                }
+                Err(err) => {
+                    let msg = err.as_string().unwrap_or_else(|| format!("{err:?}"));
+                    web_sys::console::error_1(
+                        &format!("loot: blaster drop id={drop_id} load failed: {msg}").into(),
+                    );
+                }
+            }
+            c.blaster_drop_present.finish_load(drop_id, letter, result);
+        });
+    }
+}
+
 pub(crate) fn maybe_kick_map_load(inner: &Rc<RefCell<ClientInner>>) {
     let should_start = {
         let c = inner.borrow();

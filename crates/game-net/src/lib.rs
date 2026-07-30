@@ -7,7 +7,7 @@ pub const TICK_HZ: u32 = 180;
 pub const TICK_DURATION_SECS: f64 = 1.0 / TICK_HZ as f64;
 
 /// Alpha wire; bumped when variants change (no distributed compat promise).
-pub const PROTOCOL_VERSION: u16 = 15;
+pub const PROTOCOL_VERSION: u16 = 16;
 
 /// Max display-name length after trim (051).
 pub const DISPLAY_NAME_MAX_CHARS: usize = 24;
@@ -140,6 +140,24 @@ pub struct NetAmmoDropSpawn {
     pub rounds: u16,
 }
 
+/// Victim / displace dump of a floor blaster (067).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NetBlasterDump {
+    pub letter: u8,
+    pub mag: u16,
+    pub position: NetVec3,
+}
+
+/// Visible blaster drop announce (067). `corpse_id` is 0 when not death-linked.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NetBlasterDropSpawn {
+    pub drop_id: u64,
+    pub corpse_id: u64,
+    pub position: NetVec3,
+    pub letter: u8,
+    pub mag: u16,
+}
+
 /// Room match snapshot on roster (064).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MatchView {
@@ -194,6 +212,17 @@ pub enum ClientToServer {
         drop_id: u64,
         position: NetVec3,
         room: u16,
+    },
+    /// Victim or displace dump of a floor blaster (067).
+    BlasterDump {
+        tick: u64,
+        dump: NetBlasterDump,
+    },
+    /// Living F claim on a blaster drop (067).
+    BlasterClaim {
+        tick: u64,
+        drop_id: u64,
+        position: NetVec3,
     },
     /// Reliable control stream only.
     SetRole {
@@ -288,6 +317,24 @@ pub enum ServerToClient {
     },
     /// Drop ended by timer or empty without a grant frame (059).
     AmmoDropEnd {
+        tick: u64,
+        drop_id: u64,
+    },
+    /// Room blaster drop after a dump (067).
+    BlasterDropSpawn {
+        tick: u64,
+        drop: NetBlasterDropSpawn,
+    },
+    /// Elected blaster loot grant (067).
+    BlasterGrant {
+        tick: u64,
+        drop_id: u64,
+        player_id: PlayerId,
+        letter: u8,
+        mag: u16,
+    },
+    /// Blaster drop ended by timer or grant (067).
+    BlasterDropEnd {
         tick: u64,
         drop_id: u64,
     },
@@ -639,6 +686,50 @@ mod tests {
             decode_s2c(&encode_s2c(&corpse_end).unwrap()).unwrap(),
             corpse_end
         );
+
+        let bdump = ClientToServer::BlasterDump {
+            tick: 16,
+            dump: NetBlasterDump {
+                letter: b'b',
+                mag: 4,
+                position: NetVec3::new(1.0, 0.0, 2.0),
+            },
+        };
+        assert_eq!(decode_c2s(&encode_c2s(&bdump).unwrap()).unwrap(), bdump);
+
+        let bclaim = ClientToServer::BlasterClaim {
+            tick: 17,
+            drop_id: 8,
+            position: NetVec3::new(1.0, 0.0, 2.0),
+        };
+        assert_eq!(decode_c2s(&encode_c2s(&bclaim).unwrap()).unwrap(), bclaim);
+
+        let bspawn = ServerToClient::BlasterDropSpawn {
+            tick: 18,
+            drop: NetBlasterDropSpawn {
+                drop_id: 8,
+                corpse_id: 3,
+                position: NetVec3::new(1.0, 0.0, 2.0),
+                letter: b'b',
+                mag: 4,
+            },
+        };
+        assert_eq!(decode_s2c(&encode_s2c(&bspawn).unwrap()).unwrap(), bspawn);
+
+        let bgrant = ServerToClient::BlasterGrant {
+            tick: 19,
+            drop_id: 8,
+            player_id: 1,
+            letter: b'b',
+            mag: 4,
+        };
+        assert_eq!(decode_s2c(&encode_s2c(&bgrant).unwrap()).unwrap(), bgrant);
+
+        let bend = ServerToClient::BlasterDropEnd {
+            tick: 20,
+            drop_id: 8,
+        };
+        assert_eq!(decode_s2c(&encode_s2c(&bend).unwrap()).unwrap(), bend);
     }
 
     #[test]

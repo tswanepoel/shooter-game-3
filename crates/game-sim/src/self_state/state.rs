@@ -213,24 +213,88 @@ impl SelfState {
         self.reserve.add_capped(kind, n)
     }
 
-    /// Empty active magazine + that kind's reserve into a death dump payload (059).
-    /// Returns `None` when there is no active blaster. Rounds may be zero (no drop).
+    /// Empty active kind's reserve into a death ammo dump (059 / 067). Magazine stays
+    /// with the blaster drop. Returns `None` when there is no active blaster.
+    /// Rounds may be zero (no ammo drop).
     pub fn dump_death_ammo(&mut self) -> Option<(AmmoKind, u16)> {
         let kind = self.active_ammo_kind()?;
+        let from_reserve = self.reserve.take(kind, u16::MAX);
+        Some((kind, from_reserve))
+    }
+
+    /// Strip the active blaster letter + magazine for a floor drop (067).
+    /// Clears that slot. Returns `None` when unarmed.
+    pub fn take_active_blaster_drop(&mut self) -> Option<(u8, u16)> {
+        let letter = self.active_blaster()?;
         let mag = match self.active {
             ActiveWeapon::Primary => {
                 let n = self.primary_mag;
+                self.primary = None;
                 self.primary_mag = 0;
                 n
             }
             ActiveWeapon::Secondary => {
                 let n = self.secondary_mag;
+                self.secondary = None;
                 self.secondary_mag = 0;
                 n
             }
         };
-        let from_reserve = self.reserve.take(kind, u16::MAX);
-        Some((kind, mag.saturating_add(from_reserve)))
+        Some((letter, mag))
+    }
+
+    /// Equip a floor blaster (letter + mag) into a slot (067).
+    /// Prefer free primary, then free secondary; else swap active.
+    /// Secondary may hold any class on floor grant (021 laws stay on loadout/spawn).
+    /// Returns displaced `(letter, mag)` when a swap occurred.
+    pub fn grant_floor_blaster(
+        &mut self,
+        letter: u8,
+        mag: u16,
+    ) -> Result<Option<(u8, u16)>, &'static str> {
+        if !self.alive {
+            return Err("dead");
+        }
+        WeaponClass::from_letter(letter).ok_or("unknown blaster letter")?;
+        let mag = mag.min(Self::mag_capacity_of(Some(letter)));
+        self.clear_emote();
+
+        if self.primary.is_none() {
+            self.write_slot(ActiveWeapon::Primary, Some(letter), mag);
+            self.active = ActiveWeapon::Primary;
+            return Ok(None);
+        }
+        if self.secondary.is_none() {
+            self.write_slot(ActiveWeapon::Secondary, Some(letter), mag);
+            self.active = ActiveWeapon::Secondary;
+            return Ok(None);
+        }
+
+        let slot = self.active;
+        let displaced = self.read_slot(slot);
+        self.write_slot(slot, Some(letter), mag);
+        self.active = slot;
+        Ok(displaced)
+    }
+
+    fn read_slot(&self, slot: ActiveWeapon) -> Option<(u8, u16)> {
+        match slot {
+            ActiveWeapon::Primary => self.primary.map(|l| (l, self.primary_mag)),
+            ActiveWeapon::Secondary => self.secondary.map(|l| (l, self.secondary_mag)),
+        }
+    }
+
+    fn write_slot(&mut self, slot: ActiveWeapon, letter: Option<u8>, mag: u16) {
+        match slot {
+            ActiveWeapon::Primary => {
+                self.primary = letter;
+                self.primary_mag = if letter.is_some() { mag } else { 0 };
+            }
+            ActiveWeapon::Secondary => {
+                self.secondary = letter;
+                self.secondary_mag = if letter.is_some() { mag } else { 0 };
+            }
+        }
     }
 
     /// Fill active magazine from reserve of that ammo kind, up to capacity (058).

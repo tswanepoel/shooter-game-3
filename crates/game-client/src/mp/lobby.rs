@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use game_net::{is_known_character, normalize_display_name, ClientToServer, NetRole};
-use game_sim::{ActiveWeapon, SelfState, WeaponClass};
+use game_sim::{ActiveWeapon, WeaponClass};
 use js_sys::Reflect;
 use wasm_bindgen::JsCast;
 
@@ -166,8 +166,9 @@ pub(crate) fn stage_active(shared: &RefCell<Shared>, active: ActiveWeapon) {
     s.spawn_retry_accum = 0.0;
 }
 
-/// Death accepted → loadout bench; staged loadout defaults to what they died with.
-pub(crate) fn return_to_bench_after_death(shared: &RefCell<Shared>, state: &SelfState) {
+/// Death accepted → loadout bench. Staged loadout stays the picker choice (067);
+/// living slots from the dead life (incl. floor pickup) do not carry over.
+pub(crate) fn return_to_bench_after_death(shared: &RefCell<Shared>) {
     let mut s = shared.borrow_mut();
     if s.phase != MpPhase::Living || !s.phase.can_go(MpPhase::Ready) {
         return;
@@ -175,9 +176,6 @@ pub(crate) fn return_to_bench_after_death(shared: &RefCell<Shared>, state: &Self
     s.phase = MpPhase::Ready;
     s.spawn_requested = false;
     s.spawn_retry_accum = 0.0;
-    s.staged_primary = state.primary;
-    s.staged_secondary = state.secondary;
-    s.staged_active = state.active;
 }
 
 pub(crate) fn request_spawn(shared: &RefCell<Shared>) {

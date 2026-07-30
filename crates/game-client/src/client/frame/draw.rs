@@ -97,6 +97,10 @@ impl ClientInner {
             self.corpse_present
                 .write_view_proj_all(&self.renderer.queue, view_proj);
         }
+        if !self.world_loot.blaster_drops.is_empty() {
+            self.blaster_drop_present
+                .write_view_proj_all(&self.renderer.queue, view_proj);
+        }
         let self_ref = if draw_local_self {
             match &self.self_present {
                 SelfPresentState::Ready(gpu) => Some(gpu),
@@ -114,6 +118,11 @@ impl ClientInner {
             Some(&self.corpse_present)
         } else {
             None
+        };
+        let blaster_drops_ref = if self.world_loot.blaster_drops.is_empty() {
+            None
+        } else {
+            Some(&self.blaster_drop_present)
         };
         let map_ref = match &self.map_present {
             MapPresentState::Ready(gpu) if self.mp.match_started() => Some(gpu),
@@ -167,6 +176,7 @@ impl ClientInner {
                 self_ref,
                 remotes_ref,
                 corpses_ref,
+                blaster_drops_ref,
                 lineup_ref,
                 draw_reticle,
                 draw_hit_marker,
@@ -180,6 +190,7 @@ impl ClientInner {
             self_ref,
             remotes_ref,
             corpses_ref,
+            blaster_drops_ref,
             draw_reticle,
             draw_hit_marker,
             draw_emote_wheel,
@@ -344,6 +355,7 @@ impl ClientInner {
                 self.mp.leave();
                 self.remote_present.clear();
                 self.corpse_present.clear();
+                self.blaster_drop_present.clear();
                 self.world_loot.clear();
                 self.health_by_id.clear();
                 self.ui.set_status(String::new());

@@ -1,6 +1,8 @@
 //! WebGPU client: mounted self view, input session, optional debug tools.
 
 #[cfg(target_arch = "wasm32")]
+mod blaster_drop_present;
+#[cfg(target_arch = "wasm32")]
 mod body_hit;
 #[cfg(target_arch = "wasm32")]
 mod client;
@@ -65,7 +67,8 @@ use web_sys::HtmlCanvasElement;
 use client::load::maybe_kick_lineup_load;
 #[cfg(target_arch = "wasm32")]
 use client::load::{
-    maybe_kick_corpse_loads, maybe_kick_map_load, maybe_kick_remote_loads, maybe_kick_self_load,
+    maybe_kick_blaster_drop_loads, maybe_kick_corpse_loads, maybe_kick_map_load,
+    maybe_kick_remote_loads, maybe_kick_self_load,
 };
 #[cfg(target_arch = "wasm32")]
 pub(crate) use client::ClientInner;
@@ -157,6 +160,7 @@ impl GameClient {
             maybe_kick_self_load(&client);
             maybe_kick_remote_loads(&client);
             maybe_kick_corpse_loads(&client);
+            maybe_kick_blaster_drop_loads(&client);
             maybe_kick_map_load(&client);
             #[cfg(feature = "debug-tools")]
             maybe_kick_lineup_load(&client);

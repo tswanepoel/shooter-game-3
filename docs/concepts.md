@@ -257,7 +257,7 @@ A kind of round. It has mass.
 
 ### Ammo drop
 
-[Ammo](#ammo) on the floor. Ends after a time or when its rounds are taken.
+[Ammo](#ammo) on the floor as [reserve ammo](#reserve-ammo). Ends after a time or when its rounds are taken.
 
 ### Weapon class
 
@@ -277,6 +277,10 @@ It has a [fire mode](#fire-mode).
 
 Rounds of the [blaster](#blaster)’s [ammo](#ammo) held in that [blaster](#blaster), up to a capacity of that [blaster](#blaster).  
 Accepted [fire](#fire) spends from it. Empty blocks [fire](#fire).
+
+### Blaster drop
+
+A [blaster](#blaster) on the floor with its [magazine](#magazine). Ends after a time or when taken.
 
 ### Fire impulse
 
@@ -383,7 +387,7 @@ An optional [blaster](#blaster) slot on the [figure](#figure) for any [weapon cl
 
 ### Secondary slot
 
-An optional [blaster](#blaster) slot on the [figure](#figure) for launcher or pistol only.
+An optional [blaster](#blaster) slot on the [figure](#figure) for any [weapon class](#weapon-class).
 
 ### Active slot
 
@@ -444,7 +448,7 @@ Refills while the [figure](#figure) is not taking [hit](#hit).
 
 ### Corpse
 
-A dead [figure](#figure). May spawn an [ammo drop](#ammo-drop). Ends after a time.
+A dead [figure](#figure). May spawn an [ammo drop](#ammo-drop) and a [blaster drop](#blaster-drop). Ends after a time.
 
 ### Death
 
@@ -460,7 +464,8 @@ A [hit](#hit) on a [body part](#body-part) from a [hit claim](#hit-claim). Drain
 
 ### Loadout
 
-The [blaster](#blaster) choices for a [player](#player)’s [primary slot](#primary-slot) and [secondary slot](#secondary-slot).
+The [blaster](#blaster) choices for a [player](#player)’s [primary slot](#primary-slot) and [secondary slot](#secondary-slot).  
+The [secondary slot](#secondary-slot) choice is launcher or pistol only.
 
 ### Spawn
 

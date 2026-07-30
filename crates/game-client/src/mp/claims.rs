@@ -3,7 +3,8 @@
 use std::cell::RefCell;
 
 use game_net::{
-    encode_c2s, ClientToServer, NetAmmoDump, NetImpactHit, NetProjectileSpawn, NetVec3, PlayerId,
+    encode_c2s, ClientToServer, NetAmmoDump, NetBlasterDump, NetImpactHit, NetProjectileSpawn,
+    NetVec3, PlayerId,
 };
 use game_sim::{weapon_def, AmmoKind, ImpactHit, Projectile};
 use js_sys::Uint8Array;
@@ -118,6 +119,52 @@ pub(crate) fn claim_loot(shared: &RefCell<Shared>, drop_id: u64, position: glam:
         drop_id,
         position: NetVec3::new(position.x, position.y, position.z),
         room,
+    }) else {
+        return;
+    };
+    let arr = Uint8Array::from(payload.as_slice());
+    let _ = writer.write_with_chunk(&arr);
+}
+
+pub(crate) fn claim_blaster_dump(
+    shared: &RefCell<Shared>,
+    letter: u8,
+    mag: u16,
+    position: glam::Vec3,
+) {
+    let s = shared.borrow();
+    if !s.phase.in_room() {
+        return;
+    }
+    let Some(writer) = s.dgram_writer.as_ref() else {
+        return;
+    };
+    let tick = s.clock.estimated_tick(client_now_secs()).unwrap_or(0);
+    let dump = NetBlasterDump {
+        letter,
+        mag,
+        position: NetVec3::new(position.x, position.y, position.z),
+    };
+    let Ok(payload) = encode_c2s(&ClientToServer::BlasterDump { tick, dump }) else {
+        return;
+    };
+    let arr = Uint8Array::from(payload.as_slice());
+    let _ = writer.write_with_chunk(&arr);
+}
+
+pub(crate) fn claim_blaster(shared: &RefCell<Shared>, drop_id: u64, position: glam::Vec3) {
+    let s = shared.borrow();
+    if s.phase != MpPhase::Living {
+        return;
+    }
+    let Some(writer) = s.dgram_writer.as_ref() else {
+        return;
+    };
+    let tick = s.clock.estimated_tick(client_now_secs()).unwrap_or(0);
+    let Ok(payload) = encode_c2s(&ClientToServer::BlasterClaim {
+        tick,
+        drop_id,
+        position: NetVec3::new(position.x, position.y, position.z),
     }) else {
         return;
     };

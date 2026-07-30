@@ -14,7 +14,7 @@ use web_sys::ReadableStreamDefaultReader;
 
 use super::apply::{apply_roster, apply_you_spawned};
 use super::cookie::save_display_name_cookie;
-use super::shared::LootGrantBatch;
+use super::shared::{BlasterGrantBatch, LootGrantBatch};
 use super::{client_now_secs, MpPhase, PeerImpactHitBatch, PeerProjectileBatch, Shared};
 
 const IDENTITY_PATH: &str = "/__debug/wt-identity";
@@ -271,6 +271,29 @@ fn handle_s2c(shared: &Rc<RefCell<Shared>>, msg: ServerToClient, t4: f64) {
                     player_id,
                     ammo,
                     rounds,
+                });
+        }
+        ServerToClient::BlasterDropSpawn { drop, .. } => {
+            shared.borrow_mut().pending_blaster_drop_spawns.push(drop);
+        }
+        ServerToClient::BlasterDropEnd { drop_id, .. } => {
+            shared.borrow_mut().pending_blaster_drop_ends.push(drop_id);
+        }
+        ServerToClient::BlasterGrant {
+            drop_id,
+            player_id,
+            letter,
+            mag,
+            ..
+        } => {
+            shared
+                .borrow_mut()
+                .pending_blaster_grants
+                .push(BlasterGrantBatch {
+                    drop_id,
+                    player_id,
+                    letter,
+                    mag,
                 });
         }
         ServerToClient::Welcome { .. } | ServerToClient::Reject { .. } => {}

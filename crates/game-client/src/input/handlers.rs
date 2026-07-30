@@ -442,6 +442,11 @@ fn on_session_key_down(inner: &Rc<RefCell<ClientInner>>, event: &KeyboardEvent) 
         if !event.repeat() {
             client.move_input.note_reload_press();
         }
+    } else if MoveInput::is_interact_key(&code) {
+        event.prevent_default();
+        if !event.repeat() {
+            client.move_input.note_interact_press();
+        }
     } else if MoveInput::is_emote_key(&code) {
         event.prevent_default();
         if !event.repeat() {

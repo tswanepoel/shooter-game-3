@@ -8,8 +8,18 @@ use crate::WeaponClass;
 pub const CORPSE_LIFETIME_S: f32 = 45.0;
 /// Ammo drop lifetime (s). May end earlier on grant-empty or corpse end (059).
 pub const AMMO_DROP_LIFETIME_S: f32 = 45.0;
-/// Walk-over take radius (m) around an ammo drop (059).
+/// Blaster drop lifetime (s). Short; ends earlier on grant (067).
+pub const BLASTER_DROP_LIFETIME_S: f32 = 20.0;
+/// Walk-over / F take radius (m) around a floor drop (059 / 067).
 pub const LOOT_TAKE_RADIUS_M: f32 = 1.5;
+/// Death blaster drop: right of corpse (right-handed hold), metres (067).
+pub const DEATH_BLASTER_RIGHT_M: f32 = 0.55;
+/// Death blaster drop: behind feet (die falls backwards), metres (067).
+pub const DEATH_BLASTER_BACK_M: f32 = 0.4;
+/// Swap / displace dump in front of feet, metres (067).
+pub const SWAP_BLASTER_FORWARD_M: f32 = 0.85;
+/// Min look·to_drop for F pickup (~25° half-angle) (067).
+pub const BLASTER_LOOK_DOT_MIN: f32 = 0.9063;
 
 /// What a round is. Shared across letters that fire the same kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -102,14 +112,15 @@ pub fn reserve_capacity_for(kind: AmmoKind) -> u16 {
     }
 }
 
-/// Upper bound for a death dump of `kind` (active mag cap worst case + reserve cap).
+/// Upper bound for a death ammo dump of `kind` (reserve only; mag rides blaster drop, 067).
 pub fn max_dump_rounds_for(kind: AmmoKind) -> u16 {
-    let mag_worst = match kind {
-        AmmoKind::LightFoam => mag_capacity_for_class(WeaponClass::AssaultRifle),
-        AmmoKind::ThickFoam => mag_capacity_for_class(WeaponClass::SniperRifle),
-        AmmoKind::Grenade => mag_capacity_for_class(WeaponClass::Launcher),
-    };
-    mag_worst.saturating_add(reserve_capacity_for(kind))
+    reserve_capacity_for(kind)
+}
+
+/// Clamp magazine rounds for a floor blaster letter (067).
+pub fn clamp_blaster_mag(letter: u8, mag: u16) -> Option<u16> {
+    let def = crate::weapon_def(letter)?;
+    Some(mag.min(def.mag_capacity()))
 }
 
 /// Round-only facts. Mass is the source of truth here — not on the blaster.

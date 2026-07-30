@@ -12,8 +12,8 @@ use tracing::warn;
 use wtransport::Connection;
 
 use crate::loot::{
-    encode_corpse_end, encode_corpse_spawn, encode_drop_end, encode_drop_spawn, encode_loot_grant,
-    RoomLoot,
+    encode_blaster_drop_end, encode_blaster_drop_spawn, encode_blaster_grant, encode_corpse_end,
+    encode_corpse_spawn, encode_drop_end, encode_drop_spawn, encode_loot_grant, RoomLoot,
 };
 
 pub const SPAWN_RADIUS_M: f32 = 8.0;
@@ -280,6 +280,31 @@ impl Rooms {
         }
     }
 
+    pub fn accept_blaster_dump(
+        &mut self,
+        player: PlayerId,
+        letter: u8,
+        mag: u16,
+        position: NetVec3,
+        tick: u64,
+    ) {
+        if let Some(roster) = self.room_mut(player) {
+            roster.accept_blaster_dump(player, letter, mag, position, tick);
+        }
+    }
+
+    pub fn accept_blaster_claim(
+        &mut self,
+        claimant: PlayerId,
+        drop_id: u64,
+        position: NetVec3,
+        tick: u64,
+    ) {
+        if let Some(roster) = self.room_mut(claimant) {
+            roster.accept_blaster_claim(claimant, drop_id, position, tick);
+        }
+    }
+
     pub fn tick_loot(&mut self, dt: f32, tick: u64) {
         for roster in self.rooms.values_mut() {
             roster.tick_loot(dt, tick);
@@ -431,6 +456,55 @@ impl Roster {
         }
     }
 
+    pub fn accept_blaster_dump(
+        &mut self,
+        player: PlayerId,
+        letter: u8,
+        mag: u16,
+        position: NetVec3,
+        tick: u64,
+    ) {
+        let drop = if self.living(player) {
+            self.loot.accept_blaster_floor_dump(letter, mag, position)
+        } else {
+            self.loot
+                .accept_blaster_death_dump(player, letter, mag, position)
+        };
+        if let Some(drop) = drop {
+            if let Some(bytes) = encode_blaster_drop_spawn(tick, drop) {
+                self.broadcast_datagram_all(&bytes);
+            }
+        }
+    }
+
+    pub fn accept_blaster_claim(
+        &mut self,
+        claimant: PlayerId,
+        drop_id: u64,
+        position: NetVec3,
+        tick: u64,
+    ) {
+        let living = self.living(claimant);
+        let Some(grant) = self
+            .loot
+            .elect_blaster_claim(claimant, drop_id, position, living)
+        else {
+            return;
+        };
+        if let Some(bytes) = encode_blaster_grant(
+            tick,
+            grant.drop_id,
+            grant.player_id,
+            grant.letter,
+            grant.mag,
+        ) {
+            self.broadcast_datagram_all(&bytes);
+        }
+        if let Some(bytes) = encode_blaster_drop_end(tick, grant.drop_id) {
+            self.broadcast_datagram_all(&bytes);
+        }
+    }
+
     pub fn tick_loot(&mut self, dt: f32, tick: u64) {
         let ev = self.loot.tick(dt);
         for corpse_id in ev.corpse_ends {
@@ -440,6 +514,11 @@ impl Roster {
         }
         for drop_id in ev.drop_ends {
             if let Some(bytes) = encode_drop_end(tick, drop_id) {
+                self.broadcast_datagram_all(&bytes);
+            }
+        }
+        for drop_id in ev.blaster_drop_ends {
+            if let Some(bytes) = encode_blaster_drop_end(tick, drop_id) {
                 self.broadcast_datagram_all(&bytes);
             }
         }

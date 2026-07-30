@@ -655,7 +655,7 @@ fn spawn_ammo_fills_mag_and_draft_reserve() {
 }
 
 #[test]
-fn dump_death_ammo_empties_active_kind() {
+fn dump_death_ammo_empties_reserve_keeps_mag() {
     let mut s = armed_self();
     s.set_primary(Some(b'b')).unwrap();
     s.primary_mag = 4;
@@ -663,8 +663,48 @@ fn dump_death_ammo_empties_active_kind() {
     s.reserve.thick_foam = 3;
     let (kind, n) = s.dump_death_ammo().expect("dump");
     assert_eq!(kind, AmmoKind::LightFoam);
-    assert_eq!(n, 10);
-    assert_eq!(s.primary_mag, 0);
+    assert_eq!(n, 6);
+    assert_eq!(s.primary_mag, 4);
     assert_eq!(s.reserve.light_foam, 0);
     assert_eq!(s.reserve.thick_foam, 3);
+}
+
+#[test]
+fn take_active_blaster_clears_slot() {
+    let mut s = armed_self();
+    s.set_primary(Some(b'b')).unwrap();
+    s.primary_mag = 4;
+    let (letter, mag) = s.take_active_blaster_drop().expect("drop");
+    assert_eq!(letter, b'b');
+    assert_eq!(mag, 4);
+    assert!(s.primary.is_none());
+    assert_eq!(s.primary_mag, 0);
+}
+
+#[test]
+fn grant_floor_blaster_fills_then_swaps() {
+    let mut s = armed_self();
+    s.set_primary(Some(b'p')).unwrap();
+    s.primary_mag = 10;
+    s.set_secondary(None).unwrap();
+    // Free secondary — any class on pickup.
+    let displaced = s.grant_floor_blaster(b'd', 7).unwrap();
+    assert!(displaced.is_none());
+    assert_eq!(s.secondary, Some(b'd'));
+    assert_eq!(s.secondary_mag, 7);
+    assert_eq!(s.active, ActiveWeapon::Secondary);
+
+    // Both full — swap active (secondary).
+    let displaced = s.grant_floor_blaster(b'i', 5).unwrap();
+    assert_eq!(displaced, Some((b'd', 7)));
+    assert_eq!(s.secondary, Some(b'i'));
+    assert_eq!(s.secondary_mag, 5);
+
+    // Active primary — swap primary.
+    s.active = ActiveWeapon::Primary;
+    let displaced = s.grant_floor_blaster(b'b', 3).unwrap();
+    assert_eq!(displaced, Some((b'p', 10)));
+    assert_eq!(s.primary, Some(b'b'));
+    assert_eq!(s.primary_mag, 3);
+    assert_eq!(s.active, ActiveWeapon::Primary);
 }
