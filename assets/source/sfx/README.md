@@ -2,20 +2,19 @@
 
 One-shot WAVs for client present (Web Audio). Cook packs them into the `sfx` SGPK.
 
+Variant banks use letter suffixes (`-a`, `-b`, …), not digits.
+
 | Asset id | File | Use |
 | --- | --- | --- |
-| `bang1.wav` | `bang1.wav` | Light fire (pistol / SMG) |
-| `bang2.wav` | `bang2.wav` | Mid fire (AR / sniper) |
-| `bang3.wav` | `bang3.wav` | Heavy fire (shotgun / launcher) |
-| `gravel-step1.wav` | `gravel-step1.wav` | Gravel foot plant (variant) |
-| `gravel-step2.wav` | `gravel-step2.wav` | Gravel foot plant (variant) |
-| `gravel-step3.wav` | `gravel-step3.wav` | Gravel foot plant (variant) |
-| `cement-step1.wav` | `cement-step1.wav` | Cement foot plant (variant) |
-| `cement-step2.wav` | `cement-step2.wav` | Cement foot plant (variant) |
-| `cement-step3.wav` | `cement-step3.wav` | Cement foot plant (variant) |
-| `grass-step1.wav` | `grass-step1.wav` | Grass foot plant (variant) |
-| `grass-step2.wav` | `grass-step2.wav` | Grass foot plant (variant) |
-| `grass-step3.wav` | `grass-step3.wav` | Grass foot plant (variant) |
-| `wet-cement-step1.wav` | `wet-cement-step1.wav` | Wet cement foot plant (variant) |
-| `wet-cement-step2.wav` | `wet-cement-step2.wav` | Wet cement foot plant (variant) |
-| `wet-cement-step3.wav` | `wet-cement-step3.wav` | Wet cement foot plant (variant) |
+| `bang-a.wav` | `bang-a.wav` | Pistol discharge |
+| `bang-b.wav` | `bang-b.wav` | SMG discharge |
+| `bang-c.wav` | `bang-c.wav` | Assault rifle discharge |
+| `bang-d.wav` | `bang-d.wav` | Sniper discharge |
+| `bang-e.wav` | `bang-e.wav` | Shotgun / launcher discharge |
+| `throw-a.wav` | `throw-a.wav` | Reserved for future throw (not cooked yet) |
+| `chamber-a.wav`…`chamber-d.wav` | `chamber-*.wav` | Semi load / auto-chamber (074); fixed per class |
+| `reload-a.wav` | `reload-a.wav` | Mag-fed reload slap (auto / burst) |
+| `gravel-step-a.wav`…`c` | `gravel-step-*.wav` | Gravel foot plant variants |
+| `cement-step-a.wav`…`c` | `cement-step-*.wav` | Cement foot plant variants |
+| `grass-step-a.wav`…`c` | `grass-step-*.wav` | Grass foot plant variants |
+| `wet-cement-step-a.wav`…`c` | `wet-cement-step-*.wav` | Wet cement foot plant variants |

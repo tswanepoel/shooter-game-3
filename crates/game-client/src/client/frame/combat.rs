@@ -49,6 +49,11 @@ impl ClientInner {
             look_origin,
             &muzzle_worlds,
         );
+        if self.fire.take_chambered() {
+            if let Some(letter) = self.self_state.active_blaster() {
+                self.sfx.play_chamber_load(letter);
+            }
+        }
         let mut claimed: Vec<game_sim::Projectile> = Vec::new();
         for d in &discharges {
             for p in &d.projectiles {

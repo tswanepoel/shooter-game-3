@@ -276,7 +276,8 @@ It has a [fire mode](#fire-mode).
 ### Magazine
 
 Rounds of the [blaster](#blaster)’s [ammo](#ammo) held in that [blaster](#blaster), up to a capacity of that [blaster](#blaster).  
-Accepted [fire](#fire) spends from it. Empty blocks [fire](#fire).
+Accepted [fire](#fire) spends from it. Empty blocks [fire](#fire).  
+On [semi](#fire-mode) muzzle-load blasters this is the dart(s) in the front tube(s), not a strip magazine.
 
 ### Blaster drop
 
@@ -473,7 +474,8 @@ A [player](#player)’s [figure](#figure) entering play alive on a [map](#map). 
 
 ### Reload
 
-Fills the [magazine](#magazine) from [reserve ammo](#reserve-ammo).
+Fills the [magazine](#magazine) from [reserve ammo](#reserve-ammo).  
+On [semi](#fire-mode) muzzle-load blasters this chambers empty front tube(s), and runs on its own a short time after [fire](#fire).
 
 ### Kill
 

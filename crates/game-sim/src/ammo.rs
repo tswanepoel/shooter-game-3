@@ -84,7 +84,8 @@ impl ReserveAmmo {
     }
 }
 
-/// Draft magazine capacity by weapon class (058).
+/// Magazine capacity by weapon class for **mag-fed** modes (full-auto / burst).
+/// Semi muzzle-load capacities live on [`crate::WeaponDef::mag_capacity`] (074).
 pub fn mag_capacity_for_class(class: WeaponClass) -> u16 {
     match class {
         WeaponClass::Launcher => 1,

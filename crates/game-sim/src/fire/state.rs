@@ -9,12 +9,19 @@ use crate::weapons::{
 };
 use crate::SelfState;
 
+/// Semi muzzle-load auto-chamber: fixed handling plus per-dart load time (074).
+pub const SEMI_CHAMBER_BASE_S: f32 = 0.25;
+pub const SEMI_CHAMBER_PER_ROUND_S: f32 = 0.12;
+
 /// Fire cadence and gates.
 #[derive(Debug, Clone)]
 pub struct FireState {
     pub(crate) ready_s: f32,
     pub(crate) sprint_fire_s: f32,
     pub(crate) cooldown_s: f32,
+    /// Time left before a semi auto-chamber lands (074).
+    pub(crate) chamber_s: f32,
+    chambered_edge: bool,
     burst_left: u8,
     burst_pending: bool,
     fire_held: bool,
@@ -39,6 +46,8 @@ impl FireState {
             ready_s: 0.0,
             sprint_fire_s: 0.0,
             cooldown_s: 0.0,
+            chamber_s: 0.0,
+            chambered_edge: false,
             burst_left: 0,
             burst_pending: false,
             fire_held: false,
@@ -53,6 +62,18 @@ impl FireState {
 
     pub fn burst_active(&self) -> bool {
         self.burst_left > 0
+    }
+
+    /// A semi auto-chamber is loading the front tube(s) (074).
+    pub fn chambering(&self) -> bool {
+        self.chamber_s > 0.0
+    }
+
+    /// Take the edge where an auto-chamber landed rounds (present cue).
+    pub fn take_chambered(&mut self) -> bool {
+        let c = self.chambered_edge;
+        self.chambered_edge = false;
+        c
     }
 
     /// Held stream or unfinished fixed string.
@@ -79,6 +100,7 @@ impl FireState {
             self.burst_left = 0;
             self.burst_pending = false;
             self.cooldown_s = 0.0;
+            self.chamber_s = 0.0;
             self.alt_muzzle = 0;
         }
     }
@@ -145,6 +167,7 @@ impl FireState {
             self.prev_held = false;
             self.burst_left = 0;
             self.burst_pending = false;
+            self.chamber_s = 0.0;
             return Vec::new();
         }
 
@@ -158,6 +181,7 @@ impl FireState {
             self.prev_held = false;
             self.burst_left = 0;
             self.burst_pending = false;
+            self.chamber_s = 0.0;
             return Vec::new();
         };
         let Some(def) = weapon_def(letter) else {
@@ -165,6 +189,14 @@ impl FireState {
             self_state.set_shoulder_sway(0.0, 0.0);
             return Vec::new();
         };
+
+        // Semi muzzle-load: the next dart seats itself when the load time ends (074).
+        if self.chamber_s > 0.0 {
+            self.chamber_s = (self.chamber_s - dt).max(0.0);
+            if self.chamber_s <= 0.0 && self_state.try_reload() {
+                self.chambered_edge = true;
+            }
+        }
 
         self.sway.advance(
             dt,
@@ -265,6 +297,9 @@ impl FireState {
                         self_state,
                     ) {
                         self.cooldown_s = def.shot_interval_s();
+                        if def.mode == FireMode::Semi {
+                            self.start_chamber(def, self_state);
+                        }
                         out.push(d);
                     }
                 }
@@ -272,6 +307,21 @@ impl FireState {
         }
 
         out
+    }
+
+    /// Arm auto-chamber only when every tube is empty (074).
+    /// Multi-muzzle semis (e.g. `i`) fire the bank dry first, then one seat.
+    fn start_chamber(&mut self, def: &WeaponDef, self_state: &SelfState) {
+        let mag = self_state.active_mag().unwrap_or(0);
+        if mag > 0 {
+            return;
+        }
+        let need = def.mag_capacity();
+        self.chamber_s = if need == 0 {
+            0.0
+        } else {
+            SEMI_CHAMBER_BASE_S + SEMI_CHAMBER_PER_ROUND_S * need as f32
+        };
     }
 
     fn spawn_discharge(

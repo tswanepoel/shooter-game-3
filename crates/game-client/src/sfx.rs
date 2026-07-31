@@ -1,6 +1,6 @@
 //! Client one-shot SFX (Web Audio). Present only — not sim.
 
-use game_sim::{LocomotionMode, WeaponClass};
+use game_sim::{weapon_def, FireMode, LocomotionMode, WeaponClass};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::JsValue;
 use wasm_bindgen_futures::JsFuture;
@@ -18,7 +18,9 @@ const LAND_STEP_OFFSET_MAX_S: f64 = 0.05;
 
 pub struct Sfx {
     ctx: AudioContext,
-    bangs: [AudioBuffer; 3],
+    bangs: [AudioBuffer; 5],
+    chambers: [AudioBuffer; 4],
+    reload: AudioBuffer,
     gravel_steps: [AudioBuffer; 3],
     cement_steps: [AudioBuffer; 3],
     wet_cement_steps: [AudioBuffer; 3],
@@ -36,105 +38,44 @@ impl Sfx {
         let ctx = AudioContext::new()?;
         let pack = pack::load_pack("sfx").await?;
         let bangs = [
-            decode_wav(
-                &ctx,
-                pack.get("bang1.wav").map_err(|e| JsValue::from_str(&e))?,
-            )
-            .await?,
-            decode_wav(
-                &ctx,
-                pack.get("bang2.wav").map_err(|e| JsValue::from_str(&e))?,
-            )
-            .await?,
-            decode_wav(
-                &ctx,
-                pack.get("bang3.wav").map_err(|e| JsValue::from_str(&e))?,
-            )
-            .await?,
+            load_wav(&ctx, &pack, "bang-a.wav").await?,
+            load_wav(&ctx, &pack, "bang-b.wav").await?,
+            load_wav(&ctx, &pack, "bang-c.wav").await?,
+            load_wav(&ctx, &pack, "bang-d.wav").await?,
+            load_wav(&ctx, &pack, "bang-e.wav").await?,
         ];
+        let chambers = [
+            load_wav(&ctx, &pack, "chamber-a.wav").await?,
+            load_wav(&ctx, &pack, "chamber-b.wav").await?,
+            load_wav(&ctx, &pack, "chamber-c.wav").await?,
+            load_wav(&ctx, &pack, "chamber-d.wav").await?,
+        ];
+        let reload = load_wav(&ctx, &pack, "reload-a.wav").await?;
         let gravel_steps = [
-            decode_wav(
-                &ctx,
-                pack.get("gravel-step1.wav")
-                    .map_err(|e| JsValue::from_str(&e))?,
-            )
-            .await?,
-            decode_wav(
-                &ctx,
-                pack.get("gravel-step2.wav")
-                    .map_err(|e| JsValue::from_str(&e))?,
-            )
-            .await?,
-            decode_wav(
-                &ctx,
-                pack.get("gravel-step3.wav")
-                    .map_err(|e| JsValue::from_str(&e))?,
-            )
-            .await?,
+            load_wav(&ctx, &pack, "gravel-step-a.wav").await?,
+            load_wav(&ctx, &pack, "gravel-step-b.wav").await?,
+            load_wav(&ctx, &pack, "gravel-step-c.wav").await?,
         ];
         let cement_steps = [
-            decode_wav(
-                &ctx,
-                pack.get("cement-step1.wav")
-                    .map_err(|e| JsValue::from_str(&e))?,
-            )
-            .await?,
-            decode_wav(
-                &ctx,
-                pack.get("cement-step2.wav")
-                    .map_err(|e| JsValue::from_str(&e))?,
-            )
-            .await?,
-            decode_wav(
-                &ctx,
-                pack.get("cement-step3.wav")
-                    .map_err(|e| JsValue::from_str(&e))?,
-            )
-            .await?,
+            load_wav(&ctx, &pack, "cement-step-a.wav").await?,
+            load_wav(&ctx, &pack, "cement-step-b.wav").await?,
+            load_wav(&ctx, &pack, "cement-step-c.wav").await?,
         ];
         let wet_cement_steps = [
-            decode_wav(
-                &ctx,
-                pack.get("wet-cement-step1.wav")
-                    .map_err(|e| JsValue::from_str(&e))?,
-            )
-            .await?,
-            decode_wav(
-                &ctx,
-                pack.get("wet-cement-step2.wav")
-                    .map_err(|e| JsValue::from_str(&e))?,
-            )
-            .await?,
-            decode_wav(
-                &ctx,
-                pack.get("wet-cement-step3.wav")
-                    .map_err(|e| JsValue::from_str(&e))?,
-            )
-            .await?,
+            load_wav(&ctx, &pack, "wet-cement-step-a.wav").await?,
+            load_wav(&ctx, &pack, "wet-cement-step-b.wav").await?,
+            load_wav(&ctx, &pack, "wet-cement-step-c.wav").await?,
         ];
         let grass_steps = [
-            decode_wav(
-                &ctx,
-                pack.get("grass-step1.wav")
-                    .map_err(|e| JsValue::from_str(&e))?,
-            )
-            .await?,
-            decode_wav(
-                &ctx,
-                pack.get("grass-step2.wav")
-                    .map_err(|e| JsValue::from_str(&e))?,
-            )
-            .await?,
-            decode_wav(
-                &ctx,
-                pack.get("grass-step3.wav")
-                    .map_err(|e| JsValue::from_str(&e))?,
-            )
-            .await?,
+            load_wav(&ctx, &pack, "grass-step-a.wav").await?,
+            load_wav(&ctx, &pack, "grass-step-b.wav").await?,
+            load_wav(&ctx, &pack, "grass-step-c.wav").await?,
         ];
         Ok(Self {
             ctx,
             bangs,
+            chambers,
+            reload,
             gravel_steps,
             cement_steps,
             wet_cement_steps,
@@ -152,9 +93,23 @@ impl Sfx {
         let _ = self.ctx.resume();
     }
 
+    /// Bang only — chamber is the semi load (R), not a post-shot cycle.
     pub fn play_bang(&self, letter: u8) {
-        let idx = bang_index(letter);
-        self.play_buf(&self.bangs[idx], 1.0, 0.0);
+        self.play_buf(&self.bangs[bang_index(letter)], 1.0, 0.0);
+    }
+
+    /// Mag-fed: reload slap. Semi muzzle-load: chamber only.
+    pub fn play_reload(&self, letter: u8) {
+        if is_semi(letter) {
+            self.play_chamber(letter, 0.0);
+        } else {
+            self.play_buf(&self.reload, 1.0, 0.0);
+        }
+    }
+
+    /// Semi auto-chamber landed a dart in the front tube(s) (074).
+    pub fn play_chamber_load(&self, letter: u8) {
+        self.play_chamber(letter, 0.0);
     }
 
     pub fn note_footsteps(&mut self, loco: LocomotionMode, phase: f32, surface: FootKind) {
@@ -190,6 +145,10 @@ impl Sfx {
         for _ in 0..plants {
             self.play_step(surface, gain, 0.0);
         }
+    }
+
+    fn play_chamber(&self, letter: u8, when_s: f64) {
+        self.play_buf(&self.chambers[chamber_index(letter)], 1.0, when_s);
     }
 
     fn play_step(&mut self, surface: FootKind, gain: f32, when_s: f64) {
@@ -235,12 +194,30 @@ impl Sfx {
     }
 }
 
-/// Per-blaster bang by weapon class weight (071).
+/// Semi muzzle-load blasters chamber on R; mag-fed modes use reload slap only.
+fn is_semi(letter: u8) -> bool {
+    weapon_def(letter).is_some_and(|d| d.mode == FireMode::Semi)
+}
+
+/// Fixed bang per weapon class (074). Five clips; launcher shares shotgun.
 fn bang_index(letter: u8) -> usize {
     match WeaponClass::from_letter(letter) {
-        Some(WeaponClass::Pistol | WeaponClass::Smg) => 0,
-        Some(WeaponClass::AssaultRifle | WeaponClass::SniperRifle) => 1,
-        Some(WeaponClass::Shotgun | WeaponClass::Launcher) => 2,
+        Some(WeaponClass::Pistol) => 0,
+        Some(WeaponClass::Smg) => 1,
+        Some(WeaponClass::AssaultRifle) => 2,
+        Some(WeaponClass::SniperRifle) => 3,
+        Some(WeaponClass::Shotgun | WeaponClass::Launcher) => 4,
+        None => 0,
+    }
+}
+
+/// Fixed chamber per weapon class (074). Four clips; shotgun/launcher share pistol/SMG.
+fn chamber_index(letter: u8) -> usize {
+    match WeaponClass::from_letter(letter) {
+        Some(WeaponClass::Pistol | WeaponClass::Shotgun) => 0,
+        Some(WeaponClass::Smg | WeaponClass::Launcher) => 1,
+        Some(WeaponClass::AssaultRifle) => 2,
+        Some(WeaponClass::SniperRifle) => 3,
         None => 0,
     }
 }
@@ -268,6 +245,11 @@ fn foot_plants(prev: f32, curr: f32) -> u32 {
     } else {
         0
     }
+}
+
+async fn load_wav(ctx: &AudioContext, pack: &pack::Pack, id: &str) -> Result<AudioBuffer, JsValue> {
+    let bytes = pack.get(id).map_err(|e| JsValue::from_str(&e))?;
+    decode_wav(ctx, bytes).await
 }
 
 async fn decode_wav(ctx: &AudioContext, bytes: &[u8]) -> Result<AudioBuffer, JsValue> {
@@ -302,6 +284,18 @@ impl SfxState {
         }
     }
 
+    pub fn play_reload(&self, letter: u8) {
+        if let Self::Ready(sfx) = self {
+            sfx.play_reload(letter);
+        }
+    }
+
+    pub fn play_chamber_load(&self, letter: u8) {
+        if let Self::Ready(sfx) = self {
+            sfx.play_chamber_load(letter);
+        }
+    }
+
     pub fn note_footsteps(&mut self, loco: LocomotionMode, phase: f32, surface: FootKind) {
         if let Self::Ready(sfx) = self {
             sfx.note_footsteps(loco, phase, surface);
@@ -311,7 +305,7 @@ impl SfxState {
 
 #[cfg(test)]
 mod tests {
-    use super::{bang_index, foot_plants};
+    use super::{bang_index, chamber_index, foot_plants, is_semi};
     use game_sim::WeaponClass;
 
     #[test]
@@ -326,25 +320,49 @@ mod tests {
     }
 
     #[test]
-    fn bang_by_class_weight() {
+    fn only_semi_chambers_on_reload() {
+        for letter in [b'a', b'b', b'e', b'f', b'i', b'j', b'k', b'o'] {
+            assert!(is_semi(letter), "semi {}", letter as char);
+        }
+        for letter in [b'c', b'd', b'g', b'h', b'l', b'm', b'n', b'p', b'q', b'r'] {
+            assert!(!is_semi(letter), "auto/burst {}", letter as char);
+        }
+        assert!(!is_semi(b'z'));
+    }
+
+    #[test]
+    fn voices_fixed_by_class() {
         assert_eq!(bang_index(b'b'), 0);
-        assert_eq!(bang_index(b'p'), 0);
-        assert_eq!(bang_index(b'd'), 1);
-        assert_eq!(bang_index(b'e'), 1);
-        assert_eq!(bang_index(b'j'), 2);
-        assert_eq!(bang_index(b'a'), 2);
-        // Every letter maps; unknown falls back to light.
+        assert_eq!(bang_index(b'p'), 1);
+        assert_eq!(bang_index(b'd'), 2);
+        assert_eq!(bang_index(b'e'), 3);
+        assert_eq!(bang_index(b'j'), 4);
+        assert_eq!(bang_index(b'a'), 4);
+        assert_eq!(chamber_index(b'b'), 0);
+        assert_eq!(chamber_index(b'p'), 1);
+        assert_eq!(chamber_index(b'd'), 2);
+        assert_eq!(chamber_index(b'e'), 3);
+        assert_eq!(chamber_index(b'j'), 0);
+        assert_eq!(chamber_index(b'a'), 1);
         for letter in b'a'..=b'r' {
-            let idx = bang_index(letter);
-            assert!(idx < 3);
             let class = WeaponClass::from_letter(letter).unwrap();
-            let expected = match class {
-                WeaponClass::Pistol | WeaponClass::Smg => 0,
-                WeaponClass::AssaultRifle | WeaponClass::SniperRifle => 1,
-                WeaponClass::Shotgun | WeaponClass::Launcher => 2,
+            let bang = match class {
+                WeaponClass::Pistol => 0,
+                WeaponClass::Smg => 1,
+                WeaponClass::AssaultRifle => 2,
+                WeaponClass::SniperRifle => 3,
+                WeaponClass::Shotgun | WeaponClass::Launcher => 4,
             };
-            assert_eq!(idx, expected, "letter {}", letter as char);
+            let chamber = match class {
+                WeaponClass::Pistol | WeaponClass::Shotgun => 0,
+                WeaponClass::Smg | WeaponClass::Launcher => 1,
+                WeaponClass::AssaultRifle => 2,
+                WeaponClass::SniperRifle => 3,
+            };
+            assert_eq!(bang_index(letter), bang, "bang {}", letter as char);
+            assert_eq!(chamber_index(letter), chamber, "chamber {}", letter as char);
         }
         assert_eq!(bang_index(b'z'), 0);
+        assert_eq!(chamber_index(b'z'), 0);
     }
 }

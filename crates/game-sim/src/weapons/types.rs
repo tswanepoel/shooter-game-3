@@ -85,10 +85,52 @@ impl WeaponDef {
         ammo_for_class(self.class)
     }
 
-    /// Magazine capacity for this blaster (058 draft by class).
+    /// Magazine / tube capacity for this blaster (074).
+    ///
+    /// Semi = muzzle-load: darts in the front tubes (not a strip mag).
+    /// Full-auto / burst keep class magazine sizes (058).
     pub fn mag_capacity(self) -> u16 {
-        crate::mag_capacity_for_class(self.class)
+        match self.mode {
+            FireMode::Semi => {
+                let muzzles = u16::from(muzzle_count_for_letter(self.letter).max(1));
+                let pellets = u16::from(self.pellets.max(1));
+                match self.muzzle_policy {
+                    MuzzlePolicy::Single => pellets,
+                    MuzzlePolicy::Alternate => muzzles,
+                    MuzzlePolicy::All => muzzles.saturating_mul(pellets),
+                }
+            }
+            FireMode::FullAuto | FireMode::Burst => crate::mag_capacity_for_class(self.class),
+        }
     }
+}
+
+/// Kit muzzle counts for letters `a`..=`r` (must match client `BLASTER_MUZZLE_POINTS`).
+pub fn muzzle_count_for_letter(letter: u8) -> u8 {
+    const COUNTS: [u8; 18] = [
+        1, // a
+        1, // b
+        1, // c
+        1, // d
+        1, // e
+        1, // f
+        1, // g
+        1, // h
+        2, // i
+        2, // j
+        1, // k
+        2, // l
+        1, // m
+        1, // n
+        4, // o
+        2, // p
+        2, // q
+        1, // r
+    ];
+    letter
+        .checked_sub(b'a')
+        .and_then(|i| COUNTS.get(i as usize).copied())
+        .unwrap_or(1)
 }
 
 /// Sprint→fire base tax before letter `T_ready` (038).

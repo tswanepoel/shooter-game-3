@@ -74,7 +74,11 @@ impl ClientInner {
                 self.self_state.try_jump();
             }
             if reload && !wheel_open && !self.fire.blocks_weapon_side() {
-                let _ = self.self_state.try_reload();
+                if self.self_state.try_reload() {
+                    if let Some(letter) = self.self_state.active_blaster() {
+                        self.sfx.play_reload(letter);
+                    }
+                }
             }
             if !self.fire.blocks_weapon_side() && !wheel_open {
                 for _ in 0..weapon_steps.unsigned_abs() {

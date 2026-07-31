@@ -45,9 +45,10 @@ fn semi_fires_once_per_edge() {
     // hold
     let d1 = fire.tick(1.0 / 60.0, &mut s, true, 0, eye(), &m);
     assert!(d1.is_empty());
-    // release + press after cooldown
+    // release + press after cooldown (chamber another dart)
     let _ = fire.tick(1.0, &mut s, false, 0, eye(), &m);
     fire.cooldown_s = 0.0;
+    s.primary_mag = 1;
     let d2 = fire.tick(1.0 / 60.0, &mut s, true, 0, eye(), &m);
     assert_eq!(d2.len(), 1);
 }
@@ -627,12 +628,105 @@ fn reload_moves_reserve_into_mag() {
     s.primary_mag = 0;
     s.reserve.light_foam = 5;
     assert!(s.try_reload());
-    assert_eq!(s.primary_mag, 5);
-    assert_eq!(s.reserve.light_foam, 0);
+    assert_eq!(s.primary_mag, 1);
+    assert_eq!(s.reserve.light_foam, 4);
     // Full mag: no more.
     s.primary_mag = s.active_mag_capacity().unwrap();
     s.reserve.light_foam = 10;
     assert!(!s.try_reload());
+}
+
+#[test]
+fn semi_auto_chambers_from_reserve() {
+    let mut fire = FireState::new();
+    let mut s = armed_self();
+    s.set_primary(Some(b'b')).unwrap();
+    s.reserve.light_foam = 3;
+    fire.pay_ready(b'b');
+    fire.ready_s = 0.0;
+
+    let m = muzzles();
+    let d = fire.tick(1.0 / 60.0, &mut s, true, 0, eye(), &m);
+    assert_eq!(d.len(), 1);
+    assert_eq!(s.primary_mag, 0);
+    assert!(fire.chambering());
+
+    // No R pressed: the next dart seats itself after the load time.
+    for _ in 0..60 {
+        let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, eye(), &m);
+    }
+    assert!(!fire.chambering());
+    assert_eq!(s.primary_mag, 1);
+    assert_eq!(s.reserve.light_foam, 2);
+    assert!(fire.take_chambered());
+}
+
+#[test]
+fn semi_auto_chamber_needs_reserve() {
+    let mut fire = FireState::new();
+    let mut s = armed_self();
+    s.set_primary(Some(b'b')).unwrap();
+    s.reserve.light_foam = 0;
+    fire.pay_ready(b'b');
+    fire.ready_s = 0.0;
+
+    let m = muzzles();
+    let _ = fire.tick(1.0 / 60.0, &mut s, true, 0, eye(), &m);
+    for _ in 0..60 {
+        let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, eye(), &m);
+    }
+    assert_eq!(s.primary_mag, 0);
+    assert!(!fire.take_chambered());
+}
+
+#[test]
+fn semi_auto_chamber_waits_until_tubes_empty() {
+    let mut fire = FireState::new();
+    let mut s = armed_self();
+    // Dual-tube pistol `i`: fire both before one chamber.
+    s.set_primary(Some(b'i')).unwrap();
+    s.reserve.light_foam = 4;
+    fire.pay_ready(b'i');
+    fire.ready_s = 0.0;
+
+    let m = vec![Vec3::new(0.0, 1.4, 0.4), Vec3::new(0.0, 1.3, 0.4)];
+    let d0 = fire.tick(1.0 / 60.0, &mut s, true, 0, eye(), &m);
+    assert_eq!(d0.len(), 1);
+    assert_eq!(s.primary_mag, 1);
+    assert!(!fire.chambering());
+
+    let _ = fire.tick(1.0, &mut s, false, 0, eye(), &m);
+    fire.cooldown_s = 0.0;
+    let d1 = fire.tick(1.0 / 60.0, &mut s, true, 0, eye(), &m);
+    assert_eq!(d1.len(), 1);
+    assert_eq!(s.primary_mag, 0);
+    assert!(fire.chambering());
+
+    for _ in 0..60 {
+        let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, eye(), &m);
+    }
+    assert_eq!(s.primary_mag, 2);
+    assert_eq!(s.reserve.light_foam, 2);
+    assert!(fire.take_chambered());
+}
+
+#[test]
+fn full_auto_does_not_auto_chamber() {
+    let mut fire = FireState::new();
+    let mut s = armed_self();
+    s.set_primary(Some(b'p')).unwrap();
+    s.primary_mag = 1;
+    s.reserve.light_foam = 30;
+    fire.pay_ready(b'p');
+    fire.ready_s = 0.0;
+
+    let m = muzzles();
+    let _ = fire.tick(1.0 / 60.0, &mut s, true, 0, eye(), &m);
+    for _ in 0..60 {
+        let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, eye(), &m);
+    }
+    assert_eq!(s.primary_mag, 0);
+    assert!(!fire.take_chambered());
 }
 
 #[test]
@@ -694,17 +788,17 @@ fn grant_floor_blaster_fills_then_swaps() {
     assert_eq!(s.secondary_mag, 7);
     assert_eq!(s.active, ActiveWeapon::Secondary);
 
-    // Both full — swap active (secondary).
+    // Both full — swap active (secondary). Dual-tube `i` clamps to cap 2.
     let displaced = s.grant_floor_blaster(b'i', 5).unwrap();
     assert_eq!(displaced, Some((b'd', 7)));
     assert_eq!(s.secondary, Some(b'i'));
-    assert_eq!(s.secondary_mag, 5);
+    assert_eq!(s.secondary_mag, 2);
 
-    // Active primary — swap primary.
+    // Active primary — swap primary. Semi pistol clamps to cap 1.
     s.active = ActiveWeapon::Primary;
     let displaced = s.grant_floor_blaster(b'b', 3).unwrap();
     assert_eq!(displaced, Some((b'p', 10)));
     assert_eq!(s.primary, Some(b'b'));
-    assert_eq!(s.primary_mag, 3);
+    assert_eq!(s.primary_mag, 1);
     assert_eq!(s.active, ActiveWeapon::Primary);
 }
