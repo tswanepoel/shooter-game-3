@@ -21,9 +21,11 @@ pub struct Sfx {
     bangs: [AudioBuffer; 3],
     gravel_steps: [AudioBuffer; 3],
     cement_steps: [AudioBuffer; 3],
+    grass_steps: [AudioBuffer; 3],
     foot_prev: Option<f32>,
     last_gravel: u8,
     last_cement: u8,
+    last_grass: u8,
     was_air: bool,
 }
 
@@ -88,14 +90,36 @@ impl Sfx {
             )
             .await?,
         ];
+        let grass_steps = [
+            decode_wav(
+                &ctx,
+                pack.get("grass-step1.wav")
+                    .map_err(|e| JsValue::from_str(&e))?,
+            )
+            .await?,
+            decode_wav(
+                &ctx,
+                pack.get("grass-step2.wav")
+                    .map_err(|e| JsValue::from_str(&e))?,
+            )
+            .await?,
+            decode_wav(
+                &ctx,
+                pack.get("grass-step3.wav")
+                    .map_err(|e| JsValue::from_str(&e))?,
+            )
+            .await?,
+        ];
         Ok(Self {
             ctx,
             bangs,
             gravel_steps,
             cement_steps,
+            grass_steps,
             foot_prev: None,
             last_gravel: 0,
             last_cement: 0,
+            last_grass: 0,
             was_air: false,
         })
     }
@@ -153,6 +177,10 @@ impl Sfx {
             FootKind::Cement => {
                 let idx = pick_variant(self.cement_steps.len() as u8, &mut self.last_cement);
                 self.play_buf(&self.cement_steps[idx as usize], gain, when_s);
+            }
+            FootKind::Grass => {
+                let idx = pick_variant(self.grass_steps.len() as u8, &mut self.last_grass);
+                self.play_buf(&self.grass_steps[idx as usize], gain, when_s);
             }
         }
     }

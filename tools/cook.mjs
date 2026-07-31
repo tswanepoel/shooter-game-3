@@ -127,6 +127,21 @@ const PACKS = [
           path: path.join(sourceRoot, 'sfx', 'cement-step3.wav'),
           kind: 'wav',
         },
+        {
+          id: 'grass-step1.wav',
+          path: path.join(sourceRoot, 'sfx', 'grass-step1.wav'),
+          kind: 'wav',
+        },
+        {
+          id: 'grass-step2.wav',
+          path: path.join(sourceRoot, 'sfx', 'grass-step2.wav'),
+          kind: 'wav',
+        },
+        {
+          id: 'grass-step3.wav',
+          path: path.join(sourceRoot, 'sfx', 'grass-step3.wav'),
+          kind: 'wav',
+        },
       ];
     },
   },

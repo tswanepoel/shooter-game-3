@@ -13,3 +13,6 @@ One-shot WAVs for client present (Web Audio). Cook packs them into the `sfx` SGP
 | `cement-step1.wav` | `cement-step1.wav` | Cement foot plant (variant) |
 | `cement-step2.wav` | `cement-step2.wav` | Cement foot plant (variant) |
 | `cement-step3.wav` | `cement-step3.wav` | Cement foot plant (variant) |
+| `grass-step1.wav` | `grass-step1.wav` | Grass foot plant (variant) |
+| `grass-step2.wav` | `grass-step2.wav` | Grass foot plant (variant) |
+| `grass-step3.wav` | `grass-step3.wav` | Grass foot plant (variant) |
