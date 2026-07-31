@@ -87,6 +87,21 @@ const PACKS = [
           path: path.join(sourceRoot, 'sfx', 'bang.wav'),
           kind: 'wav',
         },
+        {
+          id: 'step1.wav',
+          path: path.join(sourceRoot, 'sfx', 'step1.wav'),
+          kind: 'wav',
+        },
+        {
+          id: 'step2.wav',
+          path: path.join(sourceRoot, 'sfx', 'step2.wav'),
+          kind: 'wav',
+        },
+        {
+          id: 'step3.wav',
+          path: path.join(sourceRoot, 'sfx', 'step3.wav'),
+          kind: 'wav',
+        },
       ];
     },
   },

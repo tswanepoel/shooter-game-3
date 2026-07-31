@@ -99,6 +99,9 @@ impl ClientInner {
                 .apply_move_world(dt, 0.0, 0.0, false, &self.map_world);
         }
 
+        self.sfx
+            .note_footsteps(self.self_state.locomotion, self.self_state.walk_phase);
+
         fire_held
     }
 }
