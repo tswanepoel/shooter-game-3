@@ -14,6 +14,7 @@ use crate::lineup::{LineupGpu, LineupState};
 use crate::map_present::{MapGpu, MapPresentState};
 use crate::renderer::MSAA_SAMPLE_COUNT;
 use crate::self_present::{SelfGpu, SelfPresentState};
+use crate::sfx::{Sfx, SfxState};
 
 use super::ClientInner;
 
@@ -297,6 +298,41 @@ pub(crate) fn maybe_kick_map_load(inner: &Rc<RefCell<ClientInner>>) {
                 web_sys::console::error_1(&format!("map load failed: {msg}").into());
                 c.map_present = MapPresentState::Failed;
                 c.map_world = game_sim::MapWorld::empty();
+            }
+        }
+    });
+}
+
+pub(crate) fn maybe_kick_sfx_load(inner: &Rc<RefCell<ClientInner>>) {
+    let should_start = {
+        let c = inner.borrow();
+        matches!(c.sfx, SfxState::Idle)
+    };
+    if !should_start {
+        return;
+    }
+
+    {
+        let mut c = inner.borrow_mut();
+        c.sfx = SfxState::Loading;
+    }
+
+    let inner = inner.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        let result = Sfx::load().await;
+        let mut c = inner.borrow_mut();
+        if !matches!(c.sfx, SfxState::Loading) {
+            return;
+        }
+        match result {
+            Ok(sfx) => {
+                web_sys::console::log_1(&"sfx: bang ready".into());
+                c.sfx = SfxState::Ready(sfx);
+            }
+            Err(err) => {
+                let msg = err.as_string().unwrap_or_else(|| format!("{err:?}"));
+                web_sys::console::error_1(&JsValue::from_str(&format!("sfx load failed: {msg}")));
+                c.sfx = SfxState::Failed;
             }
         }
     });

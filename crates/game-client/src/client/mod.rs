@@ -27,6 +27,7 @@ use crate::preferences::MouseSensitivity;
 use crate::remote_present::RemotePresent;
 use crate::renderer::Renderer;
 use crate::self_present::SelfPresentState;
+use crate::sfx::SfxState;
 use crate::ui_overlay::UiOverlay;
 use crate::view::{FlyInput, ViewController};
 use crate::world_loot::WorldLoot;
@@ -55,6 +56,7 @@ pub(crate) struct ClientInner {
     map_present: MapPresentState,
     /// Sim collide/support for the loaded map (066). Empty until map ready.
     map_world: MapWorld,
+    pub(crate) sfx: SfxState,
     /// Edge detect local death dump (059).
     was_alive: bool,
     last_frame_secs: f64,
@@ -102,6 +104,7 @@ impl ClientInner {
             next_local_drop_id: 1,
             map_present: MapPresentState::Idle,
             map_world: MapWorld::empty(),
+            sfx: SfxState::Idle,
             was_alive: true,
             last_frame_secs: 0.0,
             #[cfg(feature = "debug-tools")]

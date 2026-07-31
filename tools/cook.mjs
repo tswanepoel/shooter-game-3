@@ -6,8 +6,8 @@
  * V1 packs by demand cadence (not authoring kit layout):
  *   kenney-core — character + blaster kits for lineup / play
  *
- * Pack format (SGPK v1): magic + JSON header + concatenated raw files (glb/png as-is).
- * No custom GPU formats; loaders still decode glTF/PNG.
+ * Pack format (SGPK v1): magic + JSON header + concatenated raw files (glb/png/wav as-is).
+ * No custom GPU formats; loaders still decode glTF/PNG / Web Audio decodes wav.
  */
 
 import * as crypto from 'node:crypto';
@@ -73,6 +73,19 @@ const PACKS = [
           id: 'map-a.def',
           path: path.join(sourceRoot, 'map-a.json'),
           kind: 'json',
+        },
+      ];
+    },
+  },
+  {
+    id: 'sfx',
+    sources: ['sfx'],
+    assets() {
+      return [
+        {
+          id: 'bang.wav',
+          path: path.join(sourceRoot, 'sfx', 'bang.wav'),
+          kind: 'wav',
         },
       ];
     },

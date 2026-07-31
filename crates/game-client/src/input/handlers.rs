@@ -133,11 +133,13 @@ pub fn install_input_handlers(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCanv
     {
         let canvas_el = canvas.clone();
         let document_el = document.clone();
+        let inner = inner.clone();
         let on_click = Closure::<dyn FnMut(MouseEvent)>::new(move |event: MouseEvent| {
             if event.button() != 0 {
                 return;
             }
             enter_session_capture(&document_el, &canvas_el);
+            inner.borrow().sfx.resume();
         });
         canvas
             .add_event_listener_with_callback("click", on_click.as_ref().unchecked_ref())
@@ -158,6 +160,7 @@ pub fn install_input_handlers(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCanv
                 return;
             }
             if client.session.is_active() {
+                client.sfx.resume();
                 client.move_input.set_fire_held(true);
             }
         });

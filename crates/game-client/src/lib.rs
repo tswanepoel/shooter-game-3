@@ -39,6 +39,8 @@ mod reticle;
 #[cfg(target_arch = "wasm32")]
 mod self_present;
 #[cfg(target_arch = "wasm32")]
+mod sfx;
+#[cfg(target_arch = "wasm32")]
 mod ui_overlay;
 #[cfg(target_arch = "wasm32")]
 mod view;
@@ -68,7 +70,7 @@ use client::load::maybe_kick_lineup_load;
 #[cfg(target_arch = "wasm32")]
 use client::load::{
     maybe_kick_blaster_drop_loads, maybe_kick_corpse_loads, maybe_kick_map_load,
-    maybe_kick_remote_loads, maybe_kick_self_load,
+    maybe_kick_remote_loads, maybe_kick_self_load, maybe_kick_sfx_load,
 };
 #[cfg(target_arch = "wasm32")]
 pub(crate) use client::ClientInner;
@@ -162,6 +164,7 @@ impl GameClient {
             maybe_kick_corpse_loads(&client);
             maybe_kick_blaster_drop_loads(&client);
             maybe_kick_map_load(&client);
+            maybe_kick_sfx_load(&client);
             #[cfg(feature = "debug-tools")]
             maybe_kick_lineup_load(&client);
 
