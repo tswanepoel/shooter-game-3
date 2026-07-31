@@ -1,6 +1,6 @@
 //! Client one-shot SFX (Web Audio). Present only — not sim.
 
-use game_sim::LocomotionMode;
+use game_sim::{LocomotionMode, WeaponClass};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::JsValue;
 use wasm_bindgen_futures::JsFuture;
@@ -18,7 +18,7 @@ const LAND_STEP_OFFSET_MAX_S: f64 = 0.05;
 
 pub struct Sfx {
     ctx: AudioContext,
-    bang: AudioBuffer,
+    bangs: [AudioBuffer; 3],
     gravel_steps: [AudioBuffer; 3],
     cement_steps: [AudioBuffer; 3],
     foot_prev: Option<f32>,
@@ -31,11 +31,23 @@ impl Sfx {
     pub async fn load() -> Result<Self, JsValue> {
         let ctx = AudioContext::new()?;
         let pack = pack::load_pack("sfx").await?;
-        let bang = decode_wav(
-            &ctx,
-            pack.get("bang.wav").map_err(|e| JsValue::from_str(&e))?,
-        )
-        .await?;
+        let bangs = [
+            decode_wav(
+                &ctx,
+                pack.get("bang1.wav").map_err(|e| JsValue::from_str(&e))?,
+            )
+            .await?,
+            decode_wav(
+                &ctx,
+                pack.get("bang2.wav").map_err(|e| JsValue::from_str(&e))?,
+            )
+            .await?,
+            decode_wav(
+                &ctx,
+                pack.get("bang3.wav").map_err(|e| JsValue::from_str(&e))?,
+            )
+            .await?,
+        ];
         let gravel_steps = [
             decode_wav(
                 &ctx,
@@ -78,7 +90,7 @@ impl Sfx {
         ];
         Ok(Self {
             ctx,
-            bang,
+            bangs,
             gravel_steps,
             cement_steps,
             foot_prev: None,
@@ -92,8 +104,9 @@ impl Sfx {
         let _ = self.ctx.resume();
     }
 
-    pub fn play_bang(&self) {
-        self.play_buf(&self.bang, 1.0, 0.0);
+    pub fn play_bang(&self, letter: u8) {
+        let idx = bang_index(letter);
+        self.play_buf(&self.bangs[idx], 1.0, 0.0);
     }
 
     pub fn note_footsteps(&mut self, loco: LocomotionMode, phase: f32, surface: FootKind) {
@@ -165,6 +178,16 @@ impl Sfx {
     }
 }
 
+/// Per-blaster bang by weapon class weight (071).
+fn bang_index(letter: u8) -> usize {
+    match WeaponClass::from_letter(letter) {
+        Some(WeaponClass::Pistol | WeaponClass::Smg) => 0,
+        Some(WeaponClass::AssaultRifle | WeaponClass::SniperRifle) => 1,
+        Some(WeaponClass::Shotgun | WeaponClass::Launcher) => 2,
+        None => 0,
+    }
+}
+
 fn pick_variant(n: u8, last: &mut u8) -> u8 {
     let mut idx = (js_sys::Math::random() * f64::from(n)).floor() as u8;
     if idx >= n {
@@ -216,9 +239,9 @@ impl SfxState {
         }
     }
 
-    pub fn play_bang(&self) {
+    pub fn play_bang(&self, letter: u8) {
         if let Self::Ready(sfx) = self {
-            sfx.play_bang();
+            sfx.play_bang(letter);
         }
     }
 
@@ -231,7 +254,8 @@ impl SfxState {
 
 #[cfg(test)]
 mod tests {
-    use super::foot_plants;
+    use super::{bang_index, foot_plants};
+    use game_sim::WeaponClass;
 
     #[test]
     fn crosses_half() {
@@ -242,5 +266,28 @@ mod tests {
     #[test]
     fn crosses_wrap() {
         assert_eq!(foot_plants(0.95, 0.05), 1);
+    }
+
+    #[test]
+    fn bang_by_class_weight() {
+        assert_eq!(bang_index(b'b'), 0);
+        assert_eq!(bang_index(b'p'), 0);
+        assert_eq!(bang_index(b'd'), 1);
+        assert_eq!(bang_index(b'e'), 1);
+        assert_eq!(bang_index(b'j'), 2);
+        assert_eq!(bang_index(b'a'), 2);
+        // Every letter maps; unknown falls back to light.
+        for letter in b'a'..=b'r' {
+            let idx = bang_index(letter);
+            assert!(idx < 3);
+            let class = WeaponClass::from_letter(letter).unwrap();
+            let expected = match class {
+                WeaponClass::Pistol | WeaponClass::Smg => 0,
+                WeaponClass::AssaultRifle | WeaponClass::SniperRifle => 1,
+                WeaponClass::Shotgun | WeaponClass::Launcher => 2,
+            };
+            assert_eq!(idx, expected, "letter {}", letter as char);
+        }
+        assert_eq!(bang_index(b'z'), 0);
     }
 }

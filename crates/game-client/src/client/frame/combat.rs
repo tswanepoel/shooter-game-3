@@ -64,7 +64,7 @@ impl ClientInner {
             self.renderer
                 .fire_fx
                 .note_self_discharge(&d.fired_muzzles, &seed_pts);
-            self.sfx.play_bang();
+            self.sfx.play_bang(d.weapon);
         }
 
         if !claimed.is_empty() {

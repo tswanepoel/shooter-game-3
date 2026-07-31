@@ -83,8 +83,18 @@ const PACKS = [
     assets() {
       return [
         {
-          id: 'bang.wav',
-          path: path.join(sourceRoot, 'sfx', 'bang.wav'),
+          id: 'bang1.wav',
+          path: path.join(sourceRoot, 'sfx', 'bang1.wav'),
+          kind: 'wav',
+        },
+        {
+          id: 'bang2.wav',
+          path: path.join(sourceRoot, 'sfx', 'bang2.wav'),
+          kind: 'wav',
+        },
+        {
+          id: 'bang3.wav',
+          path: path.join(sourceRoot, 'sfx', 'bang3.wav'),
           kind: 'wav',
         },
         {

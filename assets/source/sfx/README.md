@@ -4,7 +4,9 @@ One-shot WAVs for client present (Web Audio). Cook packs them into the `sfx` SGP
 
 | Asset id | File | Use |
 | --- | --- | --- |
-| `bang.wav` | `bang.wav` | Accepted fire discharge |
+| `bang1.wav` | `bang1.wav` | Light fire (pistol / SMG) |
+| `bang2.wav` | `bang2.wav` | Mid fire (AR / sniper) |
+| `bang3.wav` | `bang3.wav` | Heavy fire (shotgun / launcher) |
 | `gravel-step1.wav` | `gravel-step1.wav` | Gravel foot plant (variant) |
 | `gravel-step2.wav` | `gravel-step2.wav` | Gravel foot plant (variant) |
 | `gravel-step3.wav` | `gravel-step3.wav` | Gravel foot plant (variant) |
