@@ -1,4 +1,4 @@
-//! Cooked map load and draw (064 landmark, 066 solids, 070/072 foot patches).
+//! Cooked map load and draw (064 landmark, 066 solids, 070/072/073 foot patches).
 
 use glam::{Mat4, Vec3};
 use serde::Deserialize;
@@ -14,6 +14,7 @@ const LANDMARK_COLOR: [f32; 4] = [0.55, 0.62, 0.72, 1.0];
 const BOX_COLOR: [f32; 4] = [0.72, 0.58, 0.42, 1.0];
 const RAMP_COLOR: [f32; 4] = [0.48, 0.66, 0.52, 1.0];
 const CEMENT_PATCH_COLOR: [f32; 4] = [0.58, 0.58, 0.6, 1.0];
+const WET_CEMENT_PATCH_COLOR: [f32; 4] = [0.42, 0.48, 0.52, 1.0];
 const GRAVEL_PATCH_COLOR: [f32; 4] = [0.55, 0.48, 0.38, 1.0];
 const GRASS_PATCH_COLOR: [f32; 4] = [0.42, 0.58, 0.36, 1.0];
 /// Visual slab half-height for foot patches (present only — not collide).
@@ -23,6 +24,7 @@ const FOOT_PATCH_HALF_Y: f32 = 0.02;
 pub enum FootKind {
     Gravel,
     Cement,
+    WetCement,
     Grass,
 }
 
@@ -41,7 +43,7 @@ impl FootPatch {
     }
 }
 
-/// Present-only foot surface patches (`gravel` / `cement` / `grass`). Outside → gravel.
+/// Present-only foot surface patches (`gravel` / `cement` / `wet_cement` / `grass`). Outside → gravel.
 #[derive(Clone, Debug, Default)]
 pub struct FootSurfaces {
     patches: Vec<FootPatch>,
@@ -131,6 +133,7 @@ impl MapGpu {
         for (i, p) in feet.patches.iter().enumerate() {
             let color = match p.kind {
                 FootKind::Cement => CEMENT_PATCH_COLOR,
+                FootKind::WetCement => WET_CEMENT_PATCH_COLOR,
                 FootKind::Gravel => GRAVEL_PATCH_COLOR,
                 FootKind::Grass => GRASS_PATCH_COLOR,
             };
@@ -249,6 +252,7 @@ fn foot_surfaces_from_def(def: &MapDef) -> Result<FootSurfaces, JsValue> {
         let kind = match p.kind.as_str() {
             "gravel" => FootKind::Gravel,
             "cement" => FootKind::Cement,
+            "wet_cement" => FootKind::WetCement,
             "grass" => FootKind::Grass,
             other => {
                 return Err(JsValue::from_str(&format!(

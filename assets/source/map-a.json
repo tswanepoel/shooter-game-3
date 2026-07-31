@@ -62,6 +62,16 @@
       "kind": "grass",
       "position": [5.0, 0.0, -3.5],
       "half_extents": [2.5, 2.0]
+    },
+    {
+      "kind": "wet_cement",
+      "position": [0.0, 0.0, -6.0],
+      "half_extents": [2.5, 2.0]
+    },
+    {
+      "kind": "wet_cement",
+      "position": [5.5, 0.0, 2.5],
+      "half_extents": [2.0, 2.0]
     }
   ]
 }
