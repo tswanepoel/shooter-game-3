@@ -21,7 +21,7 @@ use crate::hit_marker::HitMarker;
 use crate::input::{InputSession, MoveInput, SoftPointer};
 #[cfg(feature = "debug-tools")]
 use crate::lineup::LineupState;
-use crate::map_present::MapPresentState;
+use crate::map_present::{FootSurfaces, MapPresentState};
 use crate::mp;
 use crate::preferences::MouseSensitivity;
 use crate::remote_present::RemotePresent;
@@ -56,6 +56,8 @@ pub(crate) struct ClientInner {
     map_present: MapPresentState,
     /// Sim collide/support for the loaded map (066). Empty until map ready.
     map_world: MapWorld,
+    /// Present-only foot surface patches (070). Empty until map ready.
+    foot_surfaces: FootSurfaces,
     pub(crate) sfx: SfxState,
     /// Edge detect local death dump (059).
     was_alive: bool,
@@ -104,6 +106,7 @@ impl ClientInner {
             next_local_drop_id: 1,
             map_present: MapPresentState::Idle,
             map_world: MapWorld::empty(),
+            foot_surfaces: FootSurfaces::empty(),
             sfx: SfxState::Idle,
             was_alive: true,
             last_frame_secs: 0.0,

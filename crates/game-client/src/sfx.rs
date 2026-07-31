@@ -6,18 +6,24 @@ use wasm_bindgen::JsValue;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{AudioBuffer, AudioContext};
 
+use crate::map_present::FootKind;
 use crate::pack;
 
 const WALK_STEP_GAIN: f32 = 0.12;
 const SPRINT_STEP_GAIN: f32 = 0.28;
-const LAND_STEP_GAIN: f32 = 0.35;
+const LAND_STEP_GAIN: f32 = 0.2;
+/// Second sole on jump/fall land — parallel plant, randomized stagger.
+const LAND_STEP_OFFSET_MIN_S: f64 = 0.015;
+const LAND_STEP_OFFSET_MAX_S: f64 = 0.05;
 
 pub struct Sfx {
     ctx: AudioContext,
     bang: AudioBuffer,
     gravel_steps: [AudioBuffer; 3],
+    cement_steps: [AudioBuffer; 3],
     foot_prev: Option<f32>,
     last_gravel: u8,
+    last_cement: u8,
     was_air: bool,
 }
 
@@ -30,27 +36,54 @@ impl Sfx {
             pack.get("bang.wav").map_err(|e| JsValue::from_str(&e))?,
         )
         .await?;
-        let s1 = decode_wav(
-            &ctx,
-            pack.get("step1.wav").map_err(|e| JsValue::from_str(&e))?,
-        )
-        .await?;
-        let s2 = decode_wav(
-            &ctx,
-            pack.get("step2.wav").map_err(|e| JsValue::from_str(&e))?,
-        )
-        .await?;
-        let s3 = decode_wav(
-            &ctx,
-            pack.get("step3.wav").map_err(|e| JsValue::from_str(&e))?,
-        )
-        .await?;
+        let gravel_steps = [
+            decode_wav(
+                &ctx,
+                pack.get("gravel-step1.wav")
+                    .map_err(|e| JsValue::from_str(&e))?,
+            )
+            .await?,
+            decode_wav(
+                &ctx,
+                pack.get("gravel-step2.wav")
+                    .map_err(|e| JsValue::from_str(&e))?,
+            )
+            .await?,
+            decode_wav(
+                &ctx,
+                pack.get("gravel-step3.wav")
+                    .map_err(|e| JsValue::from_str(&e))?,
+            )
+            .await?,
+        ];
+        let cement_steps = [
+            decode_wav(
+                &ctx,
+                pack.get("cement-step1.wav")
+                    .map_err(|e| JsValue::from_str(&e))?,
+            )
+            .await?,
+            decode_wav(
+                &ctx,
+                pack.get("cement-step2.wav")
+                    .map_err(|e| JsValue::from_str(&e))?,
+            )
+            .await?,
+            decode_wav(
+                &ctx,
+                pack.get("cement-step3.wav")
+                    .map_err(|e| JsValue::from_str(&e))?,
+            )
+            .await?,
+        ];
         Ok(Self {
             ctx,
             bang,
-            gravel_steps: [s1, s2, s3],
+            gravel_steps,
+            cement_steps,
             foot_prev: None,
             last_gravel: 0,
+            last_cement: 0,
             was_air: false,
         })
     }
@@ -60,13 +93,17 @@ impl Sfx {
     }
 
     pub fn play_bang(&self) {
-        self.play_buf(&self.bang, 1.0);
+        self.play_buf(&self.bang, 1.0, 0.0);
     }
 
-    pub fn note_footsteps(&mut self, loco: LocomotionMode, phase: f32) {
+    pub fn note_footsteps(&mut self, loco: LocomotionMode, phase: f32, surface: FootKind) {
         let air = loco.is_air();
         if self.was_air && !air {
-            self.play_gravel_step(LAND_STEP_GAIN);
+            // Two soles land nearly together — distinct variants, randomized stagger.
+            let stagger = LAND_STEP_OFFSET_MIN_S
+                + js_sys::Math::random() * (LAND_STEP_OFFSET_MAX_S - LAND_STEP_OFFSET_MIN_S);
+            self.play_step(surface, LAND_STEP_GAIN, 0.0);
+            self.play_step(surface, LAND_STEP_GAIN, stagger);
         }
         self.was_air = air;
 
@@ -90,24 +127,24 @@ impl Sfx {
             WALK_STEP_GAIN
         };
         for _ in 0..plants {
-            self.play_gravel_step(gain);
+            self.play_step(surface, gain, 0.0);
         }
     }
 
-    fn play_gravel_step(&mut self, gain: f32) {
-        let n = self.gravel_steps.len() as u8;
-        let mut idx = (js_sys::Math::random() * f64::from(n)).floor() as u8;
-        if idx >= n {
-            idx = n - 1;
+    fn play_step(&mut self, surface: FootKind, gain: f32, when_s: f64) {
+        match surface {
+            FootKind::Gravel => {
+                let idx = pick_variant(self.gravel_steps.len() as u8, &mut self.last_gravel);
+                self.play_buf(&self.gravel_steps[idx as usize], gain, when_s);
+            }
+            FootKind::Cement => {
+                let idx = pick_variant(self.cement_steps.len() as u8, &mut self.last_cement);
+                self.play_buf(&self.cement_steps[idx as usize], gain, when_s);
+            }
         }
-        if idx == self.last_gravel {
-            idx = (idx + 1) % n;
-        }
-        self.last_gravel = idx;
-        self.play_buf(&self.gravel_steps[idx as usize], gain);
     }
 
-    fn play_buf(&self, buf: &AudioBuffer, gain: f32) {
+    fn play_buf(&self, buf: &AudioBuffer, gain: f32, when_s: f64) {
         let _ = self.ctx.resume();
         let Ok(src) = self.ctx.create_buffer_source() else {
             return;
@@ -123,8 +160,21 @@ impl Sfx {
         if g.connect_with_audio_node(&self.ctx.destination()).is_err() {
             return;
         }
-        let _ = src.start();
+        let when = self.ctx.current_time() + when_s;
+        let _ = src.start_with_when(when);
     }
+}
+
+fn pick_variant(n: u8, last: &mut u8) -> u8 {
+    let mut idx = (js_sys::Math::random() * f64::from(n)).floor() as u8;
+    if idx >= n {
+        idx = n - 1;
+    }
+    if idx == *last {
+        idx = (idx + 1) % n;
+    }
+    *last = idx;
+    idx
 }
 
 fn foot_plants(prev: f32, curr: f32) -> u32 {
@@ -172,9 +222,9 @@ impl SfxState {
         }
     }
 
-    pub fn note_footsteps(&mut self, loco: LocomotionMode, phase: f32) {
+    pub fn note_footsteps(&mut self, loco: LocomotionMode, phase: f32, surface: FootKind) {
         if let Self::Ready(sfx) = self {
-            sfx.note_footsteps(loco, phase);
+            sfx.note_footsteps(loco, phase, surface);
         }
     }
 }

@@ -31,5 +31,27 @@
     "half_extents": [1.0, 2.0],
     "height": 1.0,
     "yaw": 0.0
-  }
+  },
+  "foot_patches": [
+    {
+      "kind": "cement",
+      "position": [-3.0, 0.0, -3.0],
+      "half_extents": [2.5, 2.5]
+    },
+    {
+      "kind": "cement",
+      "position": [0.5, 0.0, 5.5],
+      "half_extents": [2.0, 1.8]
+    },
+    {
+      "kind": "gravel",
+      "position": [3.0, 0.0, 0.0],
+      "half_extents": [2.5, 2.5]
+    },
+    {
+      "kind": "gravel",
+      "position": [-2.0, 0.0, 3.0],
+      "half_extents": [2.0, 1.5]
+    }
+  ]
 }

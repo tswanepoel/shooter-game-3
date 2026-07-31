@@ -88,18 +88,33 @@ const PACKS = [
           kind: 'wav',
         },
         {
-          id: 'step1.wav',
-          path: path.join(sourceRoot, 'sfx', 'step1.wav'),
+          id: 'gravel-step1.wav',
+          path: path.join(sourceRoot, 'sfx', 'gravel-step1.wav'),
           kind: 'wav',
         },
         {
-          id: 'step2.wav',
-          path: path.join(sourceRoot, 'sfx', 'step2.wav'),
+          id: 'gravel-step2.wav',
+          path: path.join(sourceRoot, 'sfx', 'gravel-step2.wav'),
           kind: 'wav',
         },
         {
-          id: 'step3.wav',
-          path: path.join(sourceRoot, 'sfx', 'step3.wav'),
+          id: 'gravel-step3.wav',
+          path: path.join(sourceRoot, 'sfx', 'gravel-step3.wav'),
+          kind: 'wav',
+        },
+        {
+          id: 'cement-step1.wav',
+          path: path.join(sourceRoot, 'sfx', 'cement-step1.wav'),
+          kind: 'wav',
+        },
+        {
+          id: 'cement-step2.wav',
+          path: path.join(sourceRoot, 'sfx', 'cement-step2.wav'),
+          kind: 'wav',
+        },
+        {
+          id: 'cement-step3.wav',
+          path: path.join(sourceRoot, 'sfx', 'cement-step3.wav'),
           kind: 'wav',
         },
       ];
