@@ -234,6 +234,7 @@ impl ClientInner {
             self.mp.claim_hits(&hits);
             // One flash per claim batch; successive frames re-pulse (044).
             self.hit_marker.pulse();
+            self.sfx.play_hit();
         }
 
         self.hit_marker.tick(dt);

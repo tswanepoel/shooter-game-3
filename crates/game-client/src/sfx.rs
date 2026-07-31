@@ -18,9 +18,10 @@ const LAND_STEP_OFFSET_MAX_S: f64 = 0.05;
 
 pub struct Sfx {
     ctx: AudioContext,
-    bangs: [AudioBuffer; 5],
+    bangs: [AudioBuffer; 4],
     chambers: [AudioBuffer; 4],
     reload: AudioBuffer,
+    hit: AudioBuffer,
     gravel_steps: [AudioBuffer; 3],
     cement_steps: [AudioBuffer; 3],
     wet_cement_steps: [AudioBuffer; 3],
@@ -42,7 +43,6 @@ impl Sfx {
             load_wav(&ctx, &pack, "bang-b.wav").await?,
             load_wav(&ctx, &pack, "bang-c.wav").await?,
             load_wav(&ctx, &pack, "bang-d.wav").await?,
-            load_wav(&ctx, &pack, "bang-e.wav").await?,
         ];
         let chambers = [
             load_wav(&ctx, &pack, "chamber-a.wav").await?,
@@ -51,6 +51,7 @@ impl Sfx {
             load_wav(&ctx, &pack, "chamber-d.wav").await?,
         ];
         let reload = load_wav(&ctx, &pack, "reload-a.wav").await?;
+        let hit = load_wav(&ctx, &pack, "hit.wav").await?;
         let gravel_steps = [
             load_wav(&ctx, &pack, "gravel-step-a.wav").await?,
             load_wav(&ctx, &pack, "gravel-step-b.wav").await?,
@@ -76,6 +77,7 @@ impl Sfx {
             bangs,
             chambers,
             reload,
+            hit,
             gravel_steps,
             cement_steps,
             wet_cement_steps,
@@ -110,6 +112,10 @@ impl Sfx {
     /// Semi auto-chamber landed a dart in the front tube(s) (074).
     pub fn play_chamber_load(&self, letter: u8) {
         self.play_chamber(letter, 0.0);
+    }
+
+    pub fn play_hit(&self) {
+        self.play_buf(&self.hit, 1.0, 0.0);
     }
 
     pub fn note_footsteps(&mut self, loco: LocomotionMode, phase: f32, surface: FootKind) {
@@ -199,14 +205,13 @@ fn is_semi(letter: u8) -> bool {
     weapon_def(letter).is_some_and(|d| d.mode == FireMode::Semi)
 }
 
-/// Fixed bang per weapon class (074). Five clips; launcher shares shotgun.
+/// Bang bank index by class; AR shares sniper, launcher shares shotgun.
 fn bang_index(letter: u8) -> usize {
     match WeaponClass::from_letter(letter) {
         Some(WeaponClass::Pistol) => 0,
         Some(WeaponClass::Smg) => 1,
-        Some(WeaponClass::AssaultRifle) => 2,
-        Some(WeaponClass::SniperRifle) => 3,
-        Some(WeaponClass::Shotgun | WeaponClass::Launcher) => 4,
+        Some(WeaponClass::AssaultRifle | WeaponClass::SniperRifle) => 2,
+        Some(WeaponClass::Shotgun | WeaponClass::Launcher) => 3,
         None => 0,
     }
 }
@@ -296,6 +301,12 @@ impl SfxState {
         }
     }
 
+    pub fn play_hit(&self) {
+        if let Self::Ready(sfx) = self {
+            sfx.play_hit();
+        }
+    }
+
     pub fn note_footsteps(&mut self, loco: LocomotionMode, phase: f32, surface: FootKind) {
         if let Self::Ready(sfx) = self {
             sfx.note_footsteps(loco, phase, surface);
@@ -335,9 +346,9 @@ mod tests {
         assert_eq!(bang_index(b'b'), 0);
         assert_eq!(bang_index(b'p'), 1);
         assert_eq!(bang_index(b'd'), 2);
-        assert_eq!(bang_index(b'e'), 3);
-        assert_eq!(bang_index(b'j'), 4);
-        assert_eq!(bang_index(b'a'), 4);
+        assert_eq!(bang_index(b'e'), 2);
+        assert_eq!(bang_index(b'j'), 3);
+        assert_eq!(bang_index(b'a'), 3);
         assert_eq!(chamber_index(b'b'), 0);
         assert_eq!(chamber_index(b'p'), 1);
         assert_eq!(chamber_index(b'd'), 2);
@@ -349,9 +360,8 @@ mod tests {
             let bang = match class {
                 WeaponClass::Pistol => 0,
                 WeaponClass::Smg => 1,
-                WeaponClass::AssaultRifle => 2,
-                WeaponClass::SniperRifle => 3,
-                WeaponClass::Shotgun | WeaponClass::Launcher => 4,
+                WeaponClass::AssaultRifle | WeaponClass::SniperRifle => 2,
+                WeaponClass::Shotgun | WeaponClass::Launcher => 3,
             };
             let chamber = match class {
                 WeaponClass::Pistol | WeaponClass::Shotgun => 0,
