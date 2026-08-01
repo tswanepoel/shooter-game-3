@@ -42,6 +42,8 @@ Map **a** rail corridor (**090**) runs world **+X**. Instances use yaw **+π/2**
 
 Map **a** stationed train (**091**): same yaw as the rail, own `train.scale`; consist packed front→back (east→west) with `unit_gap` between cars; midpoint at `mid_x`. Optional `ground_cargo` places the lumber pile beside a unit (unloaded story). Tune `train.seat_y`, `train.loco_z_nudge`, `train.unit_gap`, and `ground_cargo.*` on the map def.
 
+Map **a** train collide (**092**): kit AABBs on those roots enter `MapWorld` (flatbed top = deck). Ground cargo `seat_y` buries ~half the pile so only the top layer protrudes — jump pad onto the mid flatbeds.
+
 ## Materials
 
 - Shared material name **`colormap`**: glTF URI `Textures/colormap.png`; this repo stores `textures/colormap.png`

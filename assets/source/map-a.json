@@ -33,7 +33,7 @@
       "side_z": -2.4,
       "along_nudge": 0.0,
       "yaw_nudge": 0.15,
-      "seat_y": 0.04,
+      "seat_y": -0.55,
       "scale": 2.0
     }
   },

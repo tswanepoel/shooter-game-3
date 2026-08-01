@@ -29,7 +29,7 @@ pub const STAMINA_REGEN_S: f32 = 4.0;
 /// Minimum fill required to *start* a sprint (avoid premature flicker).
 pub const STAMINA_MIN_TO_START: f32 = 0.25;
 
-pub const JUMP_PEAK_M: f32 = 1.2;
+pub const JUMP_PEAK_M: f32 = 1.1;
 pub const JUMP_TIME_TO_APEX_S: f32 = 0.25;
 pub const JUMP_GRAVITY_M_S2: f32 = 2.0 * JUMP_PEAK_M / (JUMP_TIME_TO_APEX_S * JUMP_TIME_TO_APEX_S);
 pub const JUMP_LAUNCH_M_S: f32 = JUMP_GRAVITY_M_S2 * JUMP_TIME_TO_APEX_S;

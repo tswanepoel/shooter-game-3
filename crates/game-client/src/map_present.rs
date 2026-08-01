@@ -1,4 +1,4 @@
-//! Cooked map load and draw (064 shipment container, 066 solids, 070/072/073 foot patches, 082 ground, 083 gravel, 084 cement, 085 grass, 086 container albedo, 087 closed door hardware, 088 lit map solids, 089 morning light, 090 rail corridor, 091 stationed train).
+//! Cooked map load and draw (064 shipment container, 066 solids, 070/072/073 foot patches, 082 ground, 083 gravel, 084 cement, 085 grass, 086 container albedo, 087 closed door hardware, 088 lit map solids, 089 morning light, 090 rail corridor, 091 stationed train, 092 train collide).
 
 #[cfg(target_arch = "wasm32")]
 use glam::Mat4;
@@ -328,7 +328,7 @@ struct RailDef {
     scale: f32,
 }
 
-/// Parked freight consist on the rail corridor (091). Present only — no collide.
+/// Parked freight consist on the rail corridor (091 draw; 092 collide/support).
 #[derive(Debug, Deserialize)]
 struct TrainDef {
     centerline_z: f32,
@@ -346,7 +346,7 @@ struct TrainDef {
     ground_cargo: Option<GroundCargoDef>,
 }
 
-/// Present-only ground pile next to the consist (091).
+/// Ground lumber pile beside the consist (091 pose; 092 half-buried jump pad).
 #[derive(Debug, Deserialize)]
 struct GroundCargoDef {
     mesh: String,
@@ -359,6 +359,123 @@ struct GroundCargoDef {
     seat_y: f32,
     #[serde(default = "kit_scale_one")]
     scale: f32,
+}
+
+/// Kit-space collide AABB for a rolling-stock stem (092; flatbed top = deck, not stakes).
+fn train_unit_collide_kit(stem: &str) -> ([f32; 3], [f32; 3]) {
+    match stem {
+        "train-locomotive-c" => ([-0.75, -0.36, -1.4], [0.68, 1.66, 1.4]),
+        "train-carriage-flatbed" => ([-0.55, -0.36, -1.35], [0.55, 0.36, 1.35]),
+        "train-carriage-lumber" => ([-0.55, -0.36, -1.35], [0.55, 0.92, 1.35]),
+        "train-carriage-tank" => ([-0.69, -0.36, -1.35], [0.69, 1.75, 1.35]),
+        _ => ([-0.55, -0.36, -1.35], [0.55, 0.36, 1.35]),
+    }
+}
+
+/// Kit-space bounds for the stripped lumber pile (`lumber-cargo`, 092).
+fn lumber_cargo_collide_kit() -> ([f32; 3], [f32; 3]) {
+    ([-0.48, 0.0, -1.25], [0.48, 0.554, 1.25])
+}
+
+/// Along-track kit origins (`x`) and lateral (`z`) for each unit — shared by draw and collide.
+fn train_unit_roots(train: &TrainDef) -> Vec<(f32, f32)> {
+    let scale = train.scale.max(1e-3);
+    let gap = train.unit_gap.max(0.0);
+    let extents: Vec<(f32, f32)> = train
+        .units
+        .iter()
+        .map(|stem| {
+            let (min, max) = train_unit_collide_kit(stem);
+            (min[2], max[2])
+        })
+        .collect();
+    let mut total = gap * train.units.len().saturating_sub(1) as f32;
+    for &(min_z, max_z) in &extents {
+        total += (max_z - min_z) * scale;
+    }
+    let mut front_tip = train.mid_x + total * 0.5;
+    let mut roots = Vec::with_capacity(train.units.len());
+    for (i, (stem, &(min_z, max_z))) in train.units.iter().zip(extents.iter()).enumerate() {
+        let x = front_tip - max_z * scale;
+        let z = if stem == "train-locomotive-c" {
+            train.centerline_z + train.loco_z_nudge
+        } else {
+            train.centerline_z
+        };
+        roots.push((x, z));
+        front_tip = x + min_z * scale;
+        if i + 1 < train.units.len() {
+            front_tip -= gap;
+        }
+    }
+    roots
+}
+
+/// Axis-aligned `MapBox` for a kit AABB after train yaw (+π/2 → kit +Z = world +X).
+fn kit_map_box(root: Vec3, yaw: f32, scale: f32, min: [f32; 3], max: [f32; 3]) -> MapBox {
+    let scale = scale.max(1e-3);
+    let (s, c) = yaw.sin_cos();
+    let corners = [
+        [min[0], min[1], min[2]],
+        [min[0], min[1], max[2]],
+        [min[0], max[1], min[2]],
+        [min[0], max[1], max[2]],
+        [max[0], min[1], min[2]],
+        [max[0], min[1], max[2]],
+        [max[0], max[1], min[2]],
+        [max[0], max[1], max[2]],
+    ];
+    let mut wmin = Vec3::splat(f32::INFINITY);
+    let mut wmax = Vec3::splat(f32::NEG_INFINITY);
+    for p in corners {
+        let lx = p[0] * scale;
+        let ly = p[1] * scale;
+        let lz = p[2] * scale;
+        let world = root + Vec3::new(c * lx + s * lz, ly, -s * lx + c * lz);
+        wmin = wmin.min(world);
+        wmax = wmax.max(world);
+    }
+    MapBox {
+        center: (wmin + wmax) * 0.5,
+        half: (wmax - wmin) * 0.5,
+    }
+}
+
+fn train_collide_boxes(train: &TrainDef) -> Vec<MapBox> {
+    let scale = train.scale.max(1e-3);
+    let roots = train_unit_roots(train);
+    // Ground probes are point-sampled (066); seal visual `unit_gap` so bodies don't slip between cars.
+    let pad_z = (train.unit_gap * 0.5 + 0.05) / scale;
+    let mut boxes = Vec::with_capacity(roots.len() + 1);
+    for (stem, &(x, z)) in train.units.iter().zip(roots.iter()) {
+        let (min, max) = train_unit_collide_kit(stem);
+        let min = [min[0], min[1], min[2] - pad_z];
+        let max = [max[0], max[1], max[2] + pad_z];
+        boxes.push(kit_map_box(
+            Vec3::new(x, train.seat_y, z),
+            train.yaw,
+            scale,
+            min,
+            max,
+        ));
+    }
+    if let Some(cargo) = &train.ground_cargo {
+        if let Some(&(unit_x, _)) = roots.get(cargo.beside_unit) {
+            let (min, max) = lumber_cargo_collide_kit();
+            boxes.push(kit_map_box(
+                Vec3::new(
+                    unit_x + cargo.along_nudge,
+                    cargo.seat_y,
+                    train.centerline_z + cargo.side_z,
+                ),
+                train.yaw + cargo.yaw_nudge,
+                cargo.scale.max(1e-3),
+                min,
+                max,
+            ));
+        }
+    }
+    boxes
 }
 
 fn kit_scale_one() -> f32 {
@@ -769,49 +886,19 @@ fn upload_stationed_train(
         piece_locals.push(merge_kit_prims(mesh::extract_primitives(pack.get(&id)?)?));
     }
 
-    let gap = train.unit_gap.max(0.0);
-    let mut total = gap * train.units.len().saturating_sub(1) as f32;
-    let mut extents = Vec::with_capacity(piece_locals.len());
-    for local in &piece_locals {
-        let (min_z, max_z) = prim_z_extent(local);
-        if !min_z.is_finite() || !max_z.is_finite() || max_z <= min_z {
-            return Err("train piece missing along-track extent".into());
-        }
-        total += (max_z - min_z) * scale;
-        extents.push((min_z, max_z));
-    }
-
-    let mut front_tip = train.mid_x + total * 0.5;
+    let roots = train_unit_roots(train);
     let mut parts = Vec::with_capacity(piece_locals.len() + 1);
-    let mut unit_centers_x = Vec::with_capacity(piece_locals.len());
-    for (i, ((stem, local), (min_z, max_z))) in train
-        .units
-        .iter()
-        .zip(piece_locals.iter())
-        .zip(extents.iter().copied())
-        .enumerate()
-    {
-        let x = front_tip - max_z * scale;
-        let z = if stem == "train-locomotive-c" {
-            train.centerline_z + train.loco_z_nudge
-        } else {
-            train.centerline_z
-        };
+    for (local, &(x, z)) in piece_locals.iter().zip(roots.iter()) {
         let root = kit_tr_s(Vec3::new(x, train.seat_y, z), train.yaw, scale);
         parts.push((local.clone(), root));
-        unit_centers_x.push(x);
-        front_tip = x + min_z * scale;
-        if i + 1 < train.units.len() {
-            front_tip -= gap;
-        }
     }
 
     if let Some(cargo) = &train.ground_cargo {
         let i = cargo.beside_unit;
-        if i >= unit_centers_x.len() {
+        if i >= roots.len() {
             return Err(format!(
                 "ground_cargo.beside_unit {i} out of range ({} units)",
-                unit_centers_x.len()
+                roots.len()
             ));
         }
         let id = format!("{}.mesh", cargo.mesh);
@@ -819,7 +906,7 @@ fn upload_stationed_train(
         let cargo_scale = cargo.scale.max(1e-3);
         let root = kit_tr_s(
             Vec3::new(
-                unit_centers_x[i] + cargo.along_nudge,
+                roots[i].0 + cargo.along_nudge,
                 cargo.seat_y,
                 train.centerline_z + cargo.side_z,
             ),
@@ -868,17 +955,6 @@ fn prim_min_y(prim: &mesh::CpuPrim) -> f32 {
         .iter()
         .map(|v| v.position[1])
         .fold(f32::INFINITY, f32::min)
-}
-
-#[cfg(target_arch = "wasm32")]
-fn prim_z_extent(prim: &mesh::CpuPrim) -> (f32, f32) {
-    let mut min_z = f32::INFINITY;
-    let mut max_z = f32::NEG_INFINITY;
-    for v in &prim.0 {
-        min_z = min_z.min(v.position[2]);
-        max_z = max_z.max(v.position[2]);
-    }
-    (min_z, max_z)
 }
 
 /// Kit instance root: translate · rotate Y · uniform scale.
@@ -939,7 +1015,12 @@ fn instance_rail_atom(local: &mesh::CpuPrim, rail: &RailDef, xs: &[f32], y: f32)
 }
 
 fn map_world_from_def(def: &MapDef) -> MapWorld {
-    let mut boxes = Vec::with_capacity(1 + def.boxes.len());
+    let train_n = def
+        .train
+        .as_ref()
+        .map(|t| t.units.len() + usize::from(t.ground_cargo.is_some()))
+        .unwrap_or(0);
+    let mut boxes = Vec::with_capacity(1 + def.boxes.len() + train_n);
     boxes.push(MapBox {
         center: Vec3::from_array(def.shipment_container.position),
         half: Vec3::from_array(def.shipment_container.half_extents),
@@ -949,6 +1030,9 @@ fn map_world_from_def(def: &MapDef) -> MapWorld {
             center: Vec3::from_array(b.position),
             half: Vec3::from_array(b.half_extents),
         });
+    }
+    if let Some(train) = &def.train {
+        boxes.extend(train_collide_boxes(train));
     }
     let ramps = def
         .ramp
@@ -1015,7 +1099,7 @@ mod tests {
     fn map_a_train_deserializes() {
         let json = include_str!("../../../assets/source/map-a.json");
         let def: MapDef = serde_json::from_str(json).unwrap();
-        let train = def.train.expect("map a has stationed train");
+        let train = def.train.as_ref().expect("map a has stationed train");
         assert!((train.centerline_z - (-8.0)).abs() < 1e-5);
         assert!((train.mid_x - (-2.7)).abs() < 1e-5);
         assert_eq!(
@@ -1028,10 +1112,10 @@ mod tests {
                 "train-carriage-tank"
             ]
         );
-        let cargo = train.ground_cargo.expect("map a has ground cargo");
+        let cargo = train.ground_cargo.as_ref().expect("map a has ground cargo");
         assert_eq!(cargo.mesh, "lumber-cargo");
         assert_eq!(cargo.beside_unit, 2);
-        let rail = def.rail.expect("map a has rail");
+        let rail = def.rail.as_ref().expect("map a has rail");
         assert!((train.yaw - rail.yaw).abs() < 1e-5);
         assert!((train.centerline_z - rail.centerline_z).abs() < 1e-5);
         assert!((train.scale - 2.0).abs() < 1e-5);
@@ -1040,6 +1124,27 @@ mod tests {
         assert!((train.seat_y - 0.4).abs() < 1e-5);
         assert!((train.loco_z_nudge - (-0.07)).abs() < 1e-5);
         assert!((train.unit_gap - 0.35).abs() < 1e-5);
+        assert!((cargo.seat_y - (-0.55)).abs() < 1e-5);
+        let world = map_world_from_def(&def);
+        let train_boxes = train_collide_boxes(train);
+        assert_eq!(train_boxes.len(), train.units.len() + 1);
+        assert!(world.boxes.len() >= 1 + def.boxes.len() + train_boxes.len());
+        let cargo_box = train_boxes.last().copied().unwrap();
+        assert!(cargo_box.max_y() > 0.4 && cargo_box.max_y() < 0.7);
+        assert!(cargo_box.min_y() < -0.4);
+        let flat_top = train_boxes[2].max_y();
+        assert!(flat_top > 1.0 && flat_top < 1.3);
+        assert!(flat_top - cargo_box.max_y() < 1.1);
+        // Adjacent unit boxes overlap / meet along X (gap sealed).
+        for i in 0..train.units.len() - 1 {
+            let a = train_boxes[i];
+            let b = train_boxes[i + 1];
+            let a_min_x = a.center.x - a.half.x;
+            let a_max_x = a.center.x + a.half.x;
+            let b_min_x = b.center.x - b.half.x;
+            let b_max_x = b.center.x + b.half.x;
+            assert!(a_min_x <= b_max_x + 1e-3 && b_min_x <= a_max_x + 1e-3);
+        }
     }
 
     #[test]

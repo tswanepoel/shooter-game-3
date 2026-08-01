@@ -138,7 +138,7 @@ With `npm run dev`, press **`` ` ``** (backtick) for the in-game developer conso
 | **Click canvas** | Enter / resume input session |
 | **WASD** | Walk (mounted; look-relative) |
 | **Shift** | Tap to sprint (sticky until empty/stop; stamina-limited; mounted) |
-| **Space** | Jump (mounted; ~1.2 m peak) |
+| **Space** | Jump (mounted; ~1.1 m peak) |
 | **Mouse wheel** | Toggle primary ↔ secondary (mounted; instant) |
 | **Mouse** | Look / aim |
 | **`` ` ``** | Toggle developer console |
