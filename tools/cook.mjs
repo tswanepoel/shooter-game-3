@@ -66,13 +66,28 @@ const PACKS = [
   },
   {
     id: 'maps-a',
-    sources: ['map-a.json'],
+    sources: ['map-a.json', 'materials'],
     assets() {
+      const materialsDir = path.join(sourceRoot, 'materials');
+      const gravelCandidates = [
+        { file: 'gravel.jpg', kind: 'jpg' },
+        { file: 'gravel.jpeg', kind: 'jpg' },
+        { file: 'gravel.png', kind: 'png' },
+      ];
+      const gravel = gravelCandidates.find((c) => fs.existsSync(path.join(materialsDir, c.file)));
+      if (!gravel) {
+        throw new Error('missing gravel albedo: expected materials/gravel.jpg|.jpeg|.png');
+      }
       return [
         {
           id: 'map-a.def',
           path: path.join(sourceRoot, 'map-a.json'),
           kind: 'json',
+        },
+        {
+          id: 'gravel.albedo',
+          path: path.join(materialsDir, gravel.file),
+          kind: gravel.kind,
         },
       ];
     },

@@ -60,6 +60,7 @@ egui-wgpu = "0.31"
 # Kit marks KHR_materials_unlit as required; enable so parse does not reject the GLBs.
 gltf = { version = "1.4", default-features = false, features = ["utils", "names", "KHR_materials_unlit", "extensions"] }
 png = "0.17"
+jpeg-decoder = { version = "0.3", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

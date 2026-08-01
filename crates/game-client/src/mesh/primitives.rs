@@ -21,6 +21,14 @@ pub fn transform_vertex(v: &mut MeshVertex, m: Mat4) {
     };
 }
 
+/// Assign UVs from world XZ metres so albedo tiles in place (083).
+pub fn assign_world_xz_uvs(verts: &mut [MeshVertex], metres_per_tile: f32) {
+    let s = 1.0 / metres_per_tile.max(1e-4);
+    for v in verts {
+        v.uv = [v.position[0] * s, v.position[2] * s];
+    }
+}
+
 pub fn box_prim(half: glam::Vec3, color: [f32; 4]) -> CpuPrim {
     let hx = half.x;
     let hy = half.y;
@@ -147,4 +155,21 @@ pub fn unit_sphere_prim(segments: u32, rings: u32) -> CpuPrim {
     }
 
     (verts, indices, [1.0, 1.0, 1.0, 1.0])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn world_xz_uvs_from_metres() {
+        let mut verts = [MeshVertex {
+            position: [3.0, 0.0, -1.5],
+            normal: [0.0, 1.0, 0.0],
+            uv: [0.0, 0.0],
+        }];
+        assign_world_xz_uvs(&mut verts, 1.5);
+        assert!((verts[0].uv[0] - 2.0).abs() < 1e-5);
+        assert!((verts[0].uv[1] - (-1.0)).abs() < 1e-5);
+    }
 }

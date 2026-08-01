@@ -10,7 +10,7 @@ use super::gltf::{extract_character_hold, extract_primitives};
 use super::gpu::{GpuPrimitive, MeshBatch, UploadCtx};
 #[cfg(feature = "debug-tools")]
 use super::kit::{held_blaster_root, kit_to_world, letter_index};
-use super::primitives::{transform_vertex, CpuPrim, MeshVertex};
+use super::primitives::{assign_world_xz_uvs, transform_vertex, CpuPrim, MeshVertex};
 use super::shader::MaterialUniforms;
 
 /// Upload character + held blaster. Returns batches and the **held_blaster** root (037)
@@ -296,6 +296,127 @@ pub fn upload_solid_batch(
     })
 }
 
+/// Unlit solid with a real albedo PNG, world-XZ tiling UVs, and full mips (083).
+pub fn upload_textured_solid_batch(
+    gpu: &UploadCtx<'_>,
+    png: &[u8],
+    prim: CpuPrim,
+    root: Mat4,
+    color: [f32; 4],
+    metres_per_tile: f32,
+    label: &str,
+) -> Result<MeshBatch, String> {
+    let (tex_w, tex_h, rgba) = decode_rgba8(png)?;
+    let mips = rgba_mip_levels(tex_w, tex_h, rgba);
+    let mip_count = mips.len() as u32;
+    let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width: tex_w,
+            height: tex_h,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: mip_count,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    for (level, (mw, mh, pixels)) in mips.into_iter().enumerate() {
+        gpu.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: level as u32,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &pixels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * mw),
+                rows_per_image: Some(mh),
+            },
+            wgpu::Extent3d {
+                width: mw,
+                height: mh,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+    let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+    let material_uniform = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("map-textured-solid-material"),
+        size: std::mem::size_of::<MaterialUniforms>() as u64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    gpu.queue.write_buffer(
+        &material_uniform,
+        0,
+        bytemuck::bytes_of(&MaterialUniforms {
+            base_color: color,
+            flags: [0.0, 0.0, 0.0, 0.0],
+        }),
+    );
+
+    let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("map-textured-solid-material-bg"),
+        layout: gpu.material_bgl,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: material_uniform.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(&texture_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Sampler(gpu.sampler),
+            },
+        ],
+    });
+
+    let (mut verts, indices, _) = prim;
+    for v in &mut verts {
+        transform_vertex(v, root);
+    }
+    assign_world_xz_uvs(&mut verts, metres_per_tile);
+
+    let vbuf = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("map-textured-solid-vertices"),
+        size: (verts.len() * std::mem::size_of::<MeshVertex>()) as u64,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    gpu.queue
+        .write_buffer(&vbuf, 0, bytemuck::cast_slice(&verts));
+
+    let ibuf = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("map-textured-solid-indices"),
+        size: (indices.len() * std::mem::size_of::<u32>()) as u64,
+        usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    gpu.queue
+        .write_buffer(&ibuf, 0, bytemuck::cast_slice(&indices));
+
+    Ok(MeshBatch {
+        primitives: vec![GpuPrimitive {
+            vertex_buffer: vbuf,
+            index_buffer: ibuf,
+            index_count: indices.len() as u32,
+        }],
+        bind_group,
+        _texture: texture,
+        _texture_view: texture_view,
+        _material_uniform: material_uniform,
+    })
+}
+
 fn rgba_mip_levels(width: u32, height: u32, rgba: Vec<u8>) -> Vec<(u32, u32, Vec<u8>)> {
     let mut levels = Vec::new();
     let mut w = width.max(1);
@@ -335,7 +456,50 @@ fn rgba_mip_levels(width: u32, height: u32, rgba: Vec<u8>) -> Vec<(u32, u32, Vec
     levels
 }
 
-fn decode_rgba8(png_bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
+fn decode_rgba8(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
+    if bytes.len() >= 3 && bytes[0] == 0xff && bytes[1] == 0xd8 && bytes[2] == 0xff {
+        return decode_jpeg_rgba8(bytes);
+    }
+    if bytes.len() >= 8 && bytes[0..8] == [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a] {
+        return decode_png_rgba8(bytes);
+    }
+    Err("albedo: expected PNG or JPEG magic".into())
+}
+
+fn decode_jpeg_rgba8(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
+    let mut decoder = jpeg_decoder::Decoder::new(Cursor::new(bytes));
+    let pixels = decoder.decode().map_err(|e| format!("jpeg decode: {e}"))?;
+    let info = decoder
+        .info()
+        .ok_or_else(|| "jpeg decode: missing info".to_string())?;
+    let w = info.width as u32;
+    let h = info.height as u32;
+    let rgba = match info.pixel_format {
+        jpeg_decoder::PixelFormat::L8 => {
+            let mut rgba = Vec::with_capacity(pixels.len() * 4);
+            for &v in &pixels {
+                rgba.extend_from_slice(&[v, v, v, 255]);
+            }
+            rgba
+        }
+        jpeg_decoder::PixelFormat::L16 => {
+            return Err("jpeg decode: unsupported 16-bit grayscale".into());
+        }
+        jpeg_decoder::PixelFormat::RGB24 => {
+            let mut rgba = Vec::with_capacity((pixels.len() / 3) * 4);
+            for chunk in pixels.chunks_exact(3) {
+                rgba.extend_from_slice(&[chunk[0], chunk[1], chunk[2], 255]);
+            }
+            rgba
+        }
+        jpeg_decoder::PixelFormat::CMYK32 => {
+            return Err("jpeg decode: unsupported CMYK".into());
+        }
+    };
+    Ok((w, h, rgba))
+}
+
+fn decode_png_rgba8(png_bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     let mut decoder = png::Decoder::new(Cursor::new(png_bytes));
     decoder.set_transformations(png::Transformations::EXPAND);
     let mut reader = decoder

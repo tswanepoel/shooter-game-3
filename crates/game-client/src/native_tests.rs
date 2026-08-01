@@ -32,3 +32,6 @@ mod preferences;
 
 #[path = "map_present.rs"]
 mod map_present;
+
+#[path = "mesh/primitives.rs"]
+mod mesh_primitives;

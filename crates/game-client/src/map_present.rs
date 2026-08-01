@@ -1,4 +1,4 @@
-//! Cooked map load and draw (064 landmark, 066 solids, 070/072/073 foot patches, 082 ground).
+//! Cooked map load and draw (064 landmark, 066 solids, 070/072/073 foot patches, 082 ground, 083 gravel albedo).
 
 #[cfg(target_arch = "wasm32")]
 use glam::Mat4;
@@ -20,6 +20,8 @@ const BOX_COLOR: [f32; 4] = [0.72, 0.58, 0.42, 1.0];
 const RAMP_COLOR: [f32; 4] = [0.48, 0.66, 0.52, 1.0];
 /// Visual slab half-height for ground and foot pads (present only — not collide).
 const FOOT_PATCH_HALF_Y: f32 = 0.02;
+/// World metres per gravel albedo tile (083).
+const GRAVEL_METRES_PER_TILE: f32 = 1.5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FootKind {
@@ -33,7 +35,7 @@ impl FootKind {
     /// Shared kind → albedo for ground and foot pads (082).
     pub fn albedo(self) -> [f32; 4] {
         match self {
-            Self::Gravel => [0.55, 0.48, 0.38, 1.0],
+            Self::Gravel => [1.0, 1.0, 1.0, 1.0],
             Self::Cement => [0.58, 0.58, 0.6, 1.0],
             Self::WetCement => [0.42, 0.48, 0.52, 1.0],
             Self::Grass => [0.42, 0.58, 0.36, 1.0],
@@ -154,7 +156,7 @@ impl MapGpu {
         let gpu = layout.upload_ctx(device, queue);
         let mut batches = Vec::new();
 
-        // Ground under override pads (082).
+        // Ground under override pads (082); textured gravel when albedo loads (083).
         let gravel = FootKind::Gravel.albedo();
         let ground_half = Vec3::new(
             def.ground.half_extents[0],
@@ -166,16 +168,34 @@ impl MapGpu {
             FOOT_PATCH_HALF_Y,
             def.ground.position[2],
         ));
-        batches.push(
-            mesh::upload_solid_batch(
+        let textured_ground = pack.get("gravel.albedo").and_then(|png| {
+            mesh::upload_textured_solid_batch(
                 &gpu,
+                png,
                 mesh::box_prim(ground_half, gravel),
                 ground_root,
                 gravel,
+                GRAVEL_METRES_PER_TILE,
                 "map-a-ground",
             )
-            .map_err(|e| JsValue::from_str(&e))?,
-        );
+        });
+        let ground_batch = match textured_ground {
+            Ok(batch) => batch,
+            Err(e) => {
+                web_sys::console::warn_1(
+                    &format!("map: gravel albedo unusable ({e}); flat ground").into(),
+                );
+                mesh::upload_solid_batch(
+                    &gpu,
+                    mesh::box_prim(ground_half, gravel),
+                    ground_root,
+                    gravel,
+                    "map-a-ground",
+                )
+                .map_err(|e| JsValue::from_str(&e))?
+            }
+        };
+        batches.push(ground_batch);
 
         // Pads sit on the ground top to avoid z-fight with the gravel slab.
         let pad_center_y = FOOT_PATCH_HALF_Y * 3.0;
@@ -334,7 +354,7 @@ mod tests {
 
     #[test]
     fn foot_kind_albedo_table() {
-        assert_eq!(FootKind::Gravel.albedo()[0], 0.55);
+        assert_eq!(FootKind::Gravel.albedo(), [1.0, 1.0, 1.0, 1.0]);
         assert_eq!(FootKind::Cement.albedo()[0], 0.58);
         assert_eq!(FootKind::WetCement.albedo()[0], 0.42);
         assert_eq!(FootKind::Grass.albedo()[1], 0.58);
