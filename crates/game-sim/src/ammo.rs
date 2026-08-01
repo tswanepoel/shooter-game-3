@@ -85,31 +85,186 @@ impl ReserveAmmo {
 }
 
 /// Magazine capacity by weapon class for **mag-fed** modes (full-auto / burst).
-/// Semi muzzle-load capacities live on [`crate::WeaponDef::mag_capacity`] (074).
+/// Prefer [`letter_ammo`] / [`WeaponDef::mag_capacity`] (081); kept for class fallbacks.
 pub fn mag_capacity_for_class(class: WeaponClass) -> u16 {
     match class {
-        WeaponClass::Launcher => 1,
+        WeaponClass::Launcher => 0,
         WeaponClass::Pistol => 12,
-        WeaponClass::Smg | WeaponClass::AssaultRifle | WeaponClass::Shotgun => 30,
-        WeaponClass::SniperRifle => 5,
+        WeaponClass::Smg => 24,
+        WeaponClass::AssaultRifle => 20,
+        WeaponClass::Shotgun => 6,
+        WeaponClass::SniperRifle => 6,
     }
 }
 
-/// Spawn reserve draft for a kind the loadout uses (058).
+/// Per-letter chamber / pump / mag / load / spare (081).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LetterAmmo {
+    pub chamber: u16,
+    pub pump: u16,
+    pub mag: u16,
+    pub load: u16,
+    pub spare: u16,
+}
+
+/// Look up letter `a`..=`r` ammo tune.
+pub fn letter_ammo(letter: u8) -> Option<&'static LetterAmmo> {
+    let i = (letter as usize).checked_sub(b'a' as usize)?;
+    LETTER_AMMO.get(i)
+}
+
+pub fn spawn_spare_for_letter(letter: u8) -> u16 {
+    letter_ammo(letter).map(|t| t.spare).unwrap_or(0)
+}
+
+pub fn spawn_mag_for_letter(letter: u8) -> u16 {
+    letter_ammo(letter).map(|t| t.load.min(t.mag)).unwrap_or(0)
+}
+
+const LETTER_AMMO: [LetterAmmo; 18] = [
+    LetterAmmo {
+        chamber: 1,
+        pump: 1,
+        mag: 0,
+        load: 0,
+        spare: 2,
+    }, // a
+    LetterAmmo {
+        chamber: 1,
+        pump: 0,
+        mag: 12,
+        load: 8,
+        spare: 30,
+    }, // b
+    LetterAmmo {
+        chamber: 1,
+        pump: 0,
+        mag: 24,
+        load: 20,
+        spare: 60,
+    }, // c
+    LetterAmmo {
+        chamber: 1,
+        pump: 0,
+        mag: 24,
+        load: 18,
+        spare: 48,
+    }, // d
+    LetterAmmo {
+        chamber: 1,
+        pump: 1,
+        mag: 6,
+        load: 4,
+        spare: 12,
+    }, // e
+    LetterAmmo {
+        chamber: 1,
+        pump: 1,
+        mag: 6,
+        load: 4,
+        spare: 12,
+    }, // f
+    LetterAmmo {
+        chamber: 1,
+        pump: 0,
+        mag: 24,
+        load: 20,
+        spare: 60,
+    }, // g
+    LetterAmmo {
+        chamber: 1,
+        pump: 0,
+        mag: 24,
+        load: 20,
+        spare: 60,
+    }, // h
+    LetterAmmo {
+        chamber: 2,
+        pump: 2,
+        mag: 0,
+        load: 0,
+        spare: 30,
+    }, // i
+    LetterAmmo {
+        chamber: 2,
+        pump: 2,
+        mag: 0,
+        load: 0,
+        spare: 24,
+    }, // j
+    LetterAmmo {
+        chamber: 1,
+        pump: 1,
+        mag: 6,
+        load: 4,
+        spare: 18,
+    }, // k
+    LetterAmmo {
+        chamber: 1,
+        pump: 0,
+        mag: 24,
+        load: 20,
+        spare: 60,
+    }, // l
+    LetterAmmo {
+        chamber: 1,
+        pump: 0,
+        mag: 24,
+        load: 20,
+        spare: 60,
+    }, // m
+    LetterAmmo {
+        chamber: 1,
+        pump: 0,
+        mag: 20,
+        load: 16,
+        spare: 48,
+    }, // n
+    LetterAmmo {
+        chamber: 4,
+        pump: 4,
+        mag: 0,
+        load: 0,
+        spare: 24,
+    }, // o
+    LetterAmmo {
+        chamber: 1,
+        pump: 0,
+        mag: 24,
+        load: 20,
+        spare: 60,
+    }, // p
+    LetterAmmo {
+        chamber: 1,
+        pump: 0,
+        mag: 20,
+        load: 16,
+        spare: 48,
+    }, // q
+    LetterAmmo {
+        chamber: 1,
+        pump: 0,
+        mag: 20,
+        load: 16,
+        spare: 48,
+    }, // r
+];
+
+/// Spawn reserve draft for a kind (legacy single-kind path). Prefer letter spares.
 pub fn spawn_reserve_for(kind: AmmoKind) -> u16 {
     match kind {
-        AmmoKind::LightFoam => 90,
-        AmmoKind::ThickFoam => 20,
-        AmmoKind::Grenade => 4,
+        AmmoKind::LightFoam => 60,
+        AmmoKind::ThickFoam => 12,
+        AmmoKind::Grenade => 2,
     }
 }
 
-/// Max reserve rounds a player may carry per kind (059).
+/// Max reserve rounds a player may carry per kind (059 / 081): ~2× largest spawn spare.
 pub fn reserve_capacity_for(kind: AmmoKind) -> u16 {
     match kind {
-        AmmoKind::LightFoam => 180,
-        AmmoKind::ThickFoam => 40,
-        AmmoKind::Grenade => 8,
+        AmmoKind::LightFoam => 120,
+        AmmoKind::ThickFoam => 24,
+        AmmoKind::Grenade => 4,
     }
 }
 
@@ -118,10 +273,15 @@ pub fn max_dump_rounds_for(kind: AmmoKind) -> u16 {
     reserve_capacity_for(kind)
 }
 
-/// Clamp magazine rounds for a floor blaster letter (067).
+/// Clamp rounds for a floor blaster letter (067). No-mag → chamber capacity.
 pub fn clamp_blaster_mag(letter: u8, mag: u16) -> Option<u16> {
     let def = crate::weapon_def(letter)?;
-    Some(mag.min(def.mag_capacity()))
+    let cap = if def.has_magazine() {
+        def.mag_capacity()
+    } else {
+        def.chamber_capacity()
+    };
+    Some(mag.min(cap))
 }
 
 /// Round-only facts. Mass is the source of truth here — not on the blaster.
@@ -205,12 +365,12 @@ mod tests {
 
     #[test]
     fn mag_capacity_by_class() {
-        assert_eq!(mag_capacity_for_class(WeaponClass::Launcher), 1);
+        assert_eq!(mag_capacity_for_class(WeaponClass::Launcher), 0);
         assert_eq!(mag_capacity_for_class(WeaponClass::Pistol), 12);
-        assert_eq!(mag_capacity_for_class(WeaponClass::Smg), 30);
-        assert_eq!(mag_capacity_for_class(WeaponClass::AssaultRifle), 30);
-        assert_eq!(mag_capacity_for_class(WeaponClass::Shotgun), 30);
-        assert_eq!(mag_capacity_for_class(WeaponClass::SniperRifle), 5);
+        assert_eq!(mag_capacity_for_class(WeaponClass::Smg), 24);
+        assert_eq!(mag_capacity_for_class(WeaponClass::AssaultRifle), 20);
+        assert_eq!(mag_capacity_for_class(WeaponClass::Shotgun), 6);
+        assert_eq!(mag_capacity_for_class(WeaponClass::SniperRifle), 6);
     }
 
     #[test]

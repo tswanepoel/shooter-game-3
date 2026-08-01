@@ -17,6 +17,7 @@ use super::apply::{apply_roster, apply_you_spawned};
 use super::cookie::save_display_name_cookie;
 use super::shared::{BlasterGrantBatch, DeathAnnounceBatch, LootGrantBatch};
 use super::{client_now_secs, MpPhase, PeerImpactHitBatch, PeerProjectileBatch, Shared};
+use game_sim::prefer_armed_slot;
 
 const IDENTITY_PATH: &str = "/__debug/wt-identity";
 
@@ -195,7 +196,7 @@ fn handle_s2c(shared: &Rc<RefCell<Shared>>, msg: ServerToClient, t4: f64) {
             let loadout = super::apply::PendingSpawnLoadout {
                 primary: s.staged_primary,
                 secondary: s.staged_secondary,
-                active: s.staged_active,
+                active: prefer_armed_slot(s.staged_primary, s.staged_secondary, s.staged_active),
             };
             let Shared {
                 phase,

@@ -85,23 +85,25 @@ impl WeaponDef {
         ammo_for_class(self.class)
     }
 
-    /// Magazine / tube capacity for this blaster (074).
-    ///
-    /// Semi = muzzle-load: darts in the front tubes (not a strip mag).
-    /// Full-auto / burst keep class magazine sizes (058).
     pub fn mag_capacity(self) -> u16 {
-        match self.mode {
-            FireMode::Semi => {
-                let muzzles = u16::from(muzzle_count_for_letter(self.letter).max(1));
-                let pellets = u16::from(self.pellets.max(1));
-                match self.muzzle_policy {
-                    MuzzlePolicy::Single => pellets,
-                    MuzzlePolicy::Alternate => muzzles,
-                    MuzzlePolicy::All => muzzles.saturating_mul(pellets),
-                }
-            }
-            FireMode::FullAuto | FireMode::Burst => crate::mag_capacity_for_class(self.class),
-        }
+        crate::letter_ammo(self.letter)
+            .map(|t| t.mag)
+            .unwrap_or_else(|| crate::mag_capacity_for_class(self.class))
+    }
+
+    pub fn has_magazine(self) -> bool {
+        self.mag_capacity() > 0
+    }
+
+    pub fn pump_count(self) -> u16 {
+        crate::letter_ammo(self.letter).map(|t| t.pump).unwrap_or(0)
+    }
+
+    pub fn chamber_capacity(self) -> u16 {
+        crate::letter_ammo(self.letter)
+            .map(|t| t.chamber)
+            .unwrap_or(1)
+            .max(1)
     }
 }
 

@@ -65,3 +65,23 @@ pub enum ActiveWeapon {
     Primary,
     Secondary,
 }
+
+/// Prefer a filled slot when `active` points at empty and the other hand holds a blaster (081).
+pub fn prefer_armed_slot(
+    primary: Option<u8>,
+    secondary: Option<u8>,
+    active: ActiveWeapon,
+) -> ActiveWeapon {
+    let active_filled = match active {
+        ActiveWeapon::Primary => primary.is_some(),
+        ActiveWeapon::Secondary => secondary.is_some(),
+    };
+    if active_filled {
+        return active;
+    }
+    match active {
+        ActiveWeapon::Primary if secondary.is_some() => ActiveWeapon::Secondary,
+        ActiveWeapon::Secondary if primary.is_some() => ActiveWeapon::Primary,
+        _ => active,
+    }
+}

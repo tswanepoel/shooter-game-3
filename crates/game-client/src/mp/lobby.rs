@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use game_net::{is_known_character, normalize_display_name, ClientToServer, NetRole};
-use game_sim::{ActiveWeapon, WeaponClass};
+use game_sim::{prefer_armed_slot, ActiveWeapon, WeaponClass};
 use js_sys::Reflect;
 use wasm_bindgen::JsCast;
 
@@ -133,6 +133,7 @@ pub(crate) fn stage_primary(shared: &RefCell<Shared>, letter: Option<u8>) -> boo
         return false;
     }
     s.staged_primary = letter;
+    s.staged_active = prefer_armed_slot(s.staged_primary, s.staged_secondary, s.staged_active);
     s.spawn_requested = false;
     s.spawn_retry_accum = 0.0;
     true
@@ -151,6 +152,7 @@ pub(crate) fn stage_secondary(shared: &RefCell<Shared>, letter: Option<u8>) -> b
         return false;
     }
     s.staged_secondary = letter;
+    s.staged_active = prefer_armed_slot(s.staged_primary, s.staged_secondary, s.staged_active);
     s.spawn_requested = false;
     s.spawn_retry_accum = 0.0;
     true
@@ -161,7 +163,7 @@ pub(crate) fn stage_active(shared: &RefCell<Shared>, active: ActiveWeapon) {
     if s.phase != MpPhase::Ready {
         return;
     }
-    s.staged_active = active;
+    s.staged_active = prefer_armed_slot(s.staged_primary, s.staged_secondary, active);
     s.spawn_requested = false;
     s.spawn_retry_accum = 0.0;
 }

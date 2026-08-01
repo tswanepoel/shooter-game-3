@@ -163,7 +163,7 @@ mod tests {
     fn clamp_blaster_mag_caps() {
         let (letter, mag) = clamp_blaster_dump(b'b', 999).expect("pistol");
         assert_eq!(letter, b'b');
-        assert_eq!(mag, 1);
+        assert_eq!(mag, 12);
         assert!(clamp_blaster_dump(b'z', 1).is_none());
     }
 

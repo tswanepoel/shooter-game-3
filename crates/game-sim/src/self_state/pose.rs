@@ -22,10 +22,10 @@ const NECK_FOLD_BUDGET_RAD: f32 = 50.0_f32.to_radians();
 
 const FIRE_CONTINUE_FALL_MULT: f32 = 6.0;
 
-const HIT_FOLD_DEG_PER_DMG: f32 = 0.055;
-const HIT_TWIST_DEG_PER_DMG: f32 = 0.022;
-const HIT_FOLD_CAP_DEG: f32 = 1.6;
-const HIT_TWIST_CAP_DEG: f32 = 0.65;
+const HIT_FOLD_DEG_PER_DMG: f32 = 0.13;
+const HIT_TWIST_DEG_PER_DMG: f32 = 0.05;
+const HIT_FOLD_CAP_DEG: f32 = 3.0;
+const HIT_TWIST_CAP_DEG: f32 = 1.2;
 pub(crate) const HIT_FALL_S: f32 = 0.12;
 
 fn fall_toward_zero(value: f32, dt: f32, fall_s: f32) -> f32 {

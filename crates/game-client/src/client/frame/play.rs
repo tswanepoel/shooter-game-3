@@ -74,10 +74,8 @@ impl ClientInner {
                 self.self_state.try_jump();
             }
             if reload && !wheel_open && !self.fire.blocks_weapon_side() {
-                if self.self_state.try_reload() {
-                    if let Some(letter) = self.self_state.active_blaster() {
-                        self.sfx.play_reload(letter);
-                    }
+                if let Some(letter) = self.fire.begin_reload(&self.self_state) {
+                    self.sfx.play_reload(letter);
                 }
             }
             if !self.fire.blocks_weapon_side() && !wheel_open {

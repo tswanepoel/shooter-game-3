@@ -1,7 +1,7 @@
 //! Reliable/datagram C2S helpers while Shared is borrowed.
 
 use game_net::{encode_c2s_frame, ClientToServer, NetActiveWeapon, DEFAULT_MAP};
-use game_sim::ActiveWeapon;
+use game_sim::{prefer_armed_slot, ActiveWeapon};
 use js_sys::Uint8Array;
 
 use super::shared::Shared;
@@ -10,12 +10,13 @@ use super::shared::Shared;
 pub(crate) const SPAWN_RETRY_SECS: f32 = 0.5;
 
 pub(crate) fn send_spawn_locked(s: &Shared) {
+    let active = prefer_armed_slot(s.staged_primary, s.staged_secondary, s.staged_active);
     send_reliable_locked(
         s,
         &ClientToServer::Spawn {
             primary: s.staged_primary,
             secondary: s.staged_secondary,
-            active: match s.staged_active {
+            active: match active {
                 ActiveWeapon::Primary => NetActiveWeapon::Primary,
                 ActiveWeapon::Secondary => NetActiveWeapon::Secondary,
             },

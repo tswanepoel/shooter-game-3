@@ -4,8 +4,8 @@ use glam::Vec3;
 
 use super::loco::STAMINA_MAX;
 use super::pose::HIT_FALL_S;
-use super::types::{ActiveWeapon, LocomotionMode, WeaponClass};
-use crate::{spawn_reserve_for, weapon_def, AmmoKind, ReserveAmmo};
+use super::types::{prefer_armed_slot, ActiveWeapon, LocomotionMode, WeaponClass};
+use crate::{weapon_def, AmmoKind, ReserveAmmo};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelfState {
@@ -23,11 +23,10 @@ pub struct SelfState {
     pub secondary: Option<u8>,
     /// Which hand is active: a filled slot or unarmed (021).
     pub active: ActiveWeapon,
-    /// Magazine rounds in the primary blaster (058).
     pub primary_mag: u16,
-    /// Magazine rounds in the secondary blaster (058).
     pub secondary_mag: u16,
-    /// Reserve rounds keyed by ammo kind (058).
+    pub primary_chamber: u16,
+    pub secondary_chamber: u16,
     pub reserve: ReserveAmmo,
     pub alive: bool,
     pub health: f32,
@@ -103,6 +102,8 @@ impl SelfState {
             active: ActiveWeapon::Primary,
             primary_mag: 0,
             secondary_mag: 0,
+            primary_chamber: 0,
+            secondary_chamber: 0,
             reserve: ReserveAmmo::default(),
             alive: true,
             health: crate::HEALTH_MAX,
@@ -142,17 +143,22 @@ impl SelfState {
         s
     }
 
-    /// Fill magazines to capacity and draft reserve for kinds on this loadout (058 / 053).
+    /// Per ammo kind: max spare among loadout letters that use that kind. Chamber starts empty.
     pub fn apply_spawn_ammo(&mut self) {
-        self.primary_mag = Self::mag_capacity_of(self.primary);
-        self.secondary_mag = Self::mag_capacity_of(self.secondary);
+        self.primary_mag = Self::spawn_mag_of(self.primary);
+        self.secondary_mag = Self::spawn_mag_of(self.secondary);
+        self.primary_chamber = 0;
+        self.secondary_chamber = 0;
         self.reserve = ReserveAmmo::default();
         for letter in [self.primary, self.secondary].into_iter().flatten() {
-            if let Some(def) = weapon_def(letter) {
-                let kind = def.ammo();
-                if self.reserve.get(kind) == 0 {
-                    self.reserve.set(kind, spawn_reserve_for(kind));
-                }
+            let Some(def) = weapon_def(letter) else {
+                continue;
+            };
+            let spare = crate::spawn_spare_for_letter(letter);
+            let kind = def.ammo();
+            let have = self.reserve.get(kind);
+            if spare > have {
+                self.reserve.set(kind, spare);
             }
         }
     }
@@ -164,7 +170,17 @@ impl SelfState {
             .unwrap_or(0)
     }
 
-    /// Magazine rounds in the active blaster, if armed.
+    fn spawn_mag_of(letter: Option<u8>) -> u16 {
+        letter.map(crate::spawn_mag_for_letter).unwrap_or(0)
+    }
+
+    fn chamber_capacity_of(letter: Option<u8>) -> u16 {
+        letter
+            .and_then(weapon_def)
+            .map(|d| d.chamber_capacity())
+            .unwrap_or(0)
+    }
+
     pub fn active_mag(&self) -> Option<u16> {
         self.active_blaster()?;
         Some(match self.active {
@@ -181,19 +197,32 @@ impl SelfState {
         })
     }
 
-    /// Capacity of the active blaster's magazine, if armed.
+    pub fn active_chamber(&self) -> Option<u16> {
+        self.active_blaster()?;
+        Some(match self.active {
+            ActiveWeapon::Primary => self.primary_chamber,
+            ActiveWeapon::Secondary => self.secondary_chamber,
+        })
+    }
+
+    fn active_chamber_mut(&mut self) -> Option<&mut u16> {
+        self.active_blaster()?;
+        Some(match self.active {
+            ActiveWeapon::Primary => &mut self.primary_chamber,
+            ActiveWeapon::Secondary => &mut self.secondary_chamber,
+        })
+    }
+
     pub fn active_mag_capacity(&self) -> Option<u16> {
         self.active_blaster()
             .and_then(weapon_def)
             .map(|d| d.mag_capacity())
     }
 
-    /// Ammo kind of the active blaster, if armed.
     pub fn active_ammo_kind(&self) -> Option<AmmoKind> {
         self.active_blaster().and_then(weapon_def).map(|d| d.ammo())
     }
 
-    /// Spend up to `want` rounds from the active magazine; returns how many spent.
     pub fn spend_mag_rounds(&mut self, want: u16) -> u16 {
         let Some(mag) = self.active_mag_mut() else {
             return 0;
@@ -201,6 +230,101 @@ impl SelfState {
         let spent = (*mag).min(want);
         *mag -= spent;
         spent
+    }
+
+    pub fn spend_chamber_rounds(&mut self, want: u16) -> u16 {
+        let Some(ch) = self.active_chamber_mut() else {
+            return 0;
+        };
+        let spent = (*ch).min(want);
+        *ch -= spent;
+        spent
+    }
+
+    pub fn feed_chamber_from_mag(&mut self, want: u16) -> u16 {
+        let letter = self.active_blaster();
+        let cap = Self::chamber_capacity_of(letter);
+        let mag_cap = Self::mag_capacity_of(letter);
+        if cap == 0 || want == 0 || mag_cap == 0 {
+            return 0;
+        }
+        let mag_n = match self.active {
+            ActiveWeapon::Primary => self.primary_mag,
+            ActiveWeapon::Secondary => self.secondary_mag,
+        };
+        let ch = match self.active {
+            ActiveWeapon::Primary => self.primary_chamber,
+            ActiveWeapon::Secondary => self.secondary_chamber,
+        };
+        let n = want.min(mag_n).min(cap.saturating_sub(ch));
+        if n == 0 {
+            return 0;
+        }
+        match self.active {
+            ActiveWeapon::Primary => {
+                self.primary_mag -= n;
+                self.primary_chamber += n;
+            }
+            ActiveWeapon::Secondary => {
+                self.secondary_mag -= n;
+                self.secondary_chamber += n;
+            }
+        }
+        n
+    }
+
+    pub fn feed_chamber_from_reserve(&mut self, want: u16) -> u16 {
+        let Some(letter) = self.active_blaster() else {
+            return 0;
+        };
+        let Some(def) = weapon_def(letter) else {
+            return 0;
+        };
+        if def.has_magazine() || want == 0 {
+            return 0;
+        }
+        let cap = def.chamber_capacity();
+        let ch = match self.active {
+            ActiveWeapon::Primary => self.primary_chamber,
+            ActiveWeapon::Secondary => self.secondary_chamber,
+        };
+        let room = cap.saturating_sub(ch);
+        let n = want.min(room).min(self.reserve.get(def.ammo()));
+        if n == 0 {
+            return 0;
+        }
+        self.reserve.take(def.ammo(), n);
+        match self.active {
+            ActiveWeapon::Primary => self.primary_chamber += n,
+            ActiveWeapon::Secondary => self.secondary_chamber += n,
+        }
+        n
+    }
+
+    /// Mag: room + mag rounds. No-mag: empty chamber + reserve (081).
+    pub fn can_seat_chamber(&self) -> bool {
+        let Some(letter) = self.active_blaster() else {
+            return false;
+        };
+        let Some(def) = weapon_def(letter) else {
+            return false;
+        };
+        let ch = match self.active {
+            ActiveWeapon::Primary => self.primary_chamber,
+            ActiveWeapon::Secondary => self.secondary_chamber,
+        };
+        if ch >= def.chamber_capacity() {
+            return false;
+        }
+        if def.has_magazine() {
+            let mag = match self.active {
+                ActiveWeapon::Primary => self.primary_mag,
+                ActiveWeapon::Secondary => self.secondary_mag,
+            };
+            mag > 0
+        } else {
+            ch == 0 && self.reserve.get(def.ammo()) > 0
+        }
     }
 
     /// Room left in reserve for `kind` under capacity (059).
@@ -223,20 +347,23 @@ impl SelfState {
     }
 
     /// Strip the active blaster letter + magazine for a floor drop (067).
-    /// Clears that slot. Returns `None` when unarmed.
+    /// Chamber rounds fold into the dropped mag count. Clears that slot.
+    /// Returns `None` when unarmed.
     pub fn take_active_blaster_drop(&mut self) -> Option<(u8, u16)> {
         let letter = self.active_blaster()?;
         let mag = match self.active {
             ActiveWeapon::Primary => {
-                let n = self.primary_mag;
+                let n = self.primary_mag.saturating_add(self.primary_chamber);
                 self.primary = None;
                 self.primary_mag = 0;
+                self.primary_chamber = 0;
                 n
             }
             ActiveWeapon::Secondary => {
-                let n = self.secondary_mag;
+                let n = self.secondary_mag.saturating_add(self.secondary_chamber);
                 self.secondary = None;
                 self.secondary_mag = 0;
+                self.secondary_chamber = 0;
                 n
             }
         };
@@ -256,49 +383,86 @@ impl SelfState {
             return Err("dead");
         }
         WeaponClass::from_letter(letter).ok_or("unknown blaster letter")?;
-        let mag = mag.min(Self::mag_capacity_of(Some(letter)));
+        let mag_cap = Self::mag_capacity_of(Some(letter));
+        let ch_cap = Self::chamber_capacity_of(Some(letter));
+        let rounds = if mag_cap == 0 {
+            mag.min(ch_cap)
+        } else {
+            mag.min(mag_cap)
+        };
         self.clear_emote();
 
         if self.primary.is_none() {
-            self.write_slot(ActiveWeapon::Primary, Some(letter), mag);
+            self.write_slot(ActiveWeapon::Primary, Some(letter), rounds);
             self.active = ActiveWeapon::Primary;
             return Ok(None);
         }
         if self.secondary.is_none() {
-            self.write_slot(ActiveWeapon::Secondary, Some(letter), mag);
+            self.write_slot(ActiveWeapon::Secondary, Some(letter), rounds);
             self.active = ActiveWeapon::Secondary;
             return Ok(None);
         }
 
         let slot = self.active;
         let displaced = self.read_slot(slot);
-        self.write_slot(slot, Some(letter), mag);
+        self.write_slot(slot, Some(letter), rounds);
         self.active = slot;
         Ok(displaced)
     }
 
     fn read_slot(&self, slot: ActiveWeapon) -> Option<(u8, u16)> {
         match slot {
-            ActiveWeapon::Primary => self.primary.map(|l| (l, self.primary_mag)),
-            ActiveWeapon::Secondary => self.secondary.map(|l| (l, self.secondary_mag)),
+            ActiveWeapon::Primary => self
+                .primary
+                .map(|l| (l, self.primary_mag.saturating_add(self.primary_chamber))),
+            ActiveWeapon::Secondary => self
+                .secondary
+                .map(|l| (l, self.secondary_mag.saturating_add(self.secondary_chamber))),
         }
     }
 
-    fn write_slot(&mut self, slot: ActiveWeapon, letter: Option<u8>, mag: u16) {
+    fn write_slot(&mut self, slot: ActiveWeapon, letter: Option<u8>, rounds: u16) {
+        let mag_cap = Self::mag_capacity_of(letter);
+        let ch_cap = Self::chamber_capacity_of(letter);
+        let (mag, chamber) = if letter.is_none() {
+            (0, 0)
+        } else if mag_cap == 0 {
+            (0, rounds.min(ch_cap))
+        } else {
+            (rounds.min(mag_cap), 0)
+        };
         match slot {
             ActiveWeapon::Primary => {
                 self.primary = letter;
-                self.primary_mag = if letter.is_some() { mag } else { 0 };
+                self.primary_mag = mag;
+                self.primary_chamber = chamber;
             }
             ActiveWeapon::Secondary => {
                 self.secondary = letter;
-                self.secondary_mag = if letter.is_some() { mag } else { 0 };
+                self.secondary_mag = mag;
+                self.secondary_chamber = chamber;
             }
         }
     }
 
-    /// Fill active magazine from reserve of that ammo kind, up to capacity (058).
-    /// Returns true when any rounds moved.
+    /// No-mag never reloads (081).
+    pub fn can_reload(&self) -> bool {
+        if !self.alive {
+            return false;
+        }
+        let Some(def) = self.active_blaster().and_then(weapon_def) else {
+            return false;
+        };
+        if !def.has_magazine() {
+            return false;
+        }
+        let mag = match self.active {
+            ActiveWeapon::Primary => self.primary_mag,
+            ActiveWeapon::Secondary => self.secondary_mag,
+        };
+        mag < def.mag_capacity() && self.reserve.get(def.ammo()) > 0
+    }
+
     pub fn try_reload(&mut self) -> bool {
         if !self.alive {
             return false;
@@ -309,6 +473,9 @@ impl SelfState {
         let Some(def) = weapon_def(letter) else {
             return false;
         };
+        if !def.has_magazine() {
+            return false;
+        }
         let cap = def.mag_capacity();
         let kind = def.ammo();
         let mag = match self.active {
@@ -436,6 +603,7 @@ impl SelfState {
         if self.primary != letter {
             self.primary = letter;
             self.primary_mag = Self::mag_capacity_of(letter);
+            self.primary_chamber = 0;
         }
         Ok(())
     }
@@ -452,20 +620,35 @@ impl SelfState {
         if self.secondary != letter {
             self.secondary = letter;
             self.secondary_mag = Self::mag_capacity_of(letter);
+            self.secondary_chamber = 0;
         }
         Ok(())
     }
 
-    /// Toggle active slot: primary ↔ secondary. Empty slots stay in the cycle (unarmed).
+    /// Prefer a filled slot when the active hand is empty but the other holds a blaster (081).
+    pub fn coerce_active_armed(&mut self) {
+        self.active = prefer_armed_slot(self.primary, self.secondary, self.active);
+    }
+
+    /// Toggle active slot: primary ↔ secondary.
+    /// Skips an empty slot while the other hand still holds a blaster (081).
     /// Cancels emote (039) so the new hand is free immediately.
     pub fn cycle_weapon(&mut self, dir: i8) {
         if !self.alive || dir.signum() == 0 {
             return;
         }
         self.clear_emote();
-        self.active = match self.active {
+        let next = match self.active {
             ActiveWeapon::Primary => ActiveWeapon::Secondary,
             ActiveWeapon::Secondary => ActiveWeapon::Primary,
         };
+        let next_filled = match next {
+            ActiveWeapon::Primary => self.primary.is_some(),
+            ActiveWeapon::Secondary => self.secondary.is_some(),
+        };
+        if !next_filled && self.is_armed() {
+            return;
+        }
+        self.active = next;
     }
 }

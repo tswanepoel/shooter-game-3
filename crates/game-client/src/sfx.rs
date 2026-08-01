@@ -1,6 +1,6 @@
 //! Client one-shot SFX (Web Audio). Present only — not sim.
 
-use game_sim::{weapon_def, FireMode, LocomotionMode, WeaponClass};
+use game_sim::{weapon_def, LocomotionMode, PumpCue, WeaponClass};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::JsValue;
 use wasm_bindgen_futures::JsFuture;
@@ -9,6 +9,11 @@ use web_sys::{AudioBuffer, AudioContext};
 use crate::map_present::FootKind;
 use crate::pack;
 
+/// Bang sits under the hit click so a landed shot still reads over its own report.
+const BANG_GAIN: f32 = 0.55;
+const HIT_GAIN: f32 = 1.6;
+/// Hit click is ~40 ms; nudge it past the bang attack so it is not masked.
+const HIT_OFFSET_S: f64 = 0.04;
 const WALK_STEP_GAIN: f32 = 0.12;
 const SPRINT_STEP_GAIN: f32 = 0.28;
 const LAND_STEP_GAIN: f32 = 0.2;
@@ -19,7 +24,9 @@ const LAND_STEP_OFFSET_MAX_S: f64 = 0.05;
 pub struct Sfx {
     ctx: AudioContext,
     bangs: [AudioBuffer; 4],
-    chambers: [AudioBuffer; 4],
+    pumps: [AudioBuffer; 4],
+    breech_open: AudioBuffer,
+    breech_close: AudioBuffer,
     reload: AudioBuffer,
     hit: AudioBuffer,
     gravel_steps: [AudioBuffer; 3],
@@ -44,12 +51,14 @@ impl Sfx {
             load_wav(&ctx, &pack, "bang-c.wav").await?,
             load_wav(&ctx, &pack, "bang-d.wav").await?,
         ];
-        let chambers = [
-            load_wav(&ctx, &pack, "chamber-a.wav").await?,
-            load_wav(&ctx, &pack, "chamber-b.wav").await?,
-            load_wav(&ctx, &pack, "chamber-c.wav").await?,
-            load_wav(&ctx, &pack, "chamber-d.wav").await?,
+        let pumps = [
+            load_wav(&ctx, &pack, "pump-a.wav").await?,
+            load_wav(&ctx, &pack, "pump-b.wav").await?,
+            load_wav(&ctx, &pack, "pump-c.wav").await?,
+            load_wav(&ctx, &pack, "pump-d.wav").await?,
         ];
+        let breech_open = load_wav(&ctx, &pack, "breech-open-a.wav").await?;
+        let breech_close = load_wav(&ctx, &pack, "breech-close-a.wav").await?;
         let reload = load_wav(&ctx, &pack, "reload-a.wav").await?;
         let hit = load_wav(&ctx, &pack, "hit.wav").await?;
         let gravel_steps = [
@@ -75,7 +84,9 @@ impl Sfx {
         Ok(Self {
             ctx,
             bangs,
-            chambers,
+            pumps,
+            breech_open,
+            breech_close,
             reload,
             hit,
             gravel_steps,
@@ -95,33 +106,37 @@ impl Sfx {
         let _ = self.ctx.resume();
     }
 
-    /// Bang only — chamber is the semi load (R), not a post-shot cycle.
     pub fn play_bang(&self, letter: u8) {
-        self.play_buf(&self.bangs[bang_index(letter)], 1.0, 0.0);
+        self.play_buf(&self.bangs[bang_index(letter)], BANG_GAIN, 0.0);
     }
 
-    /// Mag-fed: reload slap. Semi muzzle-load: chamber only.
-    pub fn play_reload(&self, letter: u8) {
-        if is_semi(letter) {
-            self.play_chamber(letter, 0.0);
-        } else {
-            self.play_buf(&self.reload, 1.0, 0.0);
+    pub fn play_reload(&self, _letter: u8) {
+        self.play_buf(&self.reload, 1.0, 0.0);
+    }
+
+    pub fn play_pump_cue(&self, letter: u8, cue: PumpCue) {
+        match pump_voice(letter) {
+            PumpVoice::Breech => match cue {
+                PumpCue::Start => self.play_buf(&self.breech_open, 1.0, 0.0),
+                PumpCue::End => self.play_buf(&self.breech_close, 1.0, 0.0),
+                PumpCue::Seat => {}
+            },
+            PumpVoice::Slide(i) => {
+                if cue == PumpCue::Seat {
+                    self.play_buf(&self.pumps[i], 1.0, 0.0);
+                }
+            }
+            PumpVoice::Silent => {}
         }
     }
 
-    /// Semi auto-chamber landed a dart in the front tube(s) (074).
-    pub fn play_chamber_load(&self, letter: u8) {
-        self.play_chamber(letter, 0.0);
-    }
-
     pub fn play_hit(&self) {
-        self.play_buf(&self.hit, 1.0, 0.0);
+        self.play_buf(&self.hit, HIT_GAIN, HIT_OFFSET_S);
     }
 
     pub fn note_footsteps(&mut self, loco: LocomotionMode, phase: f32, surface: FootKind) {
         let air = loco.is_air();
         if self.was_air && !air {
-            // Two soles land nearly together — distinct variants, randomized stagger.
             let stagger = LAND_STEP_OFFSET_MIN_S
                 + js_sys::Math::random() * (LAND_STEP_OFFSET_MAX_S - LAND_STEP_OFFSET_MIN_S);
             self.play_step(surface, LAND_STEP_GAIN, 0.0);
@@ -151,10 +166,6 @@ impl Sfx {
         for _ in 0..plants {
             self.play_step(surface, gain, 0.0);
         }
-    }
-
-    fn play_chamber(&self, letter: u8, when_s: f64) {
-        self.play_buf(&self.chambers[chamber_index(letter)], 1.0, when_s);
     }
 
     fn play_step(&mut self, surface: FootKind, gain: f32, when_s: f64) {
@@ -200,30 +211,41 @@ impl Sfx {
     }
 }
 
-/// Semi muzzle-load blasters chamber on R; mag-fed modes use reload slap only.
+#[cfg(test)]
 fn is_semi(letter: u8) -> bool {
-    weapon_def(letter).is_some_and(|d| d.mode == FireMode::Semi)
+    weapon_def(letter).is_some_and(|d| d.mode == game_sim::FireMode::Semi)
 }
 
-/// Bang bank index by class; AR shares sniper, launcher shares shotgun.
+#[cfg(test)]
+fn has_magazine(letter: u8) -> bool {
+    weapon_def(letter).is_some_and(|d| d.has_magazine())
+}
+
 fn bang_index(letter: u8) -> usize {
     match WeaponClass::from_letter(letter) {
-        Some(WeaponClass::Pistol) => 0,
-        Some(WeaponClass::Smg) => 1,
-        Some(WeaponClass::AssaultRifle | WeaponClass::SniperRifle) => 2,
-        Some(WeaponClass::Shotgun | WeaponClass::Launcher) => 3,
+        Some(WeaponClass::Pistol | WeaponClass::SniperRifle) => 0,
+        Some(WeaponClass::AssaultRifle | WeaponClass::Shotgun) => 1,
+        Some(WeaponClass::Launcher) => 2,
+        Some(WeaponClass::Smg) => 3,
         None => 0,
     }
 }
 
-/// Fixed chamber per weapon class (074). Four clips; shotgun/launcher share pistol/SMG.
-fn chamber_index(letter: u8) -> usize {
-    match WeaponClass::from_letter(letter) {
-        Some(WeaponClass::Pistol | WeaponClass::Shotgun) => 0,
-        Some(WeaponClass::Smg | WeaponClass::Launcher) => 1,
-        Some(WeaponClass::AssaultRifle) => 2,
-        Some(WeaponClass::SniperRifle) => 3,
-        None => 0,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PumpVoice {
+    Slide(usize),
+    Breech,
+    Silent,
+}
+
+fn pump_voice(letter: u8) -> PumpVoice {
+    match letter {
+        b'j' => PumpVoice::Breech,
+        b'k' | b'o' => PumpVoice::Slide(0),
+        b'e' | b'f' => PumpVoice::Slide(1),
+        b'i' => PumpVoice::Slide(2),
+        b'a' => PumpVoice::Slide(3),
+        _ => PumpVoice::Silent,
     }
 }
 
@@ -295,9 +317,9 @@ impl SfxState {
         }
     }
 
-    pub fn play_chamber_load(&self, letter: u8) {
+    pub fn play_pump_cue(&self, letter: u8, cue: PumpCue) {
         if let Self::Ready(sfx) = self {
-            sfx.play_chamber_load(letter);
+            sfx.play_pump_cue(letter, cue);
         }
     }
 
@@ -316,8 +338,7 @@ impl SfxState {
 
 #[cfg(test)]
 mod tests {
-    use super::{bang_index, chamber_index, foot_plants, is_semi};
-    use game_sim::WeaponClass;
+    use super::{bang_index, foot_plants, has_magazine, is_semi, pump_voice, PumpVoice};
 
     #[test]
     fn crosses_half() {
@@ -331,7 +352,7 @@ mod tests {
     }
 
     #[test]
-    fn only_semi_chambers_on_reload() {
+    fn letter_semi_and_magazine_flags() {
         for letter in [b'a', b'b', b'e', b'f', b'i', b'j', b'k', b'o'] {
             assert!(is_semi(letter), "semi {}", letter as char);
         }
@@ -339,40 +360,45 @@ mod tests {
             assert!(!is_semi(letter), "auto/burst {}", letter as char);
         }
         assert!(!is_semi(b'z'));
+        for letter in [b'a', b'i', b'j', b'o'] {
+            assert!(!has_magazine(letter), "no-mag {}", letter as char);
+        }
+        for letter in [b'b', b'e', b'f', b'k', b'c', b'p'] {
+            assert!(has_magazine(letter), "mag {}", letter as char);
+        }
     }
 
     #[test]
-    fn voices_fixed_by_class() {
+    fn bang_by_class_and_pump_voices() {
         assert_eq!(bang_index(b'b'), 0);
-        assert_eq!(bang_index(b'p'), 1);
-        assert_eq!(bang_index(b'd'), 2);
-        assert_eq!(bang_index(b'e'), 2);
-        assert_eq!(bang_index(b'j'), 3);
-        assert_eq!(bang_index(b'a'), 3);
-        assert_eq!(chamber_index(b'b'), 0);
-        assert_eq!(chamber_index(b'p'), 1);
-        assert_eq!(chamber_index(b'd'), 2);
-        assert_eq!(chamber_index(b'e'), 3);
-        assert_eq!(chamber_index(b'j'), 0);
-        assert_eq!(chamber_index(b'a'), 1);
+        assert_eq!(bang_index(b'e'), 0);
+        assert_eq!(bang_index(b'i'), 0);
+        assert_eq!(bang_index(b'd'), 1);
+        assert_eq!(bang_index(b'j'), 1);
+        assert_eq!(bang_index(b'k'), 1);
+        assert_eq!(bang_index(b'o'), 1);
+        assert_eq!(bang_index(b'q'), 1);
+        assert_eq!(bang_index(b'a'), 2);
+        assert_eq!(bang_index(b'c'), 3);
+        assert_eq!(bang_index(b'l'), 3);
+        assert_eq!(bang_index(b'p'), 3);
         for letter in b'a'..=b'r' {
             let class = WeaponClass::from_letter(letter).unwrap();
             let bang = match class {
-                WeaponClass::Pistol => 0,
-                WeaponClass::Smg => 1,
-                WeaponClass::AssaultRifle | WeaponClass::SniperRifle => 2,
-                WeaponClass::Shotgun | WeaponClass::Launcher => 3,
-            };
-            let chamber = match class {
-                WeaponClass::Pistol | WeaponClass::Shotgun => 0,
-                WeaponClass::Smg | WeaponClass::Launcher => 1,
-                WeaponClass::AssaultRifle => 2,
-                WeaponClass::SniperRifle => 3,
+                WeaponClass::Pistol | WeaponClass::SniperRifle => 0,
+                WeaponClass::AssaultRifle | WeaponClass::Shotgun => 1,
+                WeaponClass::Launcher => 2,
+                WeaponClass::Smg => 3,
             };
             assert_eq!(bang_index(letter), bang, "bang {}", letter as char);
-            assert_eq!(chamber_index(letter), chamber, "chamber {}", letter as char);
         }
+        assert_eq!(pump_voice(b'j'), PumpVoice::Breech);
+        assert_eq!(pump_voice(b'k'), PumpVoice::Slide(0));
+        assert_eq!(pump_voice(b'o'), PumpVoice::Slide(0));
+        assert_eq!(pump_voice(b'e'), PumpVoice::Slide(1));
+        assert_eq!(pump_voice(b'i'), PumpVoice::Slide(2));
+        assert_eq!(pump_voice(b'a'), PumpVoice::Slide(3));
+        assert_eq!(pump_voice(b'l'), PumpVoice::Silent);
         assert_eq!(bang_index(b'z'), 0);
-        assert_eq!(chamber_index(b'z'), 0);
     }
 }

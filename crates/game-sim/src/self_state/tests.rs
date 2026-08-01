@@ -556,14 +556,35 @@ fn cycle_weapon_toggles_two_slots_only() {
 
     s.set_secondary(None).unwrap();
     s.active = ActiveWeapon::Primary;
+    // Empty secondary is skipped while primary is equipped (081).
     s.cycle_weapon(1);
-    assert_eq!(s.active, ActiveWeapon::Secondary);
-    assert!(!s.is_armed());
-    assert!(s.reticle_world(Vec3::new(0.0, 1.5, 0.0)).is_none());
-    assert!(s.weapon_line().is_none());
-    s.cycle_weapon(-1);
     assert_eq!(s.active, ActiveWeapon::Primary);
     assert!(s.is_armed());
+    assert!(s.weapon_line().is_some());
+}
+
+#[test]
+fn coerce_active_armed_prefers_filled_slot() {
+    let mut s = SelfState::default_loadout();
+    s.set_primary(None).unwrap();
+    s.active = ActiveWeapon::Primary;
+    assert!(!s.is_armed());
+    s.coerce_active_armed();
+    assert_eq!(s.active, ActiveWeapon::Secondary);
+    assert_eq!(s.active_blaster(), Some(b'b'));
+
+    assert_eq!(
+        prefer_armed_slot(None, Some(b'b'), ActiveWeapon::Primary),
+        ActiveWeapon::Secondary
+    );
+    assert_eq!(
+        prefer_armed_slot(Some(b'p'), None, ActiveWeapon::Secondary),
+        ActiveWeapon::Primary
+    );
+    assert_eq!(
+        prefer_armed_slot(None, None, ActiveWeapon::Primary),
+        ActiveWeapon::Primary
+    );
 }
 
 #[test]

@@ -257,7 +257,7 @@ A kind of round. It has mass.
 
 ### Ammo drop
 
-[Ammo](#ammo) on the floor as [reserve ammo](#reserve-ammo). Ends after a time or when its rounds are taken.
+[Ammo](#ammo) on the floor. Ends after a time or when its rounds are taken.
 
 ### Weapon class
 
@@ -275,13 +275,23 @@ It has a [fire mode](#fire-mode).
 
 ### Magazine
 
-Rounds of the [blaster](#blaster)’s [ammo](#ammo) held in that [blaster](#blaster), up to a capacity of that [blaster](#blaster).  
+An optional store of the [blaster](#blaster)’s [ammo](#ammo) in that [blaster](#blaster), up to a capacity of that [blaster](#blaster).
+
+### Reserve ammo
+
+Rounds of [ammo](#ammo) a [player](#player) carries outside any [blaster](#blaster).  
+Replenished from an [ammo drop](#ammo-drop).
+
+### Chamber
+
+The seated store of the [blaster](#blaster)’s [ammo](#ammo) in that [blaster](#blaster), up to a capacity of that [blaster](#blaster).  
 Accepted [fire](#fire) spends from it. Empty blocks [fire](#fire).  
-On [semi](#fire-mode) muzzle-load blasters this is the dart(s) in the front tube(s), not a strip magazine.
+Fills from the [magazine](#magazine) when the chamber has room.  
+When the [blaster](#blaster) has no [magazine](#magazine), fills from [reserve ammo](#reserve-ammo) when empty.
 
 ### Blaster drop
 
-A [blaster](#blaster) on the floor with its [magazine](#magazine). Ends after a time or when taken.
+A [blaster](#blaster) on the floor with its [magazine](#magazine) and [chamber](#chamber). Ends after a time or when taken.
 
 ### Fire impulse
 
@@ -368,11 +378,6 @@ The [figure](#figure) finishing [walk](#walk) strides toward a neutral [phase](#
 ### Locomotion
 
 [Stand](#stand), [walk](#walk), [sprint](#sprint), [stopping](#stopping), or [air](#air), and [phase](#phase) when the [legs](#legs) are making strides.
-
-### Reserve ammo
-
-Rounds of [ammo](#ammo) a [player](#player) carries outside the [magazine](#magazine).  
-Replenished from an [ammo drop](#ammo-drop).
 
 ### Tick
 
@@ -474,8 +479,7 @@ A [player](#player)’s [figure](#figure) entering play alive on a [map](#map). 
 
 ### Reload
 
-Fills the [magazine](#magazine) from [reserve ammo](#reserve-ammo).  
-On [semi](#fire-mode) muzzle-load blasters this chambers empty front tube(s), and runs on its own a short time after [fire](#fire).
+Fills the [magazine](#magazine) from [reserve ammo](#reserve-ammo).
 
 ### Kill
 

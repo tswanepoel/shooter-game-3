@@ -6,12 +6,14 @@ Variant banks use letter suffixes (`-a`, `-b`, …), not digits.
 
 | Asset id | File | Use |
 | --- | --- | --- |
-| `bang-a.wav` | `bang-a.wav` | Pistol discharge |
-| `bang-b.wav` | `bang-b.wav` | SMG discharge |
-| `bang-c.wav` | `bang-c.wav` | Assault rifle / sniper discharge |
-| `bang-d.wav` | `bang-d.wav` | Shotgun / launcher discharge |
+| `bang-a.wav` | `bang-a.wav` | Pistol / sniper discharge |
+| `bang-b.wav` | `bang-b.wav` | Assault-rifle / shotgun discharge |
+| `bang-c.wav` | `bang-c.wav` | Launcher discharge |
+| `bang-d.wav` | `bang-d.wav` | SMG discharge |
 | `throw-a.wav` | `throw-a.wav` | Reserved for future throw (not cooked yet) |
-| `chamber-a.wav`…`chamber-d.wav` | `chamber-*.wav` | Semi load / auto-chamber (074); fixed per class |
+| `pump-a.wav`…`pump-d.wav` | `pump-*.wav` | Slide / bolt seat voice (one per seated round) |
+| `breech-open-a.wav` | `breech-open-a.wav` | Break-action: sequence start (before seats) |
+| `breech-close-a.wav` | `breech-close-a.wav` | Break-action: sequence end (after last seat) |
 | `reload-a.wav` | `reload-a.wav` | Mag-fed reload slap (auto / burst) |
 | `hit.wav` | `hit.wav` | Local impact claim (hit marker) |
 | `gravel-step-a.wav`…`c` | `gravel-step-*.wav` | Gravel foot plant variants |

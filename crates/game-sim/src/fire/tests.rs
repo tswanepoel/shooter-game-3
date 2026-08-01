@@ -16,11 +16,17 @@ fn muzzles() -> Vec<Vec3> {
     vec![Vec3::new(0.0, 1.4, 0.4)]
 }
 
+/// Instantly seat a spring chamber from mag (skip equip pump for fire tests).
+fn seat_spring(s: &mut SelfState) {
+    let _ = s.feed_chamber_from_mag(1);
+}
+
 #[test]
 fn dead_does_not_fire() {
     let mut fire = FireState::new();
     let mut s = armed_self();
     s.set_primary(Some(b'b')).unwrap();
+    seat_spring(&mut s);
     fire.pay_ready(b'b');
     fire.ready_s = 0.0;
     s.apply_damage(crate::HEALTH_MAX);
@@ -45,10 +51,9 @@ fn semi_fires_once_per_edge() {
     // hold
     let d1 = fire.tick(1.0 / 60.0, &mut s, true, 0, eye(), &m);
     assert!(d1.is_empty());
-    // release + press after cooldown (chamber another dart)
+    // release + press after cooldown
     let _ = fire.tick(1.0, &mut s, false, 0, eye(), &m);
     fire.cooldown_s = 0.0;
-    s.primary_mag = 1;
     let d2 = fire.tick(1.0 / 60.0, &mut s, true, 0, eye(), &m);
     assert_eq!(d2.len(), 1);
 }
@@ -93,6 +98,77 @@ fn burst_three_and_blocks_side() {
     }
     assert_eq!(n, 3);
     assert!(!fire.blocks_weapon_side());
+}
+
+#[test]
+fn burst_hold_does_not_chain_a_second_string() {
+    let mut fire = FireState::new();
+    let mut s = armed_self();
+    s.set_primary(Some(b'd')).unwrap();
+    fire.pay_ready(b'd');
+    fire.ready_s = 0.0;
+    let m = muzzles();
+    let mut n = 0;
+    // Trigger held down throughout: one string only.
+    for _ in 0..40 {
+        fire.cooldown_s = 0.0;
+        n += fire.tick(0.001, &mut s, true, 0, eye(), &m).len();
+    }
+    assert_eq!(n, 3);
+    assert!(!fire.burst_active());
+
+    // Release and press again: a fresh string.
+    let _ = fire.tick(0.001, &mut s, false, 0, eye(), &m);
+    fire.cooldown_s = 0.0;
+    let d = fire.tick(0.001, &mut s, true, 0, eye(), &m);
+    assert_eq!(d.len(), 1);
+}
+
+#[test]
+fn reload_takes_time_and_blocks_fire() {
+    let mut fire = FireState::new();
+    let mut s = armed_self();
+    s.set_primary(Some(b'c')).unwrap();
+    s.primary_mag = 0;
+    fire.pay_ready(b'c');
+    fire.ready_s = 0.0;
+    let m = muzzles();
+
+    assert_eq!(fire.begin_reload(&s), Some(b'c'));
+    assert!(fire.loading());
+    // A second ask while loading is a no-op.
+    assert_eq!(fire.begin_reload(&s), None);
+
+    // Mid-reload: rounds have not landed and the trigger does nothing.
+    let _ = fire.tick(RELOAD_MAG_S * 0.5, &mut s, true, 0, eye(), &m);
+    assert_eq!(s.primary_mag, 0);
+
+    let _ = fire.tick(RELOAD_MAG_S, &mut s, false, 0, eye(), &m);
+    assert!(!fire.loading());
+    // Mag-fed letters instant-seat one into chamber after R lands.
+    assert_eq!(
+        s.primary_mag + s.primary_chamber,
+        s.active_mag_capacity().unwrap()
+    );
+    assert_eq!(s.primary_chamber, 1);
+
+    let d = fire.tick(1.0 / 60.0, &mut s, true, 0, eye(), &m);
+    assert_eq!(d.len(), 1);
+}
+
+#[test]
+fn reload_needs_room_and_reserve() {
+    let mut fire = FireState::new();
+    let mut s = armed_self();
+    s.set_primary(Some(b'c')).unwrap();
+    // Full magazine.
+    s.primary_mag = s.active_mag_capacity().unwrap();
+    assert_eq!(fire.begin_reload(&s), None);
+    // Empty reserve.
+    s.primary_mag = 0;
+    s.reserve.light_foam = 0;
+    assert_eq!(fire.begin_reload(&s), None);
+    assert!(!fire.loading());
 }
 
 #[test]
@@ -155,6 +231,7 @@ fn projectiles_spawn_from_look_not_muzzle() {
     let mut fire = FireState::new();
     let mut s = armed_self();
     s.set_primary(Some(b'b')).unwrap();
+    seat_spring(&mut s);
     fire.pay_ready(b'b');
     fire.ready_s = 0.0;
     let barrel = muzzles();
@@ -178,6 +255,7 @@ fn combat_spawns_without_muzzle_fx_points() {
     let mut fire = FireState::new();
     let mut s = armed_self();
     s.set_primary(Some(b'b')).unwrap();
+    seat_spring(&mut s);
     fire.pay_ready(b'b');
     fire.ready_s = 0.0;
     let d = fire.tick(0.0, &mut s, true, 0, eye(), &[]);
@@ -193,6 +271,7 @@ fn spawn_carries_ammo_and_blaster_muzzle_vel() {
     let mut s = armed_self();
     // Pistol b → light foam, muzzle_vel from letter.
     s.set_primary(Some(b'b')).unwrap();
+    seat_spring(&mut s);
     fire.pay_ready(b'b');
     fire.ready_s = 0.0;
     let def = weapon_def(b'b').unwrap();
@@ -209,6 +288,7 @@ fn spawn_carries_ammo_and_blaster_muzzle_vel() {
     let mut fire = FireState::new();
     let mut s = armed_self();
     s.set_primary(Some(b'e')).unwrap();
+    seat_spring(&mut s);
     fire.pay_ready(b'e');
     fire.ready_s = 0.0;
     let def_e = weapon_def(b'e').unwrap();
@@ -217,10 +297,12 @@ fn spawn_carries_ammo_and_blaster_muzzle_vel() {
     assert_eq!(p.ammo, AmmoKind::ThickFoam);
     assert!((p.velocity.length() - def_e.muzzle_vel).abs() < 1e-2);
 
-    // Launcher a → grenade.
+    // Launcher a → grenade (no-mag; chamber holds the round).
     let mut fire = FireState::new();
     let mut s = armed_self();
     s.set_primary(Some(b'a')).unwrap();
+    s.reserve.grenade = 2;
+    s.primary_chamber = 1;
     fire.pay_ready(b'a');
     fire.ready_s = 0.0;
     let d = fire.tick(0.0, &mut s, true, 0, eye(), &muzzles());
@@ -232,6 +314,7 @@ fn shotgun_pellets_share_ammo_kind() {
     let mut fire = FireState::new();
     let mut s = armed_self();
     s.set_primary(Some(b'k')).unwrap();
+    seat_spring(&mut s);
     fire.pay_ready(b'k');
     fire.ready_s = 0.0;
     let d = fire.tick(0.0, &mut s, true, 0, eye(), &muzzles());
@@ -256,6 +339,7 @@ fn shotgun_k_spawns_six_pellets() {
     let mut fire = FireState::new();
     let mut s = armed_self();
     s.set_primary(Some(b'k')).unwrap();
+    seat_spring(&mut s);
     fire.pay_ready(b'k');
     fire.ready_s = 0.0;
     let d = fire.tick(0.0, &mut s, true, 0, eye(), &muzzles());
@@ -287,6 +371,7 @@ fn fire_adds_body_residual_and_settles() {
     let mut fire = FireState::new();
     let mut s = armed_self();
     s.set_primary(Some(b'b')).unwrap();
+    seat_spring(&mut s);
     fire.pay_ready(b'b');
     fire.ready_s = 0.0;
     let m = muzzles();
@@ -372,6 +457,7 @@ fn shots_use_weapon_line_from_fire_residual() {
     let mut fire = FireState::new();
     let mut s = armed_self();
     s.set_primary(Some(b'b')).unwrap();
+    seat_spring(&mut s);
     fire.pay_ready(b'b');
     fire.ready_s = 0.0;
     s.hip_fire_fold = 3f32.to_radians();
@@ -399,6 +485,7 @@ fn armed_hold_advances_sway_on_shoulder() {
     let mut fire = FireState::new();
     let mut s = armed_self();
     s.set_primary(Some(b'b')).unwrap();
+    seat_spring(&mut s);
     fire.pay_ready(b'b');
     fire.ready_s = 0.0;
     assert_eq!(s.shoulder_sway_fold, 0.0);
@@ -437,6 +524,7 @@ fn shots_use_weapon_line_with_sway() {
     let mut fire = FireState::new();
     let mut s = armed_self();
     s.set_primary(Some(b'b')).unwrap();
+    seat_spring(&mut s);
     fire.pay_ready(b'b');
     fire.ready_s = 0.0;
     for _ in 0..120 {
@@ -464,6 +552,7 @@ fn hit_impulse_from_damage_and_settles() {
     let mut fire = FireState::new();
     let mut s = armed_self();
     s.set_primary(Some(b'b')).unwrap();
+    seat_spring(&mut s);
     fire.pay_ready(b'b');
     fire.ready_s = 0.0;
     assert_eq!(s.hit_fold_total(), 0.0);
@@ -500,6 +589,7 @@ fn shots_use_weapon_line_with_hit_residual() {
     let mut fire = FireState::new();
     let mut s = armed_self();
     s.set_primary(Some(b'b')).unwrap();
+    seat_spring(&mut s);
     fire.pay_ready(b'b');
     fire.ready_s = 0.0;
     fire.add_hit_impulse(
@@ -553,6 +643,7 @@ fn look_rate_damps_sway() {
     let mut fire = FireState::new();
     let mut s = armed_self();
     s.set_primary(Some(b'b')).unwrap();
+    seat_spring(&mut s);
     fire.pay_ready(b'b');
     fire.ready_s = 0.0;
     for _ in 0..90 {
@@ -594,31 +685,106 @@ fn empty_mag_blocks_fire() {
 }
 
 #[test]
-fn fire_spends_mag_one_per_projectile() {
+fn fire_spends_chamber_not_mag() {
     let mut fire = FireState::new();
     let mut s = armed_self();
-    s.set_primary(Some(b'b')).unwrap();
-    let before = s.primary_mag;
-    fire.pay_ready(b'b');
+    s.set_primary(Some(b'e')).unwrap();
+    seat_spring(&mut s);
+    let mag_before = s.primary_mag;
+    fire.pay_ready(b'e');
     fire.ready_s = 0.0;
     let d = fire.tick(0.0, &mut s, true, 0, eye(), &muzzles());
     assert_eq!(d.len(), 1);
     assert_eq!(d[0].projectiles.len(), 1);
-    assert_eq!(s.primary_mag, before - 1);
+    assert_eq!(s.primary_chamber, 0);
+    assert_eq!(s.primary_mag, mag_before);
 }
 
 #[test]
-fn multi_pellet_partial_mag() {
+fn spring_shotgun_one_shell_full_spray() {
     let mut fire = FireState::new();
     let mut s = armed_self();
     s.set_primary(Some(b'k')).unwrap();
     s.primary_mag = 3;
+    seat_spring(&mut s);
+    assert_eq!(s.primary_mag, 2);
+    assert_eq!(s.primary_chamber, 1);
     fire.pay_ready(b'k');
     fire.ready_s = 0.0;
     let d = fire.tick(0.0, &mut s, true, 0, eye(), &muzzles());
     assert_eq!(d.len(), 1);
-    assert_eq!(d[0].projectiles.len(), 3);
-    assert_eq!(s.primary_mag, 0);
+    assert_eq!(d[0].projectiles.len(), 6);
+    assert_eq!(s.primary_chamber, 0);
+    assert_eq!(s.primary_mag, 2);
+}
+
+#[test]
+fn every_firing_muzzle_spends_a_seated_round() {
+    // `o`: four barrels fire together, two pellets each — four rounds leave the chamber.
+    let mut fire = FireState::new();
+    let mut s = armed_self();
+    s.set_primary(Some(b'o')).unwrap();
+    s.primary_chamber = 4;
+    fire.pay_ready(b'o');
+    fire.ready_s = 0.0;
+    let m = vec![
+        Vec3::new(-0.1, 1.4, 0.4),
+        Vec3::new(0.1, 1.4, 0.4),
+        Vec3::new(-0.1, 1.3, 0.4),
+        Vec3::new(0.1, 1.3, 0.4),
+    ];
+    let d = fire.tick(0.0, &mut s, true, 0, eye(), &m);
+    assert_eq!(d.len(), 1);
+    assert_eq!(d[0].fired_muzzles.len(), 4);
+    assert_eq!(d[0].projectiles.len(), 8);
+    assert_eq!(s.primary_chamber, 0);
+}
+
+#[test]
+fn part_seated_chamber_fires_only_paid_muzzles() {
+    let mut fire = FireState::new();
+    let mut s = armed_self();
+    s.set_primary(Some(b'o')).unwrap();
+    s.primary_chamber = 2;
+    s.reserve.light_foam = 0;
+    fire.pay_ready(b'o');
+    fire.ready_s = 0.0;
+    let m = vec![
+        Vec3::new(-0.1, 1.4, 0.4),
+        Vec3::new(0.1, 1.4, 0.4),
+        Vec3::new(-0.1, 1.3, 0.4),
+        Vec3::new(0.1, 1.3, 0.4),
+    ];
+    let d = fire.tick(0.0, &mut s, true, 0, eye(), &m);
+    assert_eq!(d[0].fired_muzzles.len(), 2);
+    assert_eq!(d[0].projectiles.len(), 4);
+    assert_eq!(s.primary_chamber, 0);
+}
+
+#[test]
+fn no_mag_alternate_fires_each_seat_before_a_pump() {
+    // `i`: chamber 2, one barrel per press — both go before the chamber refills.
+    let mut fire = FireState::new();
+    let mut s = armed_self();
+    s.set_primary(Some(b'i')).unwrap();
+    s.primary_chamber = 2;
+    s.reserve.light_foam = 10;
+    fire.pay_ready(b'i');
+    fire.ready_s = 0.0;
+    let m = vec![Vec3::new(0.0, 1.4, 0.4), Vec3::new(0.0, 1.3, 0.4)];
+
+    let d0 = fire.tick(1.0 / 60.0, &mut s, true, 0, eye(), &m);
+    assert_eq!(d0.len(), 1);
+    assert_eq!(s.primary_chamber, 1);
+    assert!(!fire.pumping());
+
+    let _ = fire.tick(1.0, &mut s, false, 0, eye(), &m);
+    fire.cooldown_s = 0.0;
+    let d1 = fire.tick(1.0 / 60.0, &mut s, true, 0, eye(), &m);
+    assert_eq!(d1.len(), 1);
+    assert_eq!(d1[0].fired_muzzles, vec![1]);
+    assert_eq!(s.primary_chamber, 0);
+    assert!(fire.pumping());
 }
 
 #[test]
@@ -628,8 +794,8 @@ fn reload_moves_reserve_into_mag() {
     s.primary_mag = 0;
     s.reserve.light_foam = 5;
     assert!(s.try_reload());
-    assert_eq!(s.primary_mag, 1);
-    assert_eq!(s.reserve.light_foam, 4);
+    assert_eq!(s.primary_mag, 5);
+    assert_eq!(s.reserve.light_foam, 0);
     // Full mag: no more.
     s.primary_mag = s.active_mag_capacity().unwrap();
     s.reserve.light_foam = 10;
@@ -637,53 +803,97 @@ fn reload_moves_reserve_into_mag() {
 }
 
 #[test]
-fn semi_auto_chambers_from_reserve() {
+fn spring_mag_pumps_between_shots_without_taking_reserve() {
     let mut fire = FireState::new();
     let mut s = armed_self();
-    s.set_primary(Some(b'b')).unwrap();
-    s.reserve.light_foam = 3;
-    fire.pay_ready(b'b');
+    s.set_primary(Some(b'e')).unwrap();
+    seat_spring(&mut s);
+    s.reserve.thick_foam = 30;
+    fire.pay_ready(b'e');
     fire.ready_s = 0.0;
 
     let m = muzzles();
+    let mag_before = s.primary_mag;
     let d = fire.tick(1.0 / 60.0, &mut s, true, 0, eye(), &m);
     assert_eq!(d.len(), 1);
-    assert_eq!(s.primary_mag, 0);
-    assert!(fire.chambering());
+    assert_eq!(s.primary_chamber, 0);
+    assert_eq!(s.primary_mag, mag_before);
+    assert!(fire.pumping());
+    assert_eq!(s.reserve.thick_foam, 30);
 
-    // No R pressed: the next dart seats itself after the load time.
     for _ in 0..60 {
         let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, eye(), &m);
     }
-    assert!(!fire.chambering());
-    assert_eq!(s.primary_mag, 1);
-    assert_eq!(s.reserve.light_foam, 2);
-    assert!(fire.take_chambered());
+    assert!(!fire.pumping());
+    assert_eq!(s.primary_chamber, 1);
+    assert_eq!(s.primary_mag, mag_before - 1);
+    assert_eq!(s.reserve.thick_foam, 30);
+    assert_eq!(
+        fire.take_pump_cues(),
+        vec![PumpCue::Start, PumpCue::Seat, PumpCue::End]
+    );
 }
 
 #[test]
-fn semi_auto_chamber_needs_reserve() {
+fn spring_mag_empty_needs_r_not_auto_reserve() {
     let mut fire = FireState::new();
     let mut s = armed_self();
-    s.set_primary(Some(b'b')).unwrap();
-    s.reserve.light_foam = 0;
-    fire.pay_ready(b'b');
+    s.set_primary(Some(b'e')).unwrap();
+    s.primary_mag = 1;
+    seat_spring(&mut s);
+    assert_eq!(s.primary_mag, 0);
+    assert_eq!(s.primary_chamber, 1);
+    s.reserve.thick_foam = 10;
+    fire.pay_ready(b'e');
     fire.ready_s = 0.0;
 
     let m = muzzles();
     let _ = fire.tick(1.0 / 60.0, &mut s, true, 0, eye(), &m);
+    assert_eq!(s.primary_chamber, 0);
+    assert_eq!(s.primary_mag, 0);
+    assert!(!fire.pumping());
     for _ in 0..60 {
         let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, eye(), &m);
     }
     assert_eq!(s.primary_mag, 0);
-    assert!(!fire.take_chambered());
+    assert_eq!(s.reserve.thick_foam, 10);
+    assert_eq!(fire.begin_reload(&s), Some(b'e'));
 }
 
 #[test]
-fn semi_auto_chamber_waits_until_tubes_empty() {
+fn spring_equip_auto_pumps_from_mag() {
     let mut fire = FireState::new();
     let mut s = armed_self();
-    // Dual-tube pistol `i`: fire both before one chamber.
+    s.set_primary(Some(b'e')).unwrap();
+    assert_eq!(s.primary_chamber, 0);
+    fire.pay_ready(b'e');
+    fire.ready_s = 0.0;
+
+    let m = muzzles();
+    let mag_before = s.primary_mag;
+    let d0 = fire.tick(1.0 / 60.0, &mut s, true, 0, eye(), &m);
+    assert!(d0.is_empty());
+    assert!(fire.pumping());
+
+    for _ in 0..60 {
+        let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, eye(), &m);
+    }
+    assert!(!fire.pumping());
+    assert_eq!(s.primary_chamber, 1);
+    assert_eq!(s.primary_mag, mag_before - 1);
+    assert_eq!(
+        fire.take_pump_cues(),
+        vec![PumpCue::Start, PumpCue::Seat, PumpCue::End]
+    );
+
+    let d1 = fire.tick(1.0 / 60.0, &mut s, true, 0, eye(), &m);
+    assert_eq!(d1.len(), 1);
+}
+
+#[test]
+fn no_mag_auto_pumps_from_reserve() {
+    let mut fire = FireState::new();
+    let mut s = armed_self();
     s.set_primary(Some(b'i')).unwrap();
     s.reserve.light_foam = 4;
     fire.pay_ready(b'i');
@@ -691,27 +901,52 @@ fn semi_auto_chamber_waits_until_tubes_empty() {
 
     let m = vec![Vec3::new(0.0, 1.4, 0.4), Vec3::new(0.0, 1.3, 0.4)];
     let d0 = fire.tick(1.0 / 60.0, &mut s, true, 0, eye(), &m);
-    assert_eq!(d0.len(), 1);
-    assert_eq!(s.primary_mag, 1);
-    assert!(!fire.chambering());
+    assert!(d0.is_empty());
+    assert_eq!(s.primary_chamber, 0);
+    assert!(fire.pumping());
+    assert_eq!(fire.begin_reload(&s), None);
 
-    let _ = fire.tick(1.0, &mut s, false, 0, eye(), &m);
-    fire.cooldown_s = 0.0;
+    let mut cues = Vec::new();
+    for _ in 0..120 {
+        let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, eye(), &m);
+        cues.extend(fire.take_pump_cues());
+    }
+    assert_eq!(
+        cues,
+        vec![PumpCue::Start, PumpCue::Seat, PumpCue::Seat, PumpCue::End]
+    );
+    assert!(!fire.pumping());
+    assert_eq!(s.primary_chamber, 2);
+    assert_eq!(s.reserve.light_foam, 2);
+
     let d1 = fire.tick(1.0 / 60.0, &mut s, true, 0, eye(), &m);
     assert_eq!(d1.len(), 1);
-    assert_eq!(s.primary_mag, 0);
-    assert!(fire.chambering());
-
-    for _ in 0..60 {
-        let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, eye(), &m);
-    }
-    assert_eq!(s.primary_mag, 2);
-    assert_eq!(s.reserve.light_foam, 2);
-    assert!(fire.take_chambered());
+    assert_eq!(s.primary_chamber, 1);
 }
 
 #[test]
-fn full_auto_does_not_auto_chamber() {
+fn no_mag_auto_pump_needs_reserve() {
+    let mut fire = FireState::new();
+    let mut s = armed_self();
+    s.set_primary(Some(b'i')).unwrap();
+    s.primary_chamber = 1;
+    s.reserve.light_foam = 0;
+    fire.pay_ready(b'i');
+    fire.ready_s = 0.0;
+
+    let m = vec![Vec3::new(0.0, 1.4, 0.4), Vec3::new(0.0, 1.3, 0.4)];
+    let _ = fire.tick(1.0 / 60.0, &mut s, true, 0, eye(), &m);
+    assert_eq!(s.primary_chamber, 0);
+    assert!(!fire.pumping());
+    for _ in 0..60 {
+        let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, eye(), &m);
+    }
+    assert_eq!(s.primary_chamber, 0);
+    assert!(fire.take_pump_cues().is_empty());
+}
+
+#[test]
+fn full_auto_does_not_auto_pump() {
     let mut fire = FireState::new();
     let mut s = armed_self();
     s.set_primary(Some(b'p')).unwrap();
@@ -726,25 +961,21 @@ fn full_auto_does_not_auto_chamber() {
         let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, eye(), &m);
     }
     assert_eq!(s.primary_mag, 0);
-    assert!(!fire.take_chambered());
+    assert!(fire.take_pump_cues().is_empty());
 }
 
 #[test]
-fn spawn_ammo_fills_mag_and_draft_reserve() {
+fn spawn_ammo_fills_mag_load_and_draft_reserve() {
     let mut s = SelfState::default_loadout();
     s.primary = Some(b'e'); // sniper → thick foam
     s.secondary = Some(b'a'); // launcher → grenade
     s.apply_spawn_ammo();
-    assert_eq!(s.primary_mag, weapon_def(b'e').unwrap().mag_capacity());
-    assert_eq!(s.secondary_mag, weapon_def(b'a').unwrap().mag_capacity());
-    assert_eq!(
-        s.reserve.thick_foam,
-        crate::spawn_reserve_for(AmmoKind::ThickFoam)
-    );
-    assert_eq!(
-        s.reserve.grenade,
-        crate::spawn_reserve_for(AmmoKind::Grenade)
-    );
+    assert_eq!(s.primary_mag, crate::spawn_mag_for_letter(b'e'));
+    assert_eq!(s.secondary_mag, crate::spawn_mag_for_letter(b'a'));
+    assert_eq!(s.primary_chamber, 0);
+    assert_eq!(s.secondary_chamber, 0);
+    assert_eq!(s.reserve.thick_foam, crate::spawn_spare_for_letter(b'e'));
+    assert_eq!(s.reserve.grenade, crate::spawn_spare_for_letter(b'a'));
     assert_eq!(s.reserve.light_foam, 0);
 }
 
@@ -788,17 +1019,18 @@ fn grant_floor_blaster_fills_then_swaps() {
     assert_eq!(s.secondary_mag, 7);
     assert_eq!(s.active, ActiveWeapon::Secondary);
 
-    // Both full — swap active (secondary). Dual-tube `i` clamps to cap 2.
+    // Both full — swap active (secondary). No-mag `i` seats into chamber (cap 2).
     let displaced = s.grant_floor_blaster(b'i', 5).unwrap();
     assert_eq!(displaced, Some((b'd', 7)));
     assert_eq!(s.secondary, Some(b'i'));
-    assert_eq!(s.secondary_mag, 2);
+    assert_eq!(s.secondary_mag, 0);
+    assert_eq!(s.secondary_chamber, 2);
 
-    // Active primary — swap primary. Semi pistol clamps to cap 1.
+    // Active primary — swap primary. Springer pistol clamps to mag 12.
     s.active = ActiveWeapon::Primary;
     let displaced = s.grant_floor_blaster(b'b', 3).unwrap();
     assert_eq!(displaced, Some((b'p', 10)));
     assert_eq!(s.primary, Some(b'b'));
-    assert_eq!(s.primary_mag, 1);
+    assert_eq!(s.primary_mag, 3);
     assert_eq!(s.active, ActiveWeapon::Primary);
 }

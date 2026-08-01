@@ -119,7 +119,7 @@ impl RemotePresent {
     }
 
     pub fn iter_name_anchors(&self) -> impl Iterator<Item = (PlayerId, Vec3)> + '_ {
-        const ABOVE_HEAD_M: f32 = 0.80;
+        const ABOVE_HEAD_M: f32 = 0.60;
         self.slots.iter().filter_map(|(&id, slot)| {
             let Slot::Ready { gpu, .. } = slot else {
                 return None;

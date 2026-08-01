@@ -24,7 +24,7 @@ mod theme {
     pub const CHROME_STROKE: Color32 = Color32::from_rgba_premultiplied(52, 148, 230, 80);
     pub const NAME_ALLY: Color32 = Color32::from_rgb(52, 148, 230);
     pub const NAME_OPPONENT: Color32 = Color32::from_rgb(255, 108, 88);
-    pub const NAME_OUTLINE: Color32 = Color32::from_rgb(255, 255, 252);
+    pub const NAME_OUTLINE: Color32 = Color32::from_rgb(10, 12, 16);
 }
 
 pub struct OverlayGpu<'a> {
@@ -147,7 +147,8 @@ impl UiOverlay {
 
         let phase = session.phase;
         let show_score = phase.in_room();
-        let has_names = !session.floating_names.is_empty();
+        // Product Gate / Panel chrome owns the screen: names must not float over it.
+        let has_names = !session.floating_names.is_empty() && phase.surface_kind().is_none();
         let mut actions = ProductActions::default();
         let status = self.status.clone();
 
@@ -386,16 +387,7 @@ fn draw_soft_cursor(ctx: &egui::Context, pos: egui::Pos2) {
 }
 
 fn draw_floating_names(ctx: &egui::Context, labels: &[FloatingNameLabel]) {
-    const OUTLINE_OFFSETS: [(f32, f32); 8] = [
-        (-1.0, 0.0),
-        (1.0, 0.0),
-        (0.0, -1.0),
-        (0.0, 1.0),
-        (-1.0, -1.0),
-        (1.0, -1.0),
-        (-1.0, 1.0),
-        (1.0, 1.0),
-    ];
+    const OUTLINE_OFFSETS: [(f32, f32); 4] = [(-0.7, 0.0), (0.7, 0.0), (0.0, -0.7), (0.0, 0.7)];
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
         egui::Id::new("floating_names"),

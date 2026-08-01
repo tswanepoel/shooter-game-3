@@ -255,16 +255,25 @@ impl ClientInner {
                             if cont { "  cont" } else { "" },
                         ));
                     }
-                    if let (Some(mag), Some(cap)) = (
-                        self.self_state.active_mag(),
-                        self.self_state.active_mag_capacity(),
-                    ) {
-                        let rsv = self
-                            .self_state
-                            .active_ammo_kind()
-                            .map(|k| self.self_state.reserve.get(k))
-                            .unwrap_or(0);
-                        parts.push(format!("mag {mag}/{cap}  rsv {rsv}"));
+                    if let Some(letter) = self.self_state.active_blaster() {
+                        if let Some(def) = game_sim::weapon_def(letter) {
+                            let ch = self.self_state.active_chamber().unwrap_or(0);
+                            let ch_cap = def.chamber_capacity();
+                            let rsv = self
+                                .self_state
+                                .active_ammo_kind()
+                                .map(|k| self.self_state.reserve.get(k))
+                                .unwrap_or(0);
+                            if def.has_magazine() {
+                                let mag = self.self_state.active_mag().unwrap_or(0);
+                                let mag_cap = def.mag_capacity();
+                                parts.push(format!(
+                                    "ch {ch}/{ch_cap}  mag {mag}/{mag_cap}  rsv {rsv}"
+                                ));
+                            } else {
+                                parts.push(format!("ch {ch}/{ch_cap}  rsv {rsv}"));
+                            }
+                        }
                     }
                     // 059: see whether a drop exists and how far (take radius 1.5m).
                     if let Some((n, dist, rounds)) =

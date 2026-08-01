@@ -30,14 +30,28 @@ fn table_covers_a_through_r() {
     assert_eq!(weapon_def(b'f').unwrap().ammo(), AmmoKind::ThickFoam);
     assert_eq!(weapon_def(b'b').unwrap().ammo(), AmmoKind::LightFoam);
     assert_eq!(weapon_def(b'k').unwrap().ammo(), AmmoKind::LightFoam);
-    assert_eq!(weapon_def(b'b').unwrap().mag_capacity(), 1);
-    assert_eq!(weapon_def(b'a').unwrap().mag_capacity(), 1);
-    assert_eq!(weapon_def(b'e').unwrap().mag_capacity(), 1);
-    assert_eq!(weapon_def(b'i').unwrap().mag_capacity(), 2);
-    assert_eq!(weapon_def(b'j').unwrap().mag_capacity(), 6);
+    assert_eq!(weapon_def(b'b').unwrap().mag_capacity(), 12);
+    assert_eq!(weapon_def(b'a').unwrap().mag_capacity(), 0);
+    assert_eq!(weapon_def(b'e').unwrap().mag_capacity(), 6);
+    assert_eq!(weapon_def(b'i').unwrap().mag_capacity(), 0);
+    assert_eq!(weapon_def(b'j').unwrap().mag_capacity(), 0);
     assert_eq!(weapon_def(b'k').unwrap().mag_capacity(), 6);
-    assert_eq!(weapon_def(b'o').unwrap().mag_capacity(), 8);
-    assert_eq!(weapon_def(b'p').unwrap().mag_capacity(), 30);
+    assert_eq!(weapon_def(b'o').unwrap().mag_capacity(), 0);
+    assert_eq!(weapon_def(b'p').unwrap().mag_capacity(), 24);
+    assert!(weapon_def(b'b').unwrap().has_magazine());
+    assert_eq!(weapon_def(b'b').unwrap().pump_count(), 0);
+    assert_eq!(weapon_def(b'b').unwrap().chamber_capacity(), 1);
+    assert!(!weapon_def(b'a').unwrap().has_magazine());
+    assert_eq!(weapon_def(b'a').unwrap().pump_count(), 1);
+    assert_eq!(weapon_def(b'a').unwrap().chamber_capacity(), 1);
+    assert!(!weapon_def(b'i').unwrap().has_magazine());
+    assert_eq!(weapon_def(b'i').unwrap().pump_count(), 2);
+    assert_eq!(weapon_def(b'i').unwrap().chamber_capacity(), 2);
+    assert_eq!(weapon_def(b'o').unwrap().chamber_capacity(), 4);
+    assert_eq!(weapon_def(b'o').unwrap().pump_count(), 4);
+    assert!(weapon_def(b'p').unwrap().has_magazine());
+    assert_eq!(weapon_def(b'p').unwrap().pump_count(), 0);
+    assert_eq!(weapon_def(b'd').unwrap().mag_capacity(), 24);
 }
 
 #[test]
