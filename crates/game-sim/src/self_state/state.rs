@@ -189,14 +189,6 @@ impl SelfState {
         })
     }
 
-    fn active_mag_mut(&mut self) -> Option<&mut u16> {
-        self.active_blaster()?;
-        Some(match self.active {
-            ActiveWeapon::Primary => &mut self.primary_mag,
-            ActiveWeapon::Secondary => &mut self.secondary_mag,
-        })
-    }
-
     pub fn active_chamber(&self) -> Option<u16> {
         self.active_blaster()?;
         Some(match self.active {
@@ -221,15 +213,6 @@ impl SelfState {
 
     pub fn active_ammo_kind(&self) -> Option<AmmoKind> {
         self.active_blaster().and_then(weapon_def).map(|d| d.ammo())
-    }
-
-    pub fn spend_mag_rounds(&mut self, want: u16) -> u16 {
-        let Some(mag) = self.active_mag_mut() else {
-            return 0;
-        };
-        let spent = (*mag).min(want);
-        *mag -= spent;
-        spent
     }
 
     pub fn spend_chamber_rounds(&mut self, want: u16) -> u16 {
@@ -346,90 +329,88 @@ impl SelfState {
         Some((kind, from_reserve))
     }
 
-    /// Strip the active blaster letter + magazine for a floor drop (067).
-    /// Chamber rounds fold into the dropped mag count. Clears that slot.
+    /// Strip the active blaster letter + magazine + chamber for a floor drop (067).
+    /// Mag and chamber are separate real state — no fold. Clears that slot.
     /// Returns `None` when unarmed.
-    pub fn take_active_blaster_drop(&mut self) -> Option<(u8, u16)> {
+    pub fn take_active_blaster_drop(&mut self) -> Option<(u8, u16, u16)> {
         let letter = self.active_blaster()?;
-        let mag = match self.active {
+        let (mag, chamber) = match self.active {
             ActiveWeapon::Primary => {
-                let n = self.primary_mag.saturating_add(self.primary_chamber);
+                let m = self.primary_mag;
+                let c = self.primary_chamber;
                 self.primary = None;
                 self.primary_mag = 0;
                 self.primary_chamber = 0;
-                n
+                (m, c)
             }
             ActiveWeapon::Secondary => {
-                let n = self.secondary_mag.saturating_add(self.secondary_chamber);
+                let m = self.secondary_mag;
+                let c = self.secondary_chamber;
                 self.secondary = None;
                 self.secondary_mag = 0;
                 self.secondary_chamber = 0;
-                n
+                (m, c)
             }
         };
-        Some((letter, mag))
+        Some((letter, mag, chamber))
     }
 
-    /// Equip a floor blaster (letter + mag) into a slot (067).
+    /// Equip a floor blaster (letter + mag + chamber) into a slot (067).
     /// Prefer free primary, then free secondary; else swap active.
     /// Secondary may hold any class on floor grant (021 laws stay on loadout/spawn).
-    /// Returns displaced `(letter, mag)` when a swap occurred.
+    /// Mag and chamber carry over separately (no fold/unfold); each clamps to that
+    /// letter's own capacity. Returns displaced `(letter, mag, chamber)` on a swap.
     pub fn grant_floor_blaster(
         &mut self,
         letter: u8,
         mag: u16,
-    ) -> Result<Option<(u8, u16)>, &'static str> {
+        chamber: u16,
+    ) -> Result<Option<(u8, u16, u16)>, &'static str> {
         if !self.alive {
             return Err("dead");
         }
         WeaponClass::from_letter(letter).ok_or("unknown blaster letter")?;
-        let mag_cap = Self::mag_capacity_of(Some(letter));
-        let ch_cap = Self::chamber_capacity_of(Some(letter));
-        let rounds = if mag_cap == 0 {
-            mag.min(ch_cap)
-        } else {
-            mag.min(mag_cap)
-        };
         self.clear_emote();
 
         if self.primary.is_none() {
-            self.write_slot(ActiveWeapon::Primary, Some(letter), rounds);
+            self.write_slot(ActiveWeapon::Primary, Some(letter), mag, chamber);
             self.active = ActiveWeapon::Primary;
             return Ok(None);
         }
         if self.secondary.is_none() {
-            self.write_slot(ActiveWeapon::Secondary, Some(letter), rounds);
+            self.write_slot(ActiveWeapon::Secondary, Some(letter), mag, chamber);
             self.active = ActiveWeapon::Secondary;
             return Ok(None);
         }
 
         let slot = self.active;
         let displaced = self.read_slot(slot);
-        self.write_slot(slot, Some(letter), rounds);
+        self.write_slot(slot, Some(letter), mag, chamber);
         self.active = slot;
         Ok(displaced)
     }
 
-    fn read_slot(&self, slot: ActiveWeapon) -> Option<(u8, u16)> {
+    fn read_slot(&self, slot: ActiveWeapon) -> Option<(u8, u16, u16)> {
         match slot {
             ActiveWeapon::Primary => self
                 .primary
-                .map(|l| (l, self.primary_mag.saturating_add(self.primary_chamber))),
+                .map(|l| (l, self.primary_mag, self.primary_chamber)),
             ActiveWeapon::Secondary => self
                 .secondary
-                .map(|l| (l, self.secondary_mag.saturating_add(self.secondary_chamber))),
+                .map(|l| (l, self.secondary_mag, self.secondary_chamber)),
         }
     }
 
-    fn write_slot(&mut self, slot: ActiveWeapon, letter: Option<u8>, rounds: u16) {
-        let mag_cap = Self::mag_capacity_of(letter);
-        let ch_cap = Self::chamber_capacity_of(letter);
+    /// Clamp `mag` / `chamber` to `letter`'s own capacities independently. No
+    /// mag-fed-forces-chamber-zero or no-mag-stuffs-mag-into-chamber unfold.
+    fn write_slot(&mut self, slot: ActiveWeapon, letter: Option<u8>, mag: u16, chamber: u16) {
         let (mag, chamber) = if letter.is_none() {
             (0, 0)
-        } else if mag_cap == 0 {
-            (0, rounds.min(ch_cap))
         } else {
-            (rounds.min(mag_cap), 0)
+            (
+                mag.min(Self::mag_capacity_of(letter)),
+                chamber.min(Self::chamber_capacity_of(letter)),
+            )
         };
         match slot {
             ActiveWeapon::Primary => {

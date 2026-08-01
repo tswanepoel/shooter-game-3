@@ -130,6 +130,7 @@ pub(crate) fn claim_blaster_dump(
     shared: &RefCell<Shared>,
     letter: u8,
     mag: u16,
+    chamber: u16,
     position: glam::Vec3,
 ) {
     let s = shared.borrow();
@@ -143,6 +144,7 @@ pub(crate) fn claim_blaster_dump(
     let dump = NetBlasterDump {
         letter,
         mag,
+        chamber,
         position: NetVec3::new(position.x, position.y, position.z),
     };
     let Ok(payload) = encode_c2s(&ClientToServer::BlasterDump { tick, dump }) else {

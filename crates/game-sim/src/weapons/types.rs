@@ -86,17 +86,16 @@ impl WeaponDef {
     }
 
     pub fn mag_capacity(self) -> u16 {
-        crate::letter_ammo(self.letter)
-            .map(|t| t.mag)
-            .unwrap_or_else(|| crate::mag_capacity_for_class(self.class))
+        crate::letter_ammo(self.letter).map(|t| t.mag).unwrap_or(0)
     }
 
     pub fn has_magazine(self) -> bool {
         self.mag_capacity() > 0
     }
 
-    pub fn pump_count(self) -> u16 {
-        crate::letter_ammo(self.letter).map(|t| t.pump).unwrap_or(0)
+    /// Timed seat batch size for chamber fill: `0` seats instantly (081).
+    pub fn seat_count(self) -> u16 {
+        crate::letter_ammo(self.letter).map(|t| t.seat).unwrap_or(0)
     }
 
     pub fn chamber_capacity(self) -> u16 {

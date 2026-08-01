@@ -16,7 +16,7 @@ fn muzzles() -> Vec<Vec3> {
     vec![Vec3::new(0.0, 1.4, 0.4)]
 }
 
-/// Instantly seat a spring chamber from mag (skip equip pump for fire tests).
+/// Instantly seat a spring chamber from mag (skip equip seat for fire tests).
 fn seat_spring(s: &mut SelfState) {
     let _ = s.feed_chamber_from_mag(1);
 }
@@ -762,7 +762,7 @@ fn part_seated_chamber_fires_only_paid_muzzles() {
 }
 
 #[test]
-fn no_mag_alternate_fires_each_seat_before_a_pump() {
+fn no_mag_alternate_fires_each_seat_before_reseating() {
     // `i`: chamber 2, one barrel per press — both go before the chamber refills.
     let mut fire = FireState::new();
     let mut s = armed_self();
@@ -776,7 +776,7 @@ fn no_mag_alternate_fires_each_seat_before_a_pump() {
     let d0 = fire.tick(1.0 / 60.0, &mut s, true, 0, eye(), &m);
     assert_eq!(d0.len(), 1);
     assert_eq!(s.primary_chamber, 1);
-    assert!(!fire.pumping());
+    assert!(!fire.seating());
 
     let _ = fire.tick(1.0, &mut s, false, 0, eye(), &m);
     fire.cooldown_s = 0.0;
@@ -784,7 +784,7 @@ fn no_mag_alternate_fires_each_seat_before_a_pump() {
     assert_eq!(d1.len(), 1);
     assert_eq!(d1[0].fired_muzzles, vec![1]);
     assert_eq!(s.primary_chamber, 0);
-    assert!(fire.pumping());
+    assert!(fire.seating());
 }
 
 #[test]
@@ -803,7 +803,7 @@ fn reload_moves_reserve_into_mag() {
 }
 
 #[test]
-fn spring_mag_pumps_between_shots_without_taking_reserve() {
+fn spring_mag_seats_between_shots_without_taking_reserve() {
     let mut fire = FireState::new();
     let mut s = armed_self();
     s.set_primary(Some(b'e')).unwrap();
@@ -818,19 +818,19 @@ fn spring_mag_pumps_between_shots_without_taking_reserve() {
     assert_eq!(d.len(), 1);
     assert_eq!(s.primary_chamber, 0);
     assert_eq!(s.primary_mag, mag_before);
-    assert!(fire.pumping());
+    assert!(fire.seating());
     assert_eq!(s.reserve.thick_foam, 30);
 
     for _ in 0..60 {
         let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, eye(), &m);
     }
-    assert!(!fire.pumping());
+    assert!(!fire.seating());
     assert_eq!(s.primary_chamber, 1);
     assert_eq!(s.primary_mag, mag_before - 1);
     assert_eq!(s.reserve.thick_foam, 30);
     assert_eq!(
-        fire.take_pump_cues(),
-        vec![PumpCue::Start, PumpCue::Seat, PumpCue::End]
+        fire.take_seat_cues(),
+        vec![SeatCue::Start, SeatCue::Seat, SeatCue::End]
     );
 }
 
@@ -851,7 +851,7 @@ fn spring_mag_empty_needs_r_not_auto_reserve() {
     let _ = fire.tick(1.0 / 60.0, &mut s, true, 0, eye(), &m);
     assert_eq!(s.primary_chamber, 0);
     assert_eq!(s.primary_mag, 0);
-    assert!(!fire.pumping());
+    assert!(!fire.seating());
     for _ in 0..60 {
         let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, eye(), &m);
     }
@@ -861,7 +861,7 @@ fn spring_mag_empty_needs_r_not_auto_reserve() {
 }
 
 #[test]
-fn spring_equip_auto_pumps_from_mag() {
+fn spring_equip_auto_seats_from_mag() {
     let mut fire = FireState::new();
     let mut s = armed_self();
     s.set_primary(Some(b'e')).unwrap();
@@ -873,17 +873,17 @@ fn spring_equip_auto_pumps_from_mag() {
     let mag_before = s.primary_mag;
     let d0 = fire.tick(1.0 / 60.0, &mut s, true, 0, eye(), &m);
     assert!(d0.is_empty());
-    assert!(fire.pumping());
+    assert!(fire.seating());
 
     for _ in 0..60 {
         let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, eye(), &m);
     }
-    assert!(!fire.pumping());
+    assert!(!fire.seating());
     assert_eq!(s.primary_chamber, 1);
     assert_eq!(s.primary_mag, mag_before - 1);
     assert_eq!(
-        fire.take_pump_cues(),
-        vec![PumpCue::Start, PumpCue::Seat, PumpCue::End]
+        fire.take_seat_cues(),
+        vec![SeatCue::Start, SeatCue::Seat, SeatCue::End]
     );
 
     let d1 = fire.tick(1.0 / 60.0, &mut s, true, 0, eye(), &m);
@@ -891,7 +891,7 @@ fn spring_equip_auto_pumps_from_mag() {
 }
 
 #[test]
-fn no_mag_auto_pumps_from_reserve() {
+fn no_mag_auto_seats_from_reserve() {
     let mut fire = FireState::new();
     let mut s = armed_self();
     s.set_primary(Some(b'i')).unwrap();
@@ -903,19 +903,19 @@ fn no_mag_auto_pumps_from_reserve() {
     let d0 = fire.tick(1.0 / 60.0, &mut s, true, 0, eye(), &m);
     assert!(d0.is_empty());
     assert_eq!(s.primary_chamber, 0);
-    assert!(fire.pumping());
+    assert!(fire.seating());
     assert_eq!(fire.begin_reload(&s), None);
 
     let mut cues = Vec::new();
     for _ in 0..120 {
         let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, eye(), &m);
-        cues.extend(fire.take_pump_cues());
+        cues.extend(fire.take_seat_cues());
     }
     assert_eq!(
         cues,
-        vec![PumpCue::Start, PumpCue::Seat, PumpCue::Seat, PumpCue::End]
+        vec![SeatCue::Start, SeatCue::Seat, SeatCue::Seat, SeatCue::End]
     );
-    assert!(!fire.pumping());
+    assert!(!fire.seating());
     assert_eq!(s.primary_chamber, 2);
     assert_eq!(s.reserve.light_foam, 2);
 
@@ -925,7 +925,7 @@ fn no_mag_auto_pumps_from_reserve() {
 }
 
 #[test]
-fn no_mag_auto_pump_needs_reserve() {
+fn no_mag_auto_seat_needs_reserve() {
     let mut fire = FireState::new();
     let mut s = armed_self();
     s.set_primary(Some(b'i')).unwrap();
@@ -937,16 +937,16 @@ fn no_mag_auto_pump_needs_reserve() {
     let m = vec![Vec3::new(0.0, 1.4, 0.4), Vec3::new(0.0, 1.3, 0.4)];
     let _ = fire.tick(1.0 / 60.0, &mut s, true, 0, eye(), &m);
     assert_eq!(s.primary_chamber, 0);
-    assert!(!fire.pumping());
+    assert!(!fire.seating());
     for _ in 0..60 {
         let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, eye(), &m);
     }
     assert_eq!(s.primary_chamber, 0);
-    assert!(fire.take_pump_cues().is_empty());
+    assert!(fire.take_seat_cues().is_empty());
 }
 
 #[test]
-fn full_auto_does_not_auto_pump() {
+fn full_auto_does_not_auto_seat() {
     let mut fire = FireState::new();
     let mut s = armed_self();
     s.set_primary(Some(b'p')).unwrap();
@@ -961,7 +961,7 @@ fn full_auto_does_not_auto_pump() {
         let _ = fire.tick(1.0 / 60.0, &mut s, false, 0, eye(), &m);
     }
     assert_eq!(s.primary_mag, 0);
-    assert!(fire.take_pump_cues().is_empty());
+    assert!(fire.take_seat_cues().is_empty());
 }
 
 #[test]
@@ -999,11 +999,34 @@ fn take_active_blaster_clears_slot() {
     let mut s = armed_self();
     s.set_primary(Some(b'b')).unwrap();
     s.primary_mag = 4;
-    let (letter, mag) = s.take_active_blaster_drop().expect("drop");
+    s.primary_chamber = 1;
+    let (letter, mag, chamber) = s.take_active_blaster_drop().expect("drop");
     assert_eq!(letter, b'b');
     assert_eq!(mag, 4);
+    assert_eq!(chamber, 1);
     assert!(s.primary.is_none());
     assert_eq!(s.primary_mag, 0);
+    assert_eq!(s.primary_chamber, 0);
+}
+
+#[test]
+fn mag_fed_drop_with_chamber_round_trips_both() {
+    // Mag and chamber are separate real state — a drop must not fold one into
+    // the other, and a grant must restore both exactly.
+    let mut s = armed_self();
+    s.set_primary(Some(b'b')).unwrap();
+    s.primary_mag = 4;
+    s.primary_chamber = 1;
+    let (letter, mag, chamber) = s.take_active_blaster_drop().expect("drop");
+    assert_eq!((letter, mag, chamber), (b'b', 4, 1));
+
+    let mut other = armed_self();
+    other.set_secondary(None).unwrap();
+    let displaced = other.grant_floor_blaster(letter, mag, chamber).unwrap();
+    assert!(displaced.is_none());
+    assert_eq!(other.secondary, Some(letter));
+    assert_eq!(other.secondary_mag, 4);
+    assert_eq!(other.secondary_chamber, 1);
 }
 
 #[test]
@@ -1013,23 +1036,24 @@ fn grant_floor_blaster_fills_then_swaps() {
     s.primary_mag = 10;
     s.set_secondary(None).unwrap();
     // Free secondary — any class on pickup.
-    let displaced = s.grant_floor_blaster(b'd', 7).unwrap();
+    let displaced = s.grant_floor_blaster(b'd', 7, 1).unwrap();
     assert!(displaced.is_none());
     assert_eq!(s.secondary, Some(b'd'));
     assert_eq!(s.secondary_mag, 7);
+    assert_eq!(s.secondary_chamber, 1);
     assert_eq!(s.active, ActiveWeapon::Secondary);
 
-    // Both full — swap active (secondary). No-mag `i` seats into chamber (cap 2).
-    let displaced = s.grant_floor_blaster(b'i', 5).unwrap();
-    assert_eq!(displaced, Some((b'd', 7)));
+    // Both full — swap active (secondary). No-mag `i` chamber clamps to cap 2.
+    let displaced = s.grant_floor_blaster(b'i', 0, 5).unwrap();
+    assert_eq!(displaced, Some((b'd', 7, 1)));
     assert_eq!(s.secondary, Some(b'i'));
     assert_eq!(s.secondary_mag, 0);
     assert_eq!(s.secondary_chamber, 2);
 
     // Active primary — swap primary. Springer pistol clamps to mag 12.
     s.active = ActiveWeapon::Primary;
-    let displaced = s.grant_floor_blaster(b'b', 3).unwrap();
-    assert_eq!(displaced, Some((b'p', 10)));
+    let displaced = s.grant_floor_blaster(b'b', 3, 0).unwrap();
+    assert_eq!(displaced, Some((b'p', 10, 0)));
     assert_eq!(s.primary, Some(b'b'));
     assert_eq!(s.primary_mag, 3);
     assert_eq!(s.active, ActiveWeapon::Primary);

@@ -1,6 +1,6 @@
 //! Client one-shot SFX (Web Audio). Present only — not sim.
 
-use game_sim::{weapon_def, LocomotionMode, PumpCue, WeaponClass};
+use game_sim::{weapon_def, LocomotionMode, SeatCue, WeaponClass};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::JsValue;
 use wasm_bindgen_futures::JsFuture;
@@ -24,7 +24,7 @@ const LAND_STEP_OFFSET_MAX_S: f64 = 0.05;
 pub struct Sfx {
     ctx: AudioContext,
     bangs: [AudioBuffer; 4],
-    pumps: [AudioBuffer; 4],
+    seats: [AudioBuffer; 4],
     breech_open: AudioBuffer,
     breech_close: AudioBuffer,
     reload: AudioBuffer,
@@ -51,7 +51,8 @@ impl Sfx {
             load_wav(&ctx, &pack, "bang-c.wav").await?,
             load_wav(&ctx, &pack, "bang-d.wav").await?,
         ];
-        let pumps = [
+        // Seat voice buffers; asset ids stay `pump-*.wav` (081 hygiene: not renaming assets).
+        let seats = [
             load_wav(&ctx, &pack, "pump-a.wav").await?,
             load_wav(&ctx, &pack, "pump-b.wav").await?,
             load_wav(&ctx, &pack, "pump-c.wav").await?,
@@ -84,7 +85,7 @@ impl Sfx {
         Ok(Self {
             ctx,
             bangs,
-            pumps,
+            seats,
             breech_open,
             breech_close,
             reload,
@@ -114,19 +115,19 @@ impl Sfx {
         self.play_buf(&self.reload, 1.0, 0.0);
     }
 
-    pub fn play_pump_cue(&self, letter: u8, cue: PumpCue) {
-        match pump_voice(letter) {
-            PumpVoice::Breech => match cue {
-                PumpCue::Start => self.play_buf(&self.breech_open, 1.0, 0.0),
-                PumpCue::End => self.play_buf(&self.breech_close, 1.0, 0.0),
-                PumpCue::Seat => {}
+    pub fn play_seat_cue(&self, letter: u8, cue: SeatCue) {
+        match seat_voice(letter) {
+            SeatVoice::Breech => match cue {
+                SeatCue::Start => self.play_buf(&self.breech_open, 1.0, 0.0),
+                SeatCue::End => self.play_buf(&self.breech_close, 1.0, 0.0),
+                SeatCue::Seat => {}
             },
-            PumpVoice::Slide(i) => {
-                if cue == PumpCue::Seat {
-                    self.play_buf(&self.pumps[i], 1.0, 0.0);
+            SeatVoice::Slide(i) => {
+                if cue == SeatCue::Seat {
+                    self.play_buf(&self.seats[i], 1.0, 0.0);
                 }
             }
-            PumpVoice::Silent => {}
+            SeatVoice::Silent => {}
         }
     }
 
@@ -232,20 +233,20 @@ fn bang_index(letter: u8) -> usize {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PumpVoice {
+enum SeatVoice {
     Slide(usize),
     Breech,
     Silent,
 }
 
-fn pump_voice(letter: u8) -> PumpVoice {
+fn seat_voice(letter: u8) -> SeatVoice {
     match letter {
-        b'j' => PumpVoice::Breech,
-        b'k' | b'o' => PumpVoice::Slide(0),
-        b'e' | b'f' => PumpVoice::Slide(1),
-        b'i' => PumpVoice::Slide(2),
-        b'a' => PumpVoice::Slide(3),
-        _ => PumpVoice::Silent,
+        b'j' => SeatVoice::Breech,
+        b'k' | b'o' => SeatVoice::Slide(0),
+        b'e' | b'f' => SeatVoice::Slide(1),
+        b'i' => SeatVoice::Slide(2),
+        b'a' => SeatVoice::Slide(3),
+        _ => SeatVoice::Silent,
     }
 }
 
@@ -317,9 +318,9 @@ impl SfxState {
         }
     }
 
-    pub fn play_pump_cue(&self, letter: u8, cue: PumpCue) {
+    pub fn play_seat_cue(&self, letter: u8, cue: SeatCue) {
         if let Self::Ready(sfx) = self {
-            sfx.play_pump_cue(letter, cue);
+            sfx.play_seat_cue(letter, cue);
         }
     }
 
@@ -338,7 +339,8 @@ impl SfxState {
 
 #[cfg(test)]
 mod tests {
-    use super::{bang_index, foot_plants, has_magazine, is_semi, pump_voice, PumpVoice};
+    use super::{bang_index, foot_plants, has_magazine, is_semi, seat_voice, SeatVoice};
+    use game_sim::WeaponClass;
 
     #[test]
     fn crosses_half() {
@@ -369,7 +371,7 @@ mod tests {
     }
 
     #[test]
-    fn bang_by_class_and_pump_voices() {
+    fn bang_by_class_and_seat_voices() {
         assert_eq!(bang_index(b'b'), 0);
         assert_eq!(bang_index(b'e'), 0);
         assert_eq!(bang_index(b'i'), 0);
@@ -392,13 +394,13 @@ mod tests {
             };
             assert_eq!(bang_index(letter), bang, "bang {}", letter as char);
         }
-        assert_eq!(pump_voice(b'j'), PumpVoice::Breech);
-        assert_eq!(pump_voice(b'k'), PumpVoice::Slide(0));
-        assert_eq!(pump_voice(b'o'), PumpVoice::Slide(0));
-        assert_eq!(pump_voice(b'e'), PumpVoice::Slide(1));
-        assert_eq!(pump_voice(b'i'), PumpVoice::Slide(2));
-        assert_eq!(pump_voice(b'a'), PumpVoice::Slide(3));
-        assert_eq!(pump_voice(b'l'), PumpVoice::Silent);
+        assert_eq!(seat_voice(b'j'), SeatVoice::Breech);
+        assert_eq!(seat_voice(b'k'), SeatVoice::Slide(0));
+        assert_eq!(seat_voice(b'o'), SeatVoice::Slide(0));
+        assert_eq!(seat_voice(b'e'), SeatVoice::Slide(1));
+        assert_eq!(seat_voice(b'i'), SeatVoice::Slide(2));
+        assert_eq!(seat_voice(b'a'), SeatVoice::Slide(3));
+        assert_eq!(seat_voice(b'l'), SeatVoice::Silent);
         assert_eq!(bang_index(b'z'), 0);
     }
 }

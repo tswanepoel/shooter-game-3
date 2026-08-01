@@ -9,13 +9,13 @@ use crate::weapons::{
 };
 use crate::SelfState;
 
-pub const SEMI_PUMP_BASE_S: f32 = 0.25;
-pub const SEMI_PUMP_PER_ROUND_S: f32 = 0.12;
+pub const SEAT_BASE_S: f32 = 0.25;
+pub const SEAT_PER_ROUND_S: f32 = 0.12;
 
 pub const RELOAD_MAG_S: f32 = 0.55;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PumpCue {
+pub enum SeatCue {
     Start,
     Seat,
     End,
@@ -26,12 +26,12 @@ pub struct FireState {
     pub(crate) ready_s: f32,
     pub(crate) sprint_fire_s: f32,
     pub(crate) cooldown_s: f32,
-    pub(crate) pump_s: f32,
-    pump_left: u16,
+    pub(crate) seat_s: f32,
+    seat_left: u16,
     pub(crate) reload_s: f32,
-    pump_start_edge: bool,
-    pumped_edge: bool,
-    pump_end_edge: bool,
+    seat_start_edge: bool,
+    seated_edge: bool,
+    seat_end_edge: bool,
     burst_left: u8,
     burst_pending: bool,
     fire_held: bool,
@@ -55,12 +55,12 @@ impl FireState {
             ready_s: 0.0,
             sprint_fire_s: 0.0,
             cooldown_s: 0.0,
-            pump_s: 0.0,
-            pump_left: 0,
+            seat_s: 0.0,
+            seat_left: 0,
             reload_s: 0.0,
-            pump_start_edge: false,
-            pumped_edge: false,
-            pump_end_edge: false,
+            seat_start_edge: false,
+            seated_edge: false,
+            seat_end_edge: false,
             burst_left: 0,
             burst_pending: false,
             fire_held: false,
@@ -77,15 +77,15 @@ impl FireState {
         self.burst_left > 0
     }
 
-    pub fn pumping(&self) -> bool {
-        self.pump_s > 0.0
+    pub fn seating(&self) -> bool {
+        self.seat_s > 0.0
     }
 
     pub fn loading(&self) -> bool {
-        self.reload_s > 0.0 || self.pump_s > 0.0 || self.pump_left > 0
+        self.reload_s > 0.0 || self.seat_s > 0.0 || self.seat_left > 0
     }
 
-    /// No-mag blasters seat via pump — R is not used (081).
+    /// No-mag blasters seat via a timed chamber seat — R is not used (081).
     pub fn begin_reload(&mut self, self_state: &SelfState) -> Option<u8> {
         if self.loading() || self.burst_active() {
             return None;
@@ -102,19 +102,19 @@ impl FireState {
         Some(letter)
     }
 
-    pub fn take_pump_cues(&mut self) -> Vec<PumpCue> {
+    pub fn take_seat_cues(&mut self) -> Vec<SeatCue> {
         let mut out = Vec::new();
-        if self.pump_start_edge {
-            self.pump_start_edge = false;
-            out.push(PumpCue::Start);
+        if self.seat_start_edge {
+            self.seat_start_edge = false;
+            out.push(SeatCue::Start);
         }
-        if self.pumped_edge {
-            self.pumped_edge = false;
-            out.push(PumpCue::Seat);
+        if self.seated_edge {
+            self.seated_edge = false;
+            out.push(SeatCue::Seat);
         }
-        if self.pump_end_edge {
-            self.pump_end_edge = false;
-            out.push(PumpCue::End);
+        if self.seat_end_edge {
+            self.seat_end_edge = false;
+            out.push(SeatCue::End);
         }
         out
     }
@@ -139,11 +139,11 @@ impl FireState {
             self.burst_left = 0;
             self.burst_pending = false;
             self.cooldown_s = 0.0;
-            self.pump_s = 0.0;
-            self.pump_left = 0;
-            self.pump_start_edge = false;
-            self.pumped_edge = false;
-            self.pump_end_edge = false;
+            self.seat_s = 0.0;
+            self.seat_left = 0;
+            self.seat_start_edge = false;
+            self.seated_edge = false;
+            self.seat_end_edge = false;
             self.reload_s = 0.0;
             self.alt_muzzle = 0;
         }
@@ -159,11 +159,11 @@ impl FireState {
                     self.burst_left = 0;
                     self.burst_pending = false;
                     self.reload_s = 0.0;
-                    self.pump_s = 0.0;
-                    self.pump_left = 0;
-                    self.pump_start_edge = false;
-                    self.pumped_edge = false;
-                    self.pump_end_edge = false;
+                    self.seat_s = 0.0;
+                    self.seat_left = 0;
+                    self.seat_start_edge = false;
+                    self.seated_edge = false;
+                    self.seat_end_edge = false;
                 }
             }
         }
@@ -213,11 +213,11 @@ impl FireState {
             self.prev_held = false;
             self.burst_left = 0;
             self.burst_pending = false;
-            self.pump_s = 0.0;
-            self.pump_left = 0;
-            self.pump_start_edge = false;
-            self.pumped_edge = false;
-            self.pump_end_edge = false;
+            self.seat_s = 0.0;
+            self.seat_left = 0;
+            self.seat_start_edge = false;
+            self.seated_edge = false;
+            self.seat_end_edge = false;
             self.reload_s = 0.0;
             return Vec::new();
         }
@@ -232,11 +232,11 @@ impl FireState {
             self.prev_held = false;
             self.burst_left = 0;
             self.burst_pending = false;
-            self.pump_s = 0.0;
-            self.pump_left = 0;
-            self.pump_start_edge = false;
-            self.pumped_edge = false;
-            self.pump_end_edge = false;
+            self.seat_s = 0.0;
+            self.seat_left = 0;
+            self.seat_start_edge = false;
+            self.seated_edge = false;
+            self.seat_end_edge = false;
             self.reload_s = 0.0;
             return Vec::new();
         };
@@ -253,22 +253,22 @@ impl FireState {
             }
         }
 
-        if self.pump_s > 0.0 {
-            self.pump_s = (self.pump_s - dt).max(0.0);
-            if self.pump_s <= 0.0 {
+        if self.seat_s > 0.0 {
+            self.seat_s = (self.seat_s - dt).max(0.0);
+            if self.seat_s <= 0.0 {
                 let moved = if def.has_magazine() {
                     self_state.feed_chamber_from_mag(1)
                 } else {
                     self_state.feed_chamber_from_reserve(1)
                 };
                 if moved > 0 {
-                    self.pumped_edge = true;
-                    self.pump_left = self.pump_left.saturating_sub(1);
-                    if self.pump_left == 0 {
-                        self.pump_end_edge = true;
+                    self.seated_edge = true;
+                    self.seat_left = self.seat_left.saturating_sub(1);
+                    if self.seat_left == 0 {
+                        self.seat_end_edge = true;
                     }
                 } else {
-                    self.pump_left = 0;
+                    self.seat_left = 0;
                 }
             }
         }
@@ -389,55 +389,55 @@ impl FireState {
     }
 
     fn ensure_seat(&mut self, def: &WeaponDef, self_state: &mut SelfState) {
-        if self.pump_s > 0.0 || self.reload_s > 0.0 {
+        if self.seat_s > 0.0 || self.reload_s > 0.0 {
             return;
         }
         let ch = self_state.active_chamber().unwrap_or(0);
         let cap = def.chamber_capacity();
         let room = cap.saturating_sub(ch);
         if room == 0 {
-            self.pump_left = 0;
+            self.seat_left = 0;
             return;
         }
-        let pump_n = def.pump_count();
+        let seat_n = def.seat_count();
         if def.has_magazine() {
             let mag = self_state.active_mag().unwrap_or(0);
             if mag == 0 {
-                self.pump_left = 0;
+                self.seat_left = 0;
                 return;
             }
-            if pump_n == 0 {
+            if seat_n == 0 {
                 let _ = self_state.feed_chamber_from_mag(room);
                 return;
             }
-            if self.pump_left == 0 {
-                self.pump_left = 1.min(room).min(mag).min(pump_n);
-                self.pump_start_edge = true;
+            if self.seat_left == 0 {
+                self.seat_left = 1.min(room).min(mag).min(seat_n);
+                self.seat_start_edge = true;
             }
-            if self.pump_left > 0 {
-                self.pump_s = PUMP_SEAT_S;
+            if self.seat_left > 0 {
+                self.seat_s = SEAT_S;
             }
         } else {
             let rsv = self_state.reserve.get(def.ammo());
             if rsv == 0 {
-                self.pump_left = 0;
+                self.seat_left = 0;
                 return;
             }
-            if pump_n == 0 {
+            if seat_n == 0 {
                 if ch == 0 {
                     let _ = self_state.feed_chamber_from_reserve(room);
                 }
                 return;
             }
-            if self.pump_left == 0 {
+            if self.seat_left == 0 {
                 if ch != 0 {
                     return;
                 }
-                self.pump_left = pump_n.min(room).min(rsv);
-                self.pump_start_edge = true;
+                self.seat_left = seat_n.min(room).min(rsv);
+                self.seat_start_edge = true;
             }
-            if self.pump_left > 0 {
-                self.pump_s = PUMP_SEAT_S;
+            if self.seat_left > 0 {
+                self.seat_s = SEAT_S;
             }
         }
     }
@@ -527,7 +527,7 @@ impl FireState {
     }
 }
 
-const PUMP_SEAT_S: f32 = SEMI_PUMP_BASE_S + SEMI_PUMP_PER_ROUND_S;
+const SEAT_S: f32 = SEAT_BASE_S + SEAT_PER_ROUND_S;
 
 fn scatter_direction(axis: Vec3, half_deg: f32, rand01: &mut dyn FnMut() -> f32) -> Vec3 {
     if half_deg <= 1e-6 {

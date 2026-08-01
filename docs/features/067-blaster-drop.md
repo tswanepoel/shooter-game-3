@@ -8,6 +8,8 @@ Living players take a blaster drop with **F** while overlapping its radius **and
 
 Death pins the blaster to the **right** of the corpse (right-handed hold) and slightly **behind** (die falls backwards), laid on its side — not inside the torso and not upright.
 
+A blaster drop carries [magazine](../concepts.md#magazine) **and** [chamber](../concepts.md#chamber) as separate round-tripped counts (081 hygiene) — no folding one into the other on drop or pickup.
+
 Depends on **059**, **021** / **053**, **058**, **057**.
 
 ## Acceptance criteria

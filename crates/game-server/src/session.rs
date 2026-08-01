@@ -449,7 +449,14 @@ async fn handle_datagram(
         }
         ClientToServer::BlasterDump { tick, dump } => {
             let mut guard = rooms.lock().await;
-            guard.accept_blaster_dump(player_id, dump.letter, dump.mag, dump.position, tick);
+            guard.accept_blaster_dump(
+                player_id,
+                dump.letter,
+                dump.mag,
+                dump.chamber,
+                dump.position,
+                tick,
+            );
             false
         }
         ClientToServer::BlasterClaim {

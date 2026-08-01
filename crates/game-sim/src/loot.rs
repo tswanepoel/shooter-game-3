@@ -3,9 +3,9 @@
 use glam::Vec3;
 
 use crate::{
-    clamp_blaster_mag, max_dump_rounds_for, AmmoKind, AMMO_DROP_LIFETIME_S,
-    BLASTER_DROP_LIFETIME_S, BLASTER_LOOK_DOT_MIN, DEATH_BLASTER_BACK_M, DEATH_BLASTER_RIGHT_M,
-    LOOT_TAKE_RADIUS_M, SWAP_BLASTER_FORWARD_M,
+    max_dump_rounds_for, weapon_def, AmmoKind, AMMO_DROP_LIFETIME_S, BLASTER_DROP_LIFETIME_S,
+    BLASTER_LOOK_DOT_MIN, DEATH_BLASTER_BACK_M, DEATH_BLASTER_RIGHT_M, LOOT_TAKE_RADIUS_M,
+    SWAP_BLASTER_FORWARD_M,
 };
 
 /// Invisible ammo drop pinned at a world position (059).
@@ -50,23 +50,26 @@ impl AmmoDrop {
     }
 }
 
-/// Visible floor blaster: letter + magazine (067).
+/// Visible floor blaster: letter + magazine + chamber (067). Mag and chamber
+/// are separate real state that round-trips through the drop; no fold.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BlasterDrop {
     pub id: u64,
     pub position: Vec3,
     pub letter: u8,
     pub mag: u16,
+    pub chamber: u16,
     pub age_s: f32,
 }
 
 impl BlasterDrop {
-    pub fn new(id: u64, position: Vec3, letter: u8, mag: u16) -> Self {
+    pub fn new(id: u64, position: Vec3, letter: u8, mag: u16, chamber: u16) -> Self {
         Self {
             id,
             position,
             letter,
             mag,
+            chamber,
             age_s: 0.0,
         }
     }
@@ -85,10 +88,14 @@ pub fn clamp_dump_rounds(kind: AmmoKind, rounds: u16) -> u16 {
     rounds.min(max_dump_rounds_for(kind))
 }
 
-/// Clamp a blaster dump magazine (067).
-pub fn clamp_blaster_dump(letter: u8, mag: u16) -> Option<(u8, u16)> {
-    let mag = clamp_blaster_mag(letter, mag)?;
-    Some((letter, mag))
+/// Clamp a blaster dump's magazine and chamber to that letter's own capacities,
+/// independently — no fold between them (067). No-mag letters have `mag_cap`
+/// 0, so `mag` simply clamps to 0.
+pub fn clamp_blaster_dump(letter: u8, mag: u16, chamber: u16) -> Option<(u8, u16, u16)> {
+    let def = weapon_def(letter)?;
+    let mag = mag.min(def.mag_capacity());
+    let chamber = chamber.min(def.chamber_capacity());
+    Some((letter, mag, chamber))
 }
 
 /// True when `pos` is within take radius of the drop.
@@ -160,16 +167,22 @@ mod tests {
     }
 
     #[test]
-    fn clamp_blaster_mag_caps() {
-        let (letter, mag) = clamp_blaster_dump(b'b', 999).expect("pistol");
+    fn clamp_blaster_dump_caps_mag_and_chamber_separately() {
+        let (letter, mag, chamber) = clamp_blaster_dump(b'b', 999, 999).expect("pistol");
         assert_eq!(letter, b'b');
         assert_eq!(mag, 12);
-        assert!(clamp_blaster_dump(b'z', 1).is_none());
+        assert_eq!(chamber, 1);
+        // No-mag letter: mag clamps to 0 (no fold into chamber); chamber clamps on its own.
+        let (letter, mag, chamber) = clamp_blaster_dump(b'i', 999, 999).expect("no-mag");
+        assert_eq!(letter, b'i');
+        assert_eq!(mag, 0);
+        assert_eq!(chamber, 2);
+        assert!(clamp_blaster_dump(b'z', 1, 1).is_none());
     }
 
     #[test]
     fn blaster_drop_expires_on_timer() {
-        let mut d = BlasterDrop::new(1, Vec3::ZERO, b'b', 0);
+        let mut d = BlasterDrop::new(1, Vec3::ZERO, b'b', 0, 0);
         assert!(!d.expired());
         d.age_s = BLASTER_DROP_LIFETIME_S;
         assert!(d.expired());

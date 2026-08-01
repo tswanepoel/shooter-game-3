@@ -76,7 +76,8 @@ impl MoveInput {
         v
     }
 
-    /// One wheel notch: positive `delta_y` (scroll down) advances primary→secondary→unarmed.
+    /// One wheel notch: positive `delta_y` (scroll down) advances primary↔secondary;
+    /// skips an empty slot while the other hand still holds a blaster (081).
     pub fn note_weapon_wheel(&mut self, delta_y: f64) {
         if delta_y > 0.0 {
             self.weapon_cycle = self.weapon_cycle.saturating_add(1);

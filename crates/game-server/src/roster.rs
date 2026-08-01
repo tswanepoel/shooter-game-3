@@ -379,11 +379,12 @@ impl Rooms {
         player: PlayerId,
         letter: u8,
         mag: u16,
+        chamber: u16,
         position: NetVec3,
         tick: u64,
     ) {
         if let Some(roster) = self.room_mut(player) {
-            roster.accept_blaster_dump(player, letter, mag, position, tick);
+            roster.accept_blaster_dump(player, letter, mag, chamber, position, tick);
         }
     }
 
@@ -566,14 +567,16 @@ impl Roster {
         player: PlayerId,
         letter: u8,
         mag: u16,
+        chamber: u16,
         position: NetVec3,
         tick: u64,
     ) {
         let drop = if self.living(player) {
-            self.loot.accept_blaster_floor_dump(letter, mag, position)
+            self.loot
+                .accept_blaster_floor_dump(letter, mag, chamber, position)
         } else {
             self.loot
-                .accept_blaster_death_dump(player, letter, mag, position)
+                .accept_blaster_death_dump(player, letter, mag, chamber, position)
         };
         if let Some(drop) = drop {
             if let Some(bytes) = encode_blaster_drop_spawn(tick, drop) {
@@ -602,6 +605,7 @@ impl Roster {
             grant.player_id,
             grant.letter,
             grant.mag,
+            grant.chamber,
         ) {
             self.broadcast_datagram_all(&bytes);
         }

@@ -303,6 +303,7 @@ fn handle_s2c(shared: &Rc<RefCell<Shared>>, msg: ServerToClient, t4: f64) {
             player_id,
             letter,
             mag,
+            chamber,
             ..
         } => {
             shared
@@ -313,6 +314,7 @@ fn handle_s2c(shared: &Rc<RefCell<Shared>>, msg: ServerToClient, t4: f64) {
                     player_id,
                     letter,
                     mag,
+                    chamber,
                 });
         }
         ServerToClient::Welcome { .. } | ServerToClient::Reject { .. } => {}

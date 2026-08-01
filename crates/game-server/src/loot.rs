@@ -44,6 +44,7 @@ pub struct BlasterDropRecord {
     pub position: NetVec3,
     pub letter: u8,
     pub mag: u16,
+    pub chamber: u16,
     pub age_s: f32,
 }
 
@@ -79,6 +80,7 @@ pub struct BlasterGrantEvent {
     pub player_id: PlayerId,
     pub letter: u8,
     pub mag: u16,
+    pub chamber: u16,
 }
 
 impl RoomLoot {
@@ -168,19 +170,20 @@ impl RoomLoot {
         })
     }
 
-    /// Death blaster dump: requires open corpse. Always mints (mag may be 0).
+    /// Death blaster dump: requires open corpse. Always mints (mag / chamber may be 0).
     pub fn accept_blaster_death_dump(
         &mut self,
         victim: PlayerId,
         letter: u8,
         mag: u16,
+        chamber: u16,
         position: NetVec3,
     ) -> Option<NetBlasterDropSpawn> {
-        let (letter, mag) = clamp_blaster_dump(letter, mag)?;
+        let (letter, mag, chamber) = clamp_blaster_dump(letter, mag, chamber)?;
         let corpse = self.open_blaster_corpse_mut(victim)?;
         corpse.blaster_dumped = true;
         let corpse_id = corpse.corpse_id;
-        Some(self.mint_blaster_drop(corpse_id, position, letter, mag))
+        Some(self.mint_blaster_drop(corpse_id, position, letter, mag, chamber))
     }
 
     /// Living displace dump: always mints a floor blaster (no corpse).
@@ -188,10 +191,11 @@ impl RoomLoot {
         &mut self,
         letter: u8,
         mag: u16,
+        chamber: u16,
         position: NetVec3,
     ) -> Option<NetBlasterDropSpawn> {
-        let (letter, mag) = clamp_blaster_dump(letter, mag)?;
-        Some(self.mint_blaster_drop(0, position, letter, mag))
+        let (letter, mag, chamber) = clamp_blaster_dump(letter, mag, chamber)?;
+        Some(self.mint_blaster_drop(0, position, letter, mag, chamber))
     }
 
     fn mint_blaster_drop(
@@ -200,6 +204,7 @@ impl RoomLoot {
         position: NetVec3,
         letter: u8,
         mag: u16,
+        chamber: u16,
     ) -> NetBlasterDropSpawn {
         self.next_blaster_drop_id = self.next_blaster_drop_id.saturating_add(1);
         let drop_id = self.next_blaster_drop_id;
@@ -211,6 +216,7 @@ impl RoomLoot {
                 position,
                 letter,
                 mag,
+                chamber,
                 age_s: 0.0,
             },
         );
@@ -220,6 +226,7 @@ impl RoomLoot {
             position,
             letter,
             mag,
+            chamber,
         }
     }
 
@@ -285,12 +292,14 @@ impl RoomLoot {
         }
         let letter = drop.letter;
         let mag = drop.mag;
+        let chamber = drop.chamber;
         self.blaster_drops.remove(&drop_id);
         Some(BlasterGrantEvent {
             drop_id,
             player_id: claimant,
             letter,
             mag,
+            chamber,
         })
     }
 
@@ -424,6 +433,7 @@ pub fn encode_blaster_grant(
     player_id: PlayerId,
     letter: u8,
     mag: u16,
+    chamber: u16,
 ) -> Option<Vec<u8>> {
     encode_s2c(&ServerToClient::BlasterGrant {
         tick,
@@ -431,6 +441,7 @@ pub fn encode_blaster_grant(
         player_id,
         letter,
         mag,
+        chamber,
     })
     .ok()
 }
@@ -509,15 +520,17 @@ mod tests {
         let mut loot = RoomLoot::default();
         let corpse = loot.spawn_corpse(2, b'a', NetVec3::new(0.0, 0.0, 0.0), 0.0);
         let drop = loot
-            .accept_blaster_death_dump(2, b'b', 4, NetVec3::new(0.0, 0.0, 0.0))
+            .accept_blaster_death_dump(2, b'b', 4, 1, NetVec3::new(0.0, 0.0, 0.0))
             .expect("blaster");
         assert_eq!(drop.corpse_id, corpse.corpse_id);
         assert_eq!(drop.mag, 4);
+        assert_eq!(drop.chamber, 1);
         let grant = loot
             .elect_blaster_claim(1, drop.drop_id, NetVec3::new(0.2, 0.0, 0.0), true)
             .expect("grant");
         assert_eq!(grant.letter, b'b');
         assert_eq!(grant.mag, 4);
+        assert_eq!(grant.chamber, 1);
         assert!(loot.blaster_drops.is_empty());
     }
 
@@ -525,13 +538,13 @@ mod tests {
     fn blaster_floor_dump_independent_of_corpse_timer() {
         let mut loot = RoomLoot::default();
         let corpse = loot.spawn_corpse(2, b'a', NetVec3::new(0.0, 0.0, 0.0), 0.0);
-        let _ = loot.accept_blaster_floor_dump(b'p', 10, NetVec3::new(1.0, 0.0, 0.0));
+        let _ = loot.accept_blaster_floor_dump(b'p', 10, 1, NetVec3::new(1.0, 0.0, 0.0));
         // Corpse end does not remove floor blasters (067 independent lifetime).
         let ev = loot.tick(CORPSE_LIFETIME_S + 0.1);
         assert!(ev.corpse_ends.contains(&corpse.corpse_id));
         // Re-mint after ages may have cleared prior floor drops.
         let drop = loot
-            .accept_blaster_floor_dump(b'p', 10, NetVec3::new(1.0, 0.0, 0.0))
+            .accept_blaster_floor_dump(b'p', 10, 1, NetVec3::new(1.0, 0.0, 0.0))
             .unwrap();
         assert!(loot.blaster_drops.contains_key(&drop.drop_id));
         let ev = loot.tick(BLASTER_DROP_LIFETIME_S + 0.1);

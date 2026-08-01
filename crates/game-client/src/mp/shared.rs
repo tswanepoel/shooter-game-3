@@ -44,6 +44,7 @@ pub struct BlasterGrantBatch {
     pub player_id: PlayerId,
     pub letter: u8,
     pub mag: u16,
+    pub chamber: u16,
 }
 
 pub struct FrameEffects {

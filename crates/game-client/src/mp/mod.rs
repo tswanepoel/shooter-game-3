@@ -251,8 +251,8 @@ impl MpClient {
         claims::claim_loot(&self.shared, drop_id, position, room);
     }
 
-    pub fn claim_blaster_dump(&self, letter: u8, mag: u16, position: glam::Vec3) {
-        claims::claim_blaster_dump(&self.shared, letter, mag, position);
+    pub fn claim_blaster_dump(&self, letter: u8, mag: u16, chamber: u16, position: glam::Vec3) {
+        claims::claim_blaster_dump(&self.shared, letter, mag, chamber, position);
     }
 
     pub fn claim_blaster(&self, drop_id: u64, position: glam::Vec3) {

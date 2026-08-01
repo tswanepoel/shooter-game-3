@@ -80,6 +80,7 @@ impl WorldLoot {
                 Vec3::new(d.position.x, d.position.y, d.position.z),
                 d.letter,
                 d.mag,
+                d.chamber,
             ),
         );
     }
@@ -145,9 +146,16 @@ impl WorldLoot {
     }
 
     /// Solo: spawn a local blaster drop.
-    pub fn spawn_local_blaster_drop(&mut self, id: u64, position: Vec3, letter: u8, mag: u16) {
+    pub fn spawn_local_blaster_drop(
+        &mut self,
+        id: u64,
+        position: Vec3,
+        letter: u8,
+        mag: u16,
+        chamber: u16,
+    ) {
         self.blaster_drops
-            .insert(id, BlasterDrop::new(id, position, letter, mag));
+            .insert(id, BlasterDrop::new(id, position, letter, mag, chamber));
     }
 
     /// Drops the living player overlaps with reserve room and may claim now.
@@ -258,12 +266,12 @@ impl WorldLoot {
         }
     }
 
-    /// Solo F take: equip floor blaster; returns displaced letter+mag for a new floor drop.
+    /// Solo F take: equip floor blaster; returns displaced letter+mag+chamber for a new floor drop.
     pub fn try_solo_blaster_take(
         &mut self,
         state: &mut SelfState,
         drop_id: u64,
-    ) -> Option<Option<(u8, u16)>> {
+    ) -> Option<Option<(u8, u16, u16)>> {
         if !state.alive {
             return None;
         }
@@ -278,8 +286,9 @@ impl WorldLoot {
         }
         let letter = drop.letter;
         let mag = drop.mag;
+        let chamber = drop.chamber;
         self.note_blaster_drop_end(drop_id);
-        let displaced = state.grant_floor_blaster(letter, mag).ok()?;
+        let displaced = state.grant_floor_blaster(letter, mag, chamber).ok()?;
         Some(displaced)
     }
 }

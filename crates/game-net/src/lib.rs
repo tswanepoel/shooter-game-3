@@ -7,7 +7,7 @@ pub const TICK_HZ: u32 = 180;
 pub const TICK_DURATION_SECS: f64 = 1.0 / TICK_HZ as f64;
 
 /// Alpha wire; bumped when variants change (no distributed compat promise).
-pub const PROTOCOL_VERSION: u16 = 18;
+pub const PROTOCOL_VERSION: u16 = 19;
 
 /// Largest accepted body of a length-prefixed reliable-stream frame.
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
@@ -143,11 +143,13 @@ pub struct NetAmmoDropSpawn {
     pub rounds: u16,
 }
 
-/// Victim / displace dump of a floor blaster (067).
+/// Victim / displace dump of a floor blaster (067). Mag and chamber are
+/// separate real state that round-trips — no fold.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NetBlasterDump {
     pub letter: u8,
     pub mag: u16,
+    pub chamber: u16,
     pub position: NetVec3,
 }
 
@@ -159,6 +161,7 @@ pub struct NetBlasterDropSpawn {
     pub position: NetVec3,
     pub letter: u8,
     pub mag: u16,
+    pub chamber: u16,
 }
 
 /// Room match snapshot on roster (064).
@@ -335,13 +338,14 @@ pub enum ServerToClient {
         tick: u64,
         drop: NetBlasterDropSpawn,
     },
-    /// Elected blaster loot grant (067).
+    /// Elected blaster loot grant (067). Mag and chamber carry separately.
     BlasterGrant {
         tick: u64,
         drop_id: u64,
         player_id: PlayerId,
         letter: u8,
         mag: u16,
+        chamber: u16,
     },
     /// Blaster drop ended by timer or grant (067).
     BlasterDropEnd {
@@ -775,6 +779,7 @@ mod tests {
             dump: NetBlasterDump {
                 letter: b'b',
                 mag: 4,
+                chamber: 1,
                 position: NetVec3::new(1.0, 0.0, 2.0),
             },
         };
@@ -795,6 +800,7 @@ mod tests {
                 position: NetVec3::new(1.0, 0.0, 2.0),
                 letter: b'b',
                 mag: 4,
+                chamber: 1,
             },
         };
         assert_eq!(decode_s2c(&encode_s2c(&bspawn).unwrap()).unwrap(), bspawn);
@@ -805,6 +811,7 @@ mod tests {
             player_id: 1,
             letter: b'b',
             mag: 4,
+            chamber: 1,
         };
         assert_eq!(decode_s2c(&encode_s2c(&bgrant).unwrap()).unwrap(), bgrant);
 

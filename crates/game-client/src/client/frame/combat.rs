@@ -53,8 +53,8 @@ impl ClientInner {
             &muzzle_worlds,
         );
         if let Some(letter) = self.self_state.active_blaster() {
-            for cue in self.fire.take_pump_cues() {
-                self.sfx.play_pump_cue(letter, cue);
+            for cue in self.fire.take_seat_cues() {
+                self.sfx.play_seat_cue(letter, cue);
             }
         }
         let mut claimed: Vec<game_sim::Projectile> = Vec::new();
@@ -315,15 +315,15 @@ impl ClientInner {
             if self.mp.is_living() {
                 self.mp.return_to_bench_after_death();
             }
-            if let Some((letter, mag)) = self.self_state.take_active_blaster_drop() {
+            if let Some((letter, mag, chamber)) = self.self_state.take_active_blaster_drop() {
                 let drop_pos = game_sim::death_blaster_drop_position(feet, facing);
                 if self.mp.in_room() {
-                    self.mp.claim_blaster_dump(letter, mag, drop_pos);
+                    self.mp.claim_blaster_dump(letter, mag, chamber, drop_pos);
                 } else {
                     let id = self.next_local_drop_id;
                     self.next_local_drop_id = self.next_local_drop_id.saturating_add(1);
                     self.world_loot
-                        .spawn_local_blaster_drop(id, drop_pos, letter, mag);
+                        .spawn_local_blaster_drop(id, drop_pos, letter, mag, chamber);
                 }
             }
         }
@@ -361,19 +361,22 @@ impl ClientInner {
         for g in self.mp.take_blaster_grants() {
             self.world_loot.note_blaster_drop_end(g.drop_id);
             if local_id == Some(g.player_id) {
-                if let Ok(displaced) = self.self_state.grant_floor_blaster(g.letter, g.mag) {
+                if let Ok(displaced) = self
+                    .self_state
+                    .grant_floor_blaster(g.letter, g.mag, g.chamber)
+                {
                     if let Some(letter) = self.self_state.active_blaster() {
                         self.fire.pay_ready(letter);
                     } else {
                         self.fire.sync_active_letter(None);
                     }
                     self.kick_self_present_if_loadout_uncovered();
-                    if let Some((letter, mag)) = displaced {
+                    if let Some((letter, mag, chamber)) = displaced {
                         let pos = game_sim::swap_blaster_drop_position(
                             self.self_state.position,
                             self.self_state.look_yaw(),
                         );
-                        self.mp.claim_blaster_dump(letter, mag, pos);
+                        self.mp.claim_blaster_dump(letter, mag, chamber, pos);
                     }
                 }
             }
@@ -407,7 +410,7 @@ impl ClientInner {
                                 self.fire.sync_active_letter(None);
                             }
                             self.kick_self_present_if_loadout_uncovered();
-                            if let Some((letter, mag)) = displaced {
+                            if let Some((letter, mag, chamber)) = displaced {
                                 let id = self.next_local_drop_id;
                                 self.next_local_drop_id = self.next_local_drop_id.saturating_add(1);
                                 let pos = game_sim::swap_blaster_drop_position(
@@ -415,7 +418,7 @@ impl ClientInner {
                                     self.self_state.look_yaw(),
                                 );
                                 self.world_loot
-                                    .spawn_local_blaster_drop(id, pos, letter, mag);
+                                    .spawn_local_blaster_drop(id, pos, letter, mag, chamber);
                             }
                         }
                     }
