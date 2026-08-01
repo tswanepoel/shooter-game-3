@@ -69,15 +69,20 @@ const PACKS = [
     sources: ['map-a.json', 'materials'],
     assets() {
       const materialsDir = path.join(sourceRoot, 'materials');
-      const gravelCandidates = [
-        { file: 'gravel.jpg', kind: 'jpg' },
-        { file: 'gravel.jpeg', kind: 'jpg' },
-        { file: 'gravel.png', kind: 'png' },
-      ];
-      const gravel = gravelCandidates.find((c) => fs.existsSync(path.join(materialsDir, c.file)));
-      if (!gravel) {
-        throw new Error('missing gravel albedo: expected materials/gravel.jpg|.jpeg|.png');
-      }
+      const pickAlbedo = (stem) => {
+        const candidates = [
+          { file: `${stem}.jpg`, kind: 'jpg' },
+          { file: `${stem}.jpeg`, kind: 'jpg' },
+          { file: `${stem}.png`, kind: 'png' },
+        ];
+        const hit = candidates.find((c) => fs.existsSync(path.join(materialsDir, c.file)));
+        if (!hit) {
+          throw new Error(`missing ${stem} albedo: expected materials/${stem}.jpg|.jpeg|.png`);
+        }
+        return hit;
+      };
+      const gravel = pickAlbedo('gravel');
+      const cement = pickAlbedo('cement');
       return [
         {
           id: 'map-a.def',
@@ -88,6 +93,11 @@ const PACKS = [
           id: 'gravel.albedo',
           path: path.join(materialsDir, gravel.file),
           kind: gravel.kind,
+        },
+        {
+          id: 'cement.albedo',
+          path: path.join(materialsDir, cement.file),
+          kind: cement.kind,
         },
       ];
     },
