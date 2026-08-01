@@ -1,4 +1,4 @@
-//! Cooked map load and draw (064 shipment container, 066 solids, 070/072/073 foot patches, 082 ground, 083 gravel, 084 cement, 085 grass, 086 container albedo, 087 closed door hardware).
+//! Cooked map load and draw (064 shipment container, 066 solids, 070/072/073 foot patches, 082 ground, 083 gravel, 084 cement, 085 grass, 086 container albedo, 087 closed door hardware, 088 lit map solids).
 
 #[cfg(target_arch = "wasm32")]
 use glam::Mat4;
@@ -376,6 +376,7 @@ impl MapGpu {
                 gravel,
                 GRAVEL_METRES_PER_TILE,
                 SolidUvLayout::WorldXz,
+                mesh::SolidShading::Lit,
                 "map-a-ground",
             )
         });
@@ -390,6 +391,7 @@ impl MapGpu {
                     mesh::box_prim(ground_half, gravel),
                     ground_root,
                     gravel,
+                    mesh::SolidShading::Lit,
                     "map-a-ground",
                 )
                 .map_err(|e| JsValue::from_str(&e))?
@@ -419,6 +421,7 @@ impl MapGpu {
                         color,
                         metres_per_tile,
                         SolidUvLayout::WorldXz,
+                        mesh::SolidShading::Lit,
                         &label,
                     )
                 }) {
@@ -432,14 +435,22 @@ impl MapGpu {
                             mesh::box_prim(half, color),
                             root,
                             color,
+                            mesh::SolidShading::Lit,
                             &label,
                         )
                         .map_err(|e| JsValue::from_str(&e))?
                     }
                 }
             } else {
-                mesh::upload_solid_batch(&gpu, mesh::box_prim(half, color), root, color, &label)
-                    .map_err(|e| JsValue::from_str(&e))?
+                mesh::upload_solid_batch(
+                    &gpu,
+                    mesh::box_prim(half, color),
+                    root,
+                    color,
+                    mesh::SolidShading::Lit,
+                    &label,
+                )
+                .map_err(|e| JsValue::from_str(&e))?
             };
             batches.push(batch);
         }
@@ -463,6 +474,7 @@ impl MapGpu {
                 container_tint,
                 metres_per_tile,
                 uv_layout,
+                mesh::SolidShading::Lit,
                 label,
             )
         };
@@ -517,6 +529,7 @@ impl MapGpu {
                         mesh::box_prim(half, CONTAINER_FALLBACK_COLOR),
                         root,
                         CONTAINER_FALLBACK_COLOR,
+                        mesh::SolidShading::Lit,
                         "map-a-shipment-container",
                     )
                     .map_err(|e| JsValue::from_str(&e))?,
@@ -525,7 +538,7 @@ impl MapGpu {
         }
         for (prim, color, label) in container_door_hardware(half) {
             batches.push(
-                mesh::upload_solid_batch(&gpu, prim, root, color, label)
+                mesh::upload_solid_batch(&gpu, prim, root, color, mesh::SolidShading::Lit, label)
                     .map_err(|e| JsValue::from_str(&e))?,
             );
         }
@@ -539,6 +552,7 @@ impl MapGpu {
                     mesh::box_prim(half, BOX_COLOR),
                     root,
                     BOX_COLOR,
+                    mesh::SolidShading::Lit,
                     &format!("map-a-box-{i}"),
                 )
                 .map_err(|e| JsValue::from_str(&e))?,
@@ -559,6 +573,7 @@ impl MapGpu {
                     ),
                     root,
                     RAMP_COLOR,
+                    mesh::SolidShading::Lit,
                     "map-a-ramp",
                 )
                 .map_err(|e| JsValue::from_str(&e))?,

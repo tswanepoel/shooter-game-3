@@ -27,6 +27,20 @@ pub enum SolidUvLayout {
     RearDoors,
 }
 
+/// Whether a solid batch takes the key + ambient pass (088) or stays flat (debug markers).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SolidShading {
+    Unlit,
+    Lit,
+}
+
+impl SolidShading {
+    fn flags(self) -> [f32; 4] {
+        let lit = if self == Self::Lit { 1.0 } else { 0.0 };
+        [lit, 0.0, 0.0, 0.0]
+    }
+}
+
 /// Upload character + held blaster. Returns batches and the **held_blaster** root (037)
 /// so callers (lineup muzzles) sample blaster-local points under the same matrix.
 #[cfg(feature = "debug-tools")]
@@ -204,6 +218,7 @@ pub fn upload_solid_batch(
     prim: CpuPrim,
     root: Mat4,
     color: [f32; 4],
+    shading: SolidShading,
     label: &str,
 ) -> Result<MeshBatch, String> {
     let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
@@ -252,7 +267,7 @@ pub fn upload_solid_batch(
         0,
         bytemuck::bytes_of(&MaterialUniforms {
             base_color: color,
-            flags: [0.0, 0.0, 0.0, 0.0],
+            flags: shading.flags(),
         }),
     );
 
@@ -312,7 +327,7 @@ pub fn upload_solid_batch(
     })
 }
 
-/// Unlit solid with a real albedo PNG, tiling UVs, and full mips (083 / 086).
+/// Solid with a real albedo PNG, tiling UVs, and full mips (083 / 086).
 pub fn upload_textured_solid_batch(
     gpu: &UploadCtx<'_>,
     png: &[u8],
@@ -321,6 +336,7 @@ pub fn upload_textured_solid_batch(
     color: [f32; 4],
     metres_per_tile: f32,
     uv_layout: SolidUvLayout,
+    shading: SolidShading,
     label: &str,
 ) -> Result<MeshBatch, String> {
     let (tex_w, tex_h, rgba) = decode_rgba8(png)?;
@@ -374,7 +390,7 @@ pub fn upload_textured_solid_batch(
         0,
         bytemuck::bytes_of(&MaterialUniforms {
             base_color: color,
-            flags: [0.0, 0.0, 0.0, 0.0],
+            flags: shading.flags(),
         }),
     );
 

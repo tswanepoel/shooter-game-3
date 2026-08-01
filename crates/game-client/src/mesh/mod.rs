@@ -1,7 +1,7 @@
 //! Kit meshes: load, hold pose, held-weapon attach, GPU upload.
 //!
-//! Characters and blasters use lit matte shading: albedo × (ambient + key × N·L).
-//! Solid debug batches (markers) stay unlit via a material flag.
+//! Characters, blasters, and map solids use lit matte shading: albedo × (ambient + key × N·L).
+//! Debug batches (markers) stay unlit via a material flag.
 //!
 //! Held attach:
 //! `held_blaster = kit_to_world · arm_right · H · inv(G) · S_blaster`
@@ -29,4 +29,6 @@ pub use primitives::{
 };
 #[cfg(feature = "debug-tools")]
 pub use upload::upload_held_pair;
-pub use upload::{upload_batch, upload_solid_batch, upload_textured_solid_batch, SolidUvLayout};
+pub use upload::{
+    upload_batch, upload_solid_batch, upload_textured_solid_batch, SolidShading, SolidUvLayout,
+};

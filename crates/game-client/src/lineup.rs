@@ -58,6 +58,7 @@ impl LineupGpu {
                     mesh::unit_sphere_prim(12, 8),
                     marker_root,
                     MUZZLE_MARKER_COLOR,
+                    mesh::SolidShading::Unlit,
                     "lineup-muzzle-marker",
                 )
                 .map_err(|e| {

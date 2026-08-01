@@ -20,7 +20,7 @@ struct FrameUniforms {
 
 struct MaterialUniforms {
     base_color: vec4<f32>,
-    // x: 1 = lit kit mesh, 0 = unlit solid/debug. (vec4 for uniform alignment)
+    // x: 1 = lit (kit mesh, map solid), 0 = unlit debug. (vec4 for uniform alignment)
     flags: vec4<f32>,
 };
 
@@ -97,6 +97,6 @@ pub(crate) struct FrameUniforms {
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub(crate) struct MaterialUniforms {
     pub base_color: [f32; 4],
-    /// x: 1 = lit, 0 = unlit solid/debug.
+    /// x: 1 = lit, 0 = unlit debug.
     pub flags: [f32; 4],
 }
