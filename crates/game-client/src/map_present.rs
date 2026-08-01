@@ -1,4 +1,4 @@
-//! Cooked map load and draw (064 landmark, 066 solids, 070/072/073 foot patches, 082 ground, 083 gravel, 084 cement).
+//! Cooked map load and draw (064 landmark, 066 solids, 070/072/073 foot patches, 082 ground, 083 gravel, 084 cement, 085 grass).
 
 #[cfg(target_arch = "wasm32")]
 use glam::Mat4;
@@ -24,6 +24,8 @@ const FOOT_PATCH_HALF_Y: f32 = 0.02;
 const GRAVEL_METRES_PER_TILE: f32 = 1.5;
 /// World metres per cement albedo tile (084).
 const CEMENT_METRES_PER_TILE: f32 = 1.5;
+/// World metres per grass albedo tile (085).
+const GRASS_METRES_PER_TILE: f32 = 1.5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FootKind {
@@ -40,7 +42,7 @@ impl FootKind {
             Self::Gravel => [1.0, 1.0, 1.0, 1.0],
             Self::Cement => [1.0, 1.0, 1.0, 1.0],
             Self::WetCement => [0.42, 0.48, 0.52, 1.0],
-            Self::Grass => [0.42, 0.58, 0.36, 1.0],
+            Self::Grass => [1.0, 1.0, 1.0, 1.0],
         }
     }
 }
@@ -206,22 +208,27 @@ impl MapGpu {
             let half = Vec3::new(p.half_x, FOOT_PATCH_HALF_Y, p.half_z);
             let root = Mat4::from_translation(Vec3::new(p.center_x, pad_center_y, p.center_z));
             let label = format!("map-a-foot-{i}");
-            let batch = if p.kind == FootKind::Cement {
-                match pack.get("cement.albedo").and_then(|png| {
+            let textured = match p.kind {
+                FootKind::Cement => Some(("cement.albedo", CEMENT_METRES_PER_TILE)),
+                FootKind::Grass => Some(("grass.albedo", GRASS_METRES_PER_TILE)),
+                _ => None,
+            };
+            let batch = if let Some((asset, metres_per_tile)) = textured {
+                match pack.get(asset).and_then(|png| {
                     mesh::upload_textured_solid_batch(
                         &gpu,
                         png,
                         mesh::box_prim(half, color),
                         root,
                         color,
-                        CEMENT_METRES_PER_TILE,
+                        metres_per_tile,
                         &label,
                     )
                 }) {
                     Ok(batch) => batch,
                     Err(e) => {
                         web_sys::console::warn_1(
-                            &format!("map: cement albedo unusable ({e}); flat pad").into(),
+                            &format!("map: {asset} unusable ({e}); flat pad").into(),
                         );
                         mesh::upload_solid_batch(
                             &gpu,
@@ -382,7 +389,7 @@ mod tests {
         assert_eq!(FootKind::Gravel.albedo(), [1.0, 1.0, 1.0, 1.0]);
         assert_eq!(FootKind::Cement.albedo(), [1.0, 1.0, 1.0, 1.0]);
         assert_eq!(FootKind::WetCement.albedo()[0], 0.42);
-        assert_eq!(FootKind::Grass.albedo()[1], 0.58);
+        assert_eq!(FootKind::Grass.albedo(), [1.0, 1.0, 1.0, 1.0]);
     }
 
     #[test]
