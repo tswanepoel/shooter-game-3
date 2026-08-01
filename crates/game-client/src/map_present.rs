@@ -15,7 +15,7 @@ use game_sim::{MapBox, MapRamp, MapWorld};
 
 pub const MAP_A_PACK: &str = "maps-a";
 
-/// Flat fallback when `container.albedo` fails (086).
+/// Flat fallback when container albedos fail (086).
 const CONTAINER_FALLBACK_COLOR: [f32; 4] = [0.55, 0.62, 0.72, 1.0];
 const BOX_COLOR: [f32; 4] = [0.72, 0.58, 0.42, 1.0];
 const RAMP_COLOR: [f32; 4] = [0.48, 0.66, 0.52, 1.0];
@@ -255,34 +255,62 @@ impl MapGpu {
         let half = Vec3::from_array(def.shipment_container.half_extents);
         let root = Mat4::from_translation(Vec3::from_array(def.shipment_container.position));
         let container_tint = [1.0, 1.0, 1.0, 1.0];
-        let container_batch = match pack.get("container.albedo").and_then(|png| {
-            mesh::upload_textured_solid_batch(
-                &gpu,
-                png,
-                mesh::box_prim(half, container_tint),
-                root,
-                container_tint,
-                CONTAINER_METRES_PER_TILE,
-                SolidUvLayout::BoxFace,
-                "map-a-shipment-container",
-            )
-        }) {
-            Ok(batch) => batch,
-            Err(e) => {
-                web_sys::console::warn_1(
-                    &format!("map: container albedo unusable ({e}); flat container").into(),
-                );
-                mesh::upload_solid_batch(
+        let upload_container_part =
+            |albedo_id: &str, group: mesh::BoxFaceGroup, label: &str| -> Result<_, String> {
+                let png = pack.get(albedo_id)?;
+                mesh::upload_textured_solid_batch(
                     &gpu,
-                    mesh::box_prim(half, CONTAINER_FALLBACK_COLOR),
+                    png,
+                    mesh::box_face_group_prim(half, container_tint, Some(group)),
                     root,
-                    CONTAINER_FALLBACK_COLOR,
-                    "map-a-shipment-container",
+                    container_tint,
+                    CONTAINER_METRES_PER_TILE,
+                    SolidUvLayout::BoxFace,
+                    label,
                 )
-                .map_err(|e| JsValue::from_str(&e))?
+            };
+        let sides = upload_container_part(
+            "container-side.albedo",
+            mesh::BoxFaceGroup::Sides,
+            "map-a-shipment-container-sides",
+        );
+        let lids = upload_container_part(
+            "container-side.albedo",
+            mesh::BoxFaceGroup::Lids,
+            "map-a-shipment-container-lids",
+        );
+        let ends = upload_container_part(
+            "container-door.albedo",
+            mesh::BoxFaceGroup::Ends,
+            "map-a-shipment-container-ends",
+        );
+        match (sides, lids, ends) {
+            (Ok(sides), Ok(lids), Ok(ends)) => {
+                batches.push(sides);
+                batches.push(lids);
+                batches.push(ends);
             }
-        };
-        batches.push(container_batch);
+            (s, l, e) => {
+                let err = s
+                    .err()
+                    .or(l.err())
+                    .or(e.err())
+                    .unwrap_or_else(|| "container albedo".into());
+                web_sys::console::warn_1(
+                    &format!("map: container albedo unusable ({err}); flat container").into(),
+                );
+                batches.push(
+                    mesh::upload_solid_batch(
+                        &gpu,
+                        mesh::box_prim(half, CONTAINER_FALLBACK_COLOR),
+                        root,
+                        CONTAINER_FALLBACK_COLOR,
+                        "map-a-shipment-container",
+                    )
+                    .map_err(|e| JsValue::from_str(&e))?,
+                );
+            }
+        }
 
         for (i, b) in def.boxes.iter().enumerate() {
             let half = Vec3::from_array(b.half_extents);

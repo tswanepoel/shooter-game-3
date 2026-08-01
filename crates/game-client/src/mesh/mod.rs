@@ -23,7 +23,9 @@ pub use kit::{
 };
 #[cfg(feature = "debug-tools")]
 pub use primitives::unit_sphere_prim;
-pub use primitives::{box_prim, ramp_prim, transform_vertex, MeshVertex};
+pub use primitives::{
+    box_face_group_prim, box_prim, ramp_prim, transform_vertex, BoxFaceGroup, MeshVertex,
+};
 #[cfg(feature = "debug-tools")]
 pub use upload::upload_held_pair;
 pub use upload::{upload_batch, upload_solid_batch, upload_textured_solid_batch, SolidUvLayout};

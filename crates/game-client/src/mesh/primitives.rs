@@ -29,8 +29,20 @@ pub fn assign_world_xz_uvs(verts: &mut [MeshVertex], metres_per_tile: f32) {
     }
 }
 
+/// Which faces of a box solid to emit (086 multi-material container).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BoxFaceGroup {
+    /// ±X long walls.
+    Sides,
+    /// ±Z ends (doors).
+    Ends,
+    /// ±Y roof / floor.
+    Lids,
+}
+
 /// Assign UVs from local face metres so corrugation stays upright on box sides (086).
 /// Call before transforming verts into world space. `v` follows local +Y on vertical faces.
+/// On lids, UVs are transposed so side-albedo grooves run width-wise (±X).
 pub fn assign_box_face_uvs(verts: &mut [MeshVertex], metres_per_tile: f32) {
     let s = 1.0 / metres_per_tile.max(1e-4);
     for v in verts {
@@ -42,7 +54,8 @@ pub fn assign_box_face_uvs(verts: &mut [MeshVertex], metres_per_tile: f32) {
         v.uv = if ax >= ay && ax >= az {
             [z * s, y * s]
         } else if ay >= ax && ay >= az {
-            [x * s, z * s]
+            // Transpose vs [x, z]: rotate side tiles 90° so grooves run along width.
+            [z * s, x * s]
         } else {
             [x * s, y * s]
         };
@@ -50,6 +63,15 @@ pub fn assign_box_face_uvs(verts: &mut [MeshVertex], metres_per_tile: f32) {
 }
 
 pub fn box_prim(half: glam::Vec3, color: [f32; 4]) -> CpuPrim {
+    box_face_group_prim(half, color, None)
+}
+
+/// Box faces for one material group. `None` emits all six faces.
+pub fn box_face_group_prim(
+    half: glam::Vec3,
+    color: [f32; 4],
+    group: Option<BoxFaceGroup>,
+) -> CpuPrim {
     let hx = half.x;
     let hy = half.y;
     let hz = half.z;
@@ -63,17 +85,21 @@ pub fn box_prim(half: glam::Vec3, color: [f32; 4]) -> CpuPrim {
         [hx, hy, hz],
         [-hx, hy, hz],
     ];
-    let faces: [([f32; 3], [usize; 4]); 6] = [
-        ([0.0, 0.0, -1.0], [0, 1, 2, 3]),
-        ([0.0, 0.0, 1.0], [4, 7, 6, 5]),
-        ([-1.0, 0.0, 0.0], [0, 3, 7, 4]),
-        ([1.0, 0.0, 0.0], [1, 5, 6, 2]),
-        ([0.0, -1.0, 0.0], [0, 4, 5, 1]),
-        ([0.0, 1.0, 0.0], [3, 2, 6, 7]),
+    // (normal, quad, group)
+    let faces: [([f32; 3], [usize; 4], BoxFaceGroup); 6] = [
+        ([0.0, 0.0, -1.0], [0, 1, 2, 3], BoxFaceGroup::Ends),
+        ([0.0, 0.0, 1.0], [4, 7, 6, 5], BoxFaceGroup::Ends),
+        ([-1.0, 0.0, 0.0], [0, 3, 7, 4], BoxFaceGroup::Sides),
+        ([1.0, 0.0, 0.0], [1, 5, 6, 2], BoxFaceGroup::Sides),
+        ([0.0, -1.0, 0.0], [0, 4, 5, 1], BoxFaceGroup::Lids),
+        ([0.0, 1.0, 0.0], [3, 2, 6, 7], BoxFaceGroup::Lids),
     ];
     let mut verts = Vec::with_capacity(24);
     let mut indices = Vec::with_capacity(36);
-    for (normal, quad) in faces {
+    for (normal, quad, face_group) in faces {
+        if group.is_some_and(|g| g != face_group) {
+            continue;
+        }
         let base = verts.len() as u32;
         for i in quad {
             verts.push(MeshVertex {
@@ -212,5 +238,33 @@ mod tests {
         assign_box_face_uvs(&mut end, 1.0);
         assert!((end[0].uv[0] - (-0.5)).abs() < 1e-5);
         assert!((end[0].uv[1] - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn box_face_uvs_lid_grooves_widthwise() {
+        let mut lid = [MeshVertex {
+            position: [0.4, 1.0, -0.8],
+            normal: [0.0, 1.0, 0.0],
+            uv: [0.0, 0.0],
+        }];
+        assign_box_face_uvs(&mut lid, 1.0);
+        assert!((lid[0].uv[0] - (-0.8)).abs() < 1e-5);
+        assert!((lid[0].uv[1] - 0.4).abs() < 1e-5);
+    }
+
+    #[test]
+    fn box_face_group_emits_only_requested_faces() {
+        let half = glam::Vec3::new(1.0, 1.0, 1.0);
+        let (sides, _, _) = box_face_group_prim(half, [1.0; 4], Some(BoxFaceGroup::Sides));
+        assert_eq!(sides.len(), 8);
+        assert!(sides.iter().all(|v| v.normal[0].abs() > 0.5));
+
+        let (ends, _, _) = box_face_group_prim(half, [1.0; 4], Some(BoxFaceGroup::Ends));
+        assert_eq!(ends.len(), 8);
+        assert!(ends.iter().all(|v| v.normal[2].abs() > 0.5));
+
+        let (lids, _, _) = box_face_group_prim(half, [1.0; 4], Some(BoxFaceGroup::Lids));
+        assert_eq!(lids.len(), 8);
+        assert!(lids.iter().all(|v| v.normal[1].abs() > 0.5));
     }
 }

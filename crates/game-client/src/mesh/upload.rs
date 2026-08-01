@@ -375,7 +375,7 @@ pub fn upload_textured_solid_batch(
         }),
     );
 
-    // The sole container image is not vertically seamless. Mirrored V repeat keeps
+    // Container side/door albedos are not vertically seamless. Mirrored V repeat keeps
     // each upper tile unchanged and reflects it into the tile immediately below.
     let material_sampler = (uv_layout == SolidUvLayout::BoxFace).then(|| {
         gpu.device.create_sampler(&wgpu::SamplerDescriptor {
