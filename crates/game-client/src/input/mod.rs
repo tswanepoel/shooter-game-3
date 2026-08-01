@@ -1,4 +1,4 @@
-//! In-game input session: fullscreen + pointer lock on canvas click; browser eject ends it.
+//! In-game input session: pointer lock on canvas click; browser eject ends it.
 //! Soft pointer (061) routes session deltas to menus while locked.
 
 mod egui_bridge;

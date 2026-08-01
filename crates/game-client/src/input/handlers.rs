@@ -50,95 +50,18 @@ fn request_pointer_lock_raw(canvas: &HtmlCanvasElement) {
     }
 }
 
-/// Enter fullscreen (if needed), then pointer-lock. Locking in the same turn as
-/// `requestFullscreen` is often cancelled by the fullscreen transition — especially
-/// noticeable with raw/`unadjustedMovement` high-DPI mice — so lock after settle.
-fn enter_session_capture(document: &Document, canvas: &HtmlCanvasElement) {
-    if document.fullscreen_element().is_some() {
-        request_pointer_lock_raw(canvas);
-        return;
-    }
-
-    let el: &JsValue = canvas.as_ref();
-    if let Some(func) = Reflect::get(el, &JsValue::from_str("requestFullscreen"))
-        .ok()
-        .and_then(|v| v.dyn_into::<Function>().ok())
-    {
-        if let Ok(result) = func.call0(el) {
-            if let Ok(promise) = result.dyn_into::<Promise>() {
-                let canvas_ok = canvas.clone();
-                let canvas_err = canvas.clone();
-                let on_ok = Closure::once(move |_v: JsValue| {
-                    request_pointer_lock_raw(&canvas_ok);
-                });
-                let on_err = Closure::once(move |_err: JsValue| {
-                    // Fullscreen denied — still try lock from this gesture chain.
-                    request_pointer_lock_raw(&canvas_err);
-                });
-                let _ = promise.then(&on_ok).catch(&on_err);
-                on_ok.forget();
-                on_err.forget();
-            } else {
-                // Invoked without a Promise — wait for the change event.
-                lock_after_fullscreen_change(document, canvas);
-            }
-            return;
-        }
-    }
-
-    if let Some(func) = Reflect::get(el, &JsValue::from_str("webkitRequestFullscreen"))
-        .ok()
-        .and_then(|v| v.dyn_into::<Function>().ok())
-    {
-        lock_after_fullscreen_change(document, canvas);
-        let _ = func.call0(el);
-        return;
-    }
-
-    request_pointer_lock_raw(canvas);
-}
-
-fn lock_after_fullscreen_change(document: &Document, canvas: &HtmlCanvasElement) {
-    let document_el = document.clone();
-    let canvas_el = canvas.clone();
-    let handler = Rc::new(RefCell::new(None::<Closure<dyn FnMut()>>));
-    let handler_cb = handler.clone();
-    let on_change = Closure::<dyn FnMut()>::new(move || {
-        request_pointer_lock_raw(&canvas_el);
-        if let Some(cb) = handler_cb.borrow_mut().take() {
-            let _ = document_el.remove_event_listener_with_callback(
-                "fullscreenchange",
-                cb.as_ref().unchecked_ref(),
-            );
-            let _ = document_el.remove_event_listener_with_callback(
-                "webkitfullscreenchange",
-                cb.as_ref().unchecked_ref(),
-            );
-        }
-    });
-    document
-        .add_event_listener_with_callback("fullscreenchange", on_change.as_ref().unchecked_ref())
-        .expect("fullscreenchange");
-    let _ = document.add_event_listener_with_callback(
-        "webkitfullscreenchange",
-        on_change.as_ref().unchecked_ref(),
-    );
-    *handler.borrow_mut() = Some(on_change);
-}
-
 pub fn install_input_handlers(inner: Rc<RefCell<ClientInner>>, canvas: &HtmlCanvasElement) {
     let window = web_sys::window().expect("window");
     let document = window.document().expect("document");
 
     {
         let canvas_el = canvas.clone();
-        let document_el = document.clone();
         let inner = inner.clone();
         let on_click = Closure::<dyn FnMut(MouseEvent)>::new(move |event: MouseEvent| {
             if event.button() != 0 {
                 return;
             }
-            enter_session_capture(&document_el, &canvas_el);
+            request_pointer_lock_raw(&canvas_el);
             inner.borrow().sfx.resume();
         });
         canvas
