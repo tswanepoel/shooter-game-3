@@ -21,7 +21,6 @@ use roster::Rooms;
 use session::handle_session;
 
 const DEFAULT_BIND: &str = "0.0.0.0:4433";
-const DEFAULT_PUBLIC_HOST: &str = "127.0.0.1";
 
 #[tokio::main]
 async fn main() {
@@ -37,25 +36,15 @@ async fn main() {
         .parse()
         .expect("GAME_SERVER_BIND must be host:port");
 
-    // Host browsers use for WebTransport (wt-identity.json). Keep bind on 0.0.0.0
-    // for LAN; set GAME_SERVER_PUBLIC_HOST to this machine's LAN IP.
-    let public_host =
-        std::env::var("GAME_SERVER_PUBLIC_HOST").unwrap_or_else(|_| DEFAULT_PUBLIC_HOST.into());
-
-    let mut sans = vec![
-        "localhost".to_string(),
-        "127.0.0.1".to_string(),
-        "::1".to_string(),
-    ];
-    if !sans.iter().any(|s| s == &public_host) {
-        sans.push(public_host.clone());
-    }
+    // Clients dial the page hostname on this port (same machine as Vite). Cert SANs
+    // must cover that host — auto-detect LAN IPs; optional GAME_SERVER_PUBLIC_HOST adds more.
+    let sans = cert_sans();
     let identity =
         Identity::self_signed(sans.iter().map(String::as_str)).expect("self-signed identity");
     let cert_hash = identity.certificate_chain().as_slice()[0].hash();
     let hash_bytes = *cert_hash.as_ref();
 
-    write_identity_file(&public_host, bind.port(), &hash_bytes);
+    write_identity_file(bind.port(), &hash_bytes);
 
     let config = ServerConfig::builder()
         .with_bind_address(bind)
@@ -86,7 +75,7 @@ async fn main() {
 
     info!(
         %bind,
-        %public_host,
+        ?sans,
         tick_hz = TICK_HZ,
         protocol = PROTOCOL_VERSION,
         cert = %cert_hash.fmt(Sha256DigestFmt::DottedHex),
@@ -106,13 +95,53 @@ async fn main() {
     }
 }
 
-fn write_identity_file(public_host: &str, port: u16, hash: &[u8; 32]) {
+fn cert_sans() -> Vec<String> {
+    let mut sans = vec![
+        "localhost".to_string(),
+        "127.0.0.1".to_string(),
+        "::1".to_string(),
+    ];
+    for host in local_lan_hosts() {
+        push_unique(&mut sans, host);
+    }
+    if let Ok(extra) = std::env::var("GAME_SERVER_PUBLIC_HOST") {
+        for host in extra.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            push_unique(&mut sans, host.to_string());
+        }
+    }
+    sans
+}
+
+fn local_lan_hosts() -> Vec<String> {
+    let mut hosts = Vec::new();
+    // UDP connect fills the local address of the primary outbound NIC (no packets sent).
+    if let Ok(sock) = std::net::UdpSocket::bind("0.0.0.0:0") {
+        if sock.connect("8.8.8.8:80").is_ok() {
+            if let Ok(addr) = sock.local_addr() {
+                let ip = addr.ip();
+                if !ip.is_loopback() && !ip.is_unspecified() {
+                    hosts.push(ip.to_string());
+                }
+            }
+        }
+    }
+    hosts
+}
+
+fn push_unique(sans: &mut Vec<String>, host: String) {
+    if !sans.iter().any(|s| s == &host) {
+        sans.push(host);
+    }
+}
+
+fn write_identity_file(port: u16, hash: &[u8; 32]) {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../debug/wt-identity.json");
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
+    // Clients build `https://{page-hostname}:{port}/` themselves — only hash + port here.
     let doc = serde_json::json!({
-        "url": format!("https://{public_host}:{port}/"),
+        "port": port,
         "hash_sha256": hash.as_slice(),
     });
     match std::fs::write(&path, serde_json::to_vec_pretty(&doc).unwrap()) {

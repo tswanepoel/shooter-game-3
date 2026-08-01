@@ -47,7 +47,7 @@ npm run dev
 ### `game-server` crate
 - WebTransport host; fixed tick; roster relay of drive samples and peer join/leave
 - Writes `debug/wt-identity.json` for browser cert hashes
-- Run: `cargo run -p game-server` (default `0.0.0.0:4433`, override with `GAME_SERVER_BIND`; LAN advertise with `GAME_SERVER_PUBLIC_HOST`)
+- Run: `cargo run -p game-server` (default `0.0.0.0:4433`; clients dial the page hostname on that port; LAN IPs auto-added to cert SANs)
 
 ### `game-client` crate
 - WebGPU rendering logic via [`wgpu`](https://crates.io/crates/wgpu)

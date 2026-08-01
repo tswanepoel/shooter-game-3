@@ -77,9 +77,11 @@ A WebGPU-powered shooter game built with Rust and Vite.
    ```bash
    cargo run -p game-server
    ```
-   Override bind with `GAME_SERVER_BIND`. For LAN clients, keep that default and set
-   `GAME_SERVER_PUBLIC_HOST` to this machine’s LAN IP (writes `debug/wt-identity.json`
-   and cert SANs). In the dev console (`` ` ``): `mp join` / `mp leave` / `mp status`.
+   Clients dial the **same hostname as the page** on that port (localhost or your LAN
+   IP). The host auto-adds local LAN IPs to the cert SANs and writes
+   `debug/wt-identity.json` (hash + port) for Vite. Override bind with
+   `GAME_SERVER_BIND`; optional `GAME_SERVER_PUBLIC_HOST` (comma-separated) adds extra
+   SANs. In the dev console (`` ` ``): `mp join` / `mp leave` / `mp status`.
 
 Running `npm run dev` cooks art packs, compiles the Rust WASM module, then starts the Vite dev server with hot-reload. See [Development Workflow](#development-workflow) for details.
 

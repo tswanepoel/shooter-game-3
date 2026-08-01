@@ -26,7 +26,8 @@ pub async fn join_session(shared: Rc<RefCell<Shared>>) -> Result<(), JsValue> {
     };
 
     let identity = fetch_identity().await?;
-    let transport = open_webtransport(&identity.url, &identity.hash_sha256)?;
+    let url = wt_url_from_page(&identity)?;
+    let transport = open_webtransport(&url, &identity.hash_sha256)?;
     let ready = Reflect::get(&transport, &"ready".into())?;
     JsFuture::from(js_sys::Promise::from(ready)).await?;
 
@@ -302,7 +303,8 @@ fn handle_s2c(shared: &Rc<RefCell<Shared>>, msg: ServerToClient, t4: f64) {
 
 #[derive(serde::Deserialize)]
 struct WtIdentity {
-    url: String,
+    /// WebTransport listen port on the same host as the page.
+    port: u16,
     hash_sha256: Vec<u8>,
 }
 
@@ -319,6 +321,19 @@ async fn fetch_identity() -> Result<WtIdentity, JsValue> {
     let text = JsFuture::from(resp.text()?).await?;
     let text = text.as_string().ok_or_else(|| JsValue::from_str("text"))?;
     serde_json::from_str(&text).map_err(|e| JsValue::from_str(&format!("identity json: {e}")))
+}
+
+/// Same host as the Vite page; game-server listens on `identity.port`.
+fn wt_url_from_page(identity: &WtIdentity) -> Result<String, JsValue> {
+    let window = web_sys::window().ok_or_else(|| JsValue::from_str("no window"))?;
+    let host = window
+        .location()
+        .hostname()
+        .map_err(|_| JsValue::from_str("location.hostname"))?;
+    if host.is_empty() {
+        return Err(JsValue::from_str("empty hostname"));
+    }
+    Ok(format!("https://{host}:{}/", identity.port))
 }
 
 fn open_webtransport(url: &str, hash: &[u8]) -> Result<JsValue, JsValue> {
