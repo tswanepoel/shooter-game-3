@@ -1,4 +1,4 @@
-//! Cooked map load and draw (064 shipment container, 066 solids, 070/072/073 foot patches, 082 ground, 083 gravel, 084 cement, 085 grass, 086 container albedo, 087 closed door hardware, 088 lit map solids, 089 morning light, 090 rail corridor).
+//! Cooked map load and draw (064 shipment container, 066 solids, 070/072/073 foot patches, 082 ground, 083 gravel, 084 cement, 085 grass, 086 container albedo, 087 closed door hardware, 088 lit map solids, 089 morning light, 090 rail corridor, 091 stationed train).
 
 #[cfg(target_arch = "wasm32")]
 use glam::Mat4;
@@ -301,6 +301,8 @@ struct MapDef {
     ground: GroundDef,
     #[serde(default)]
     rail: Option<RailDef>,
+    #[serde(default)]
+    train: Option<TrainDef>,
     shipment_container: SolidBoxDef,
     #[serde(default)]
     boxes: Vec<SolidBoxDef>,
@@ -316,10 +318,51 @@ struct RailDef {
     centerline_z: f32,
     x_min: f32,
     x_max: f32,
-    /// Along-track spacing of wooden tracks; metal segments use half this.
+    /// Along-track spacing of wooden tracks in world metres; metal segments use half this.
+    /// Keep in lockstep with `scale` (kit sleeper length × scale).
     stride: f32,
     /// Yaw so kit track-forward (+Z) follows the corridor (map **a**: +π/2 → world +X).
     yaw: f32,
+    /// Uniform kit → world scale for track atoms.
+    #[serde(default = "kit_scale_one")]
+    scale: f32,
+}
+
+/// Parked freight consist on the rail corridor (091). Present only — no collide.
+#[derive(Debug, Deserialize)]
+struct TrainDef {
+    centerline_z: f32,
+    mid_x: f32,
+    yaw: f32,
+    #[serde(default = "kit_scale_one")]
+    scale: f32,
+    seat_y: f32,
+    #[serde(default)]
+    loco_z_nudge: f32,
+    #[serde(default)]
+    unit_gap: f32,
+    units: Vec<String>,
+    #[serde(default)]
+    ground_cargo: Option<GroundCargoDef>,
+}
+
+/// Present-only ground pile next to the consist (091).
+#[derive(Debug, Deserialize)]
+struct GroundCargoDef {
+    mesh: String,
+    beside_unit: usize,
+    side_z: f32,
+    #[serde(default)]
+    along_nudge: f32,
+    #[serde(default)]
+    yaw_nudge: f32,
+    seat_y: f32,
+    #[serde(default = "kit_scale_one")]
+    scale: f32,
+}
+
+fn kit_scale_one() -> f32 {
+    1.0
 }
 
 #[derive(Debug, Deserialize)]
@@ -622,6 +665,17 @@ impl MapGpu {
             }
         }
 
+        if let Some(train) = &def.train {
+            match upload_stationed_train(&gpu, &pack, train) {
+                Ok(train_batch) => batches.push(train_batch),
+                Err(e) => {
+                    web_sys::console::warn_1(
+                        &format!("map: stationed train unusable ({e}); skipping train").into(),
+                    );
+                }
+            }
+        }
+
         Ok((
             Self {
                 mesh: layout.finish(batches),
@@ -656,6 +710,8 @@ fn upload_rail_corridor(
 
     // Ground present top is `2 * FOOT_PATCH_HALF_Y`. Metal segments sit on it;
     // wooden tracks sit on the segment deck. Segments at 2× sleeper frequency.
+    // Instance transform is T·R·S — seating offsets use scaled local Y bands.
+    let scale = rail.scale.max(1e-3);
     let ground_top = FOOT_PATCH_HALF_Y * 2.0;
     let sleeper_xs = rail_centers(rail.x_min, rail.x_max, rail.stride);
     let segment_xs = rail_centers(rail.x_min, rail.x_max, rail.stride * 0.5);
@@ -663,14 +719,14 @@ fn upload_rail_corridor(
     let segment_min_y = prim_min_y(&segment_local);
     let segment_deck_y = prim_deck_y(&segment_local);
     let sleeper_min_y = prim_min_y(&sleeper_local);
-    let segment_y = sole_on_plane(ground_top, segment_min_y);
+    let segment_y = sole_on_plane(ground_top, segment_min_y * scale);
     // Seat wood on the segment deck (below rail-head detail), not mesh max_y.
     let segment_top = if segment_min_y.is_finite() && segment_deck_y.is_finite() {
-        segment_y + (segment_deck_y - segment_min_y)
+        segment_y + (segment_deck_y - segment_min_y) * scale
     } else {
         segment_y
     };
-    let sleeper_y = sole_on_plane(segment_top, sleeper_min_y);
+    let sleeper_y = sole_on_plane(segment_top, sleeper_min_y * scale);
 
     let segments = instance_rail_atom(&segment_local, rail, &segment_xs, segment_y);
     let sleepers = instance_rail_atom(&sleeper_local, rail, &sleeper_xs, sleeper_y);
@@ -691,6 +747,100 @@ fn upload_rail_corridor(
             "map-a-rail-segments",
         )?,
     ])
+}
+
+/// Pack the parked freight consist on the corridor and upload one lit batch (091).
+#[cfg(target_arch = "wasm32")]
+fn upload_stationed_train(
+    gpu: &mesh::UploadCtx<'_>,
+    pack: &pack::Pack,
+    train: &TrainDef,
+) -> Result<mesh::MeshBatch, String> {
+    if train.units.is_empty() {
+        return Err("train.units is empty".into());
+    }
+
+    let scale = train.scale.max(1e-3);
+    let colormap = pack.get("train.colormap")?;
+
+    let mut piece_locals = Vec::with_capacity(train.units.len());
+    for stem in &train.units {
+        let id = format!("{stem}.mesh");
+        piece_locals.push(merge_kit_prims(mesh::extract_primitives(pack.get(&id)?)?));
+    }
+
+    let gap = train.unit_gap.max(0.0);
+    let mut total = gap * train.units.len().saturating_sub(1) as f32;
+    let mut extents = Vec::with_capacity(piece_locals.len());
+    for local in &piece_locals {
+        let (min_z, max_z) = prim_z_extent(local);
+        if !min_z.is_finite() || !max_z.is_finite() || max_z <= min_z {
+            return Err("train piece missing along-track extent".into());
+        }
+        total += (max_z - min_z) * scale;
+        extents.push((min_z, max_z));
+    }
+
+    let mut front_tip = train.mid_x + total * 0.5;
+    let mut parts = Vec::with_capacity(piece_locals.len() + 1);
+    let mut unit_centers_x = Vec::with_capacity(piece_locals.len());
+    for (i, ((stem, local), (min_z, max_z))) in train
+        .units
+        .iter()
+        .zip(piece_locals.iter())
+        .zip(extents.iter().copied())
+        .enumerate()
+    {
+        let x = front_tip - max_z * scale;
+        let z = if stem == "train-locomotive-c" {
+            train.centerline_z + train.loco_z_nudge
+        } else {
+            train.centerline_z
+        };
+        let root = kit_tr_s(Vec3::new(x, train.seat_y, z), train.yaw, scale);
+        parts.push((local.clone(), root));
+        unit_centers_x.push(x);
+        front_tip = x + min_z * scale;
+        if i + 1 < train.units.len() {
+            front_tip -= gap;
+        }
+    }
+
+    if let Some(cargo) = &train.ground_cargo {
+        let i = cargo.beside_unit;
+        if i >= unit_centers_x.len() {
+            return Err(format!(
+                "ground_cargo.beside_unit {i} out of range ({} units)",
+                unit_centers_x.len()
+            ));
+        }
+        let id = format!("{}.mesh", cargo.mesh);
+        let local = merge_kit_prims(mesh::extract_primitives(pack.get(&id)?)?);
+        let cargo_scale = cargo.scale.max(1e-3);
+        let root = kit_tr_s(
+            Vec3::new(
+                unit_centers_x[i] + cargo.along_nudge,
+                cargo.seat_y,
+                train.centerline_z + cargo.side_z,
+            ),
+            train.yaw + cargo.yaw_nudge,
+            cargo_scale,
+        );
+        parts.push((local, root));
+    }
+
+    let color = piece_locals
+        .first()
+        .map(|p| p.2)
+        .unwrap_or([1.0, 1.0, 1.0, 1.0]);
+    let merged = mesh::merge_transformed_prims(parts, color);
+    mesh::upload_batch(
+        gpu,
+        colormap,
+        vec![merged],
+        Mat4::IDENTITY,
+        "map-a-stationed-train",
+    )
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -718,6 +868,25 @@ fn prim_min_y(prim: &mesh::CpuPrim) -> f32 {
         .iter()
         .map(|v| v.position[1])
         .fold(f32::INFINITY, f32::min)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn prim_z_extent(prim: &mesh::CpuPrim) -> (f32, f32) {
+    let mut min_z = f32::INFINITY;
+    let mut max_z = f32::NEG_INFINITY;
+    for v in &prim.0 {
+        min_z = min_z.min(v.position[2]);
+        max_z = max_z.max(v.position[2]);
+    }
+    (min_z, max_z)
+}
+
+/// Kit instance root: translate · rotate Y · uniform scale.
+#[cfg(target_arch = "wasm32")]
+fn kit_tr_s(translation: Vec3, yaw: f32, scale: f32) -> Mat4 {
+    Mat4::from_translation(translation)
+        * Mat4::from_rotation_y(yaw)
+        * Mat4::from_scale(Vec3::splat(scale))
 }
 
 /// Structural top for seating another mesh: highest Y band below a thin top detail.
@@ -758,11 +927,11 @@ fn sole_on_plane(plane_y: f32, min_y: f32) -> f32 {
 #[cfg(target_arch = "wasm32")]
 fn instance_rail_atom(local: &mesh::CpuPrim, rail: &RailDef, xs: &[f32], y: f32) -> mesh::CpuPrim {
     let color = local.2;
+    let scale = rail.scale.max(1e-3);
     let parts = xs
         .iter()
         .map(|&x| {
-            let root = Mat4::from_translation(Vec3::new(x, y, rail.centerline_z))
-                * Mat4::from_rotation_y(rail.yaw);
+            let root = kit_tr_s(Vec3::new(x, y, rail.centerline_z), rail.yaw, scale);
             (local.clone(), root)
         })
         .collect();
@@ -840,6 +1009,37 @@ mod tests {
         for p in &def.foot_patches {
             assert!(p.position[2] - p.half_extents[1] > -8.0);
         }
+    }
+
+    #[test]
+    fn map_a_train_deserializes() {
+        let json = include_str!("../../../assets/source/map-a.json");
+        let def: MapDef = serde_json::from_str(json).unwrap();
+        let train = def.train.expect("map a has stationed train");
+        assert!((train.centerline_z - (-8.0)).abs() < 1e-5);
+        assert!((train.mid_x - (-2.7)).abs() < 1e-5);
+        assert_eq!(
+            train.units,
+            [
+                "train-locomotive-c",
+                "train-carriage-flatbed",
+                "train-carriage-flatbed",
+                "train-carriage-lumber",
+                "train-carriage-tank"
+            ]
+        );
+        let cargo = train.ground_cargo.expect("map a has ground cargo");
+        assert_eq!(cargo.mesh, "lumber-cargo");
+        assert_eq!(cargo.beside_unit, 2);
+        let rail = def.rail.expect("map a has rail");
+        assert!((train.yaw - rail.yaw).abs() < 1e-5);
+        assert!((train.centerline_z - rail.centerline_z).abs() < 1e-5);
+        assert!((train.scale - 2.0).abs() < 1e-5);
+        assert!((rail.scale - 2.4).abs() < 1e-5);
+        assert!((rail.stride - rail.scale).abs() < 1e-5);
+        assert!((train.seat_y - 0.4).abs() < 1e-5);
+        assert!((train.loco_z_nudge - (-0.07)).abs() < 1e-5);
+        assert!((train.unit_gap - 0.35).abs() < 1e-5);
     }
 
     #[test]

@@ -5,7 +5,7 @@
  *
  * V1 packs by demand cadence (not authoring kit layout):
  *   kenney-core — character + blaster kits for lineup / play
- *   maps-a — map a def, pad/container albedos, train spline atoms
+ *   maps-a — map a def, pad/container albedos, train spline + rolling stock
  *   sfx — one-shots
  * Pack format (SGPK v1): magic + JSON header + concatenated raw files (glb/png/wav as-is).
  * No custom GPU formats; loaders still decode glTF/PNG / Web Audio decodes wav.
@@ -127,6 +127,31 @@ const PACKS = [
         {
           id: 'spline-track.mesh',
           path: path.join(trainDir, 'models', 'spline-track.glb'),
+          kind: 'glb',
+        },
+        {
+          id: 'train-locomotive-c.mesh',
+          path: path.join(trainDir, 'models', 'train-locomotive-c.glb'),
+          kind: 'glb',
+        },
+        {
+          id: 'train-carriage-lumber.mesh',
+          path: path.join(trainDir, 'models', 'train-carriage-lumber.glb'),
+          kind: 'glb',
+        },
+        {
+          id: 'lumber-cargo.mesh',
+          path: path.join(trainDir, 'models', 'lumber-cargo.glb'),
+          kind: 'glb',
+        },
+        {
+          id: 'train-carriage-flatbed.mesh',
+          path: path.join(trainDir, 'models', 'train-carriage-flatbed.glb'),
+          kind: 'glb',
+        },
+        {
+          id: 'train-carriage-tank.mesh',
+          path: path.join(trainDir, 'models', 'train-carriage-tank.glb'),
           kind: 'glb',
         },
         {

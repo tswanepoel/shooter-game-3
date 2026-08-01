@@ -8,8 +8,34 @@
     "centerline_z": -8.0,
     "x_min": -24.0,
     "x_max": 24.0,
-    "stride": 1.0,
-    "yaw": 1.5707964
+    "stride": 2.4,
+    "yaw": 1.5707964,
+    "scale": 2.4
+  },
+  "train": {
+    "centerline_z": -8.0,
+    "mid_x": -2.7,
+    "yaw": 1.5707964,
+    "scale": 2.0,
+    "seat_y": 0.4,
+    "loco_z_nudge": -0.07,
+    "unit_gap": 0.35,
+    "units": [
+      "train-locomotive-c",
+      "train-carriage-flatbed",
+      "train-carriage-flatbed",
+      "train-carriage-lumber",
+      "train-carriage-tank"
+    ],
+    "ground_cargo": {
+      "mesh": "lumber-cargo",
+      "beside_unit": 2,
+      "side_z": -2.4,
+      "along_nudge": 0.0,
+      "yaw_nudge": 0.15,
+      "seat_y": 0.04,
+      "scale": 2.0
+    }
   },
   "shipment_container": {
     "position": [8.0, 1.22, 12.0],
