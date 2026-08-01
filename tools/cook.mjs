@@ -5,7 +5,8 @@
  *
  * V1 packs by demand cadence (not authoring kit layout):
  *   kenney-core — character + blaster kits for lineup / play
- *
+ *   maps-a — map a def, pad/container albedos, train spline atoms
+ *   sfx — one-shots
  * Pack format (SGPK v1): magic + JSON header + concatenated raw files (glb/png/wav as-is).
  * No custom GPU formats; loaders still decode glTF/PNG / Web Audio decodes wav.
  */
@@ -66,9 +67,10 @@ const PACKS = [
   },
   {
     id: 'maps-a',
-    sources: ['map-a.json', 'materials'],
+    sources: ['map-a.json', 'materials', 'train'],
     assets() {
       const materialsDir = path.join(sourceRoot, 'materials');
+      const trainDir = path.join(sourceRoot, 'train');
       const pickAlbedo = (stem) => {
         const candidates = [
           { file: `${stem}.jpg`, kind: 'jpg' },
@@ -116,6 +118,21 @@ const PACKS = [
           id: 'container-door.albedo',
           path: path.join(materialsDir, containerDoor.file),
           kind: containerDoor.kind,
+        },
+        {
+          id: 'spline-segment.mesh',
+          path: path.join(trainDir, 'models', 'spline-segment.glb'),
+          kind: 'glb',
+        },
+        {
+          id: 'spline-track.mesh',
+          path: path.join(trainDir, 'models', 'spline-track.glb'),
+          kind: 'glb',
+        },
+        {
+          id: 'train.colormap',
+          path: path.join(trainDir, 'textures', 'colormap.png'),
+          kind: 'png',
         },
       ];
     },

@@ -1,4 +1,4 @@
-//! Cooked map load and draw (064 shipment container, 066 solids, 070/072/073 foot patches, 082 ground, 083 gravel, 084 cement, 085 grass, 086 container albedo, 087 closed door hardware, 088 lit map solids, 089 morning light).
+//! Cooked map load and draw (064 shipment container, 066 solids, 070/072/073 foot patches, 082 ground, 083 gravel, 084 cement, 085 grass, 086 container albedo, 087 closed door hardware, 088 lit map solids, 089 morning light, 090 rail corridor).
 
 #[cfg(target_arch = "wasm32")]
 use glam::Mat4;
@@ -299,6 +299,8 @@ impl FootSurfaces {
 #[derive(Debug, Deserialize)]
 struct MapDef {
     ground: GroundDef,
+    #[serde(default)]
+    rail: Option<RailDef>,
     shipment_container: SolidBoxDef,
     #[serde(default)]
     boxes: Vec<SolidBoxDef>,
@@ -306,6 +308,18 @@ struct MapDef {
     ramp: Option<RampDef>,
     #[serde(default)]
     foot_patches: Vec<FootPatchDef>,
+}
+
+/// Straight east–west rail corridor (090). Present only — no collide.
+#[derive(Debug, Deserialize)]
+struct RailDef {
+    centerline_z: f32,
+    x_min: f32,
+    x_max: f32,
+    /// Along-track spacing of wooden tracks; metal segments use half this.
+    stride: f32,
+    /// Yaw so kit track-forward (+Z) follows the corridor (map **a**: +π/2 → world +X).
+    yaw: f32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -597,6 +611,17 @@ impl MapGpu {
             );
         }
 
+        if let Some(rail) = &def.rail {
+            match upload_rail_corridor(&gpu, &pack, rail) {
+                Ok(rail_batches) => batches.extend(rail_batches),
+                Err(e) => {
+                    web_sys::console::warn_1(
+                        &format!("map: rail corridor unusable ({e}); skipping rail").into(),
+                    );
+                }
+            }
+        }
+
         Ok((
             Self {
                 mesh: layout.finish(batches),
@@ -613,6 +638,135 @@ impl MapGpu {
     pub fn draw<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
         self.mesh.draw(pass);
     }
+}
+
+/// Tile Kenney spline atoms along the rail corridor and upload two lit batches (090).
+#[cfg(target_arch = "wasm32")]
+fn upload_rail_corridor(
+    gpu: &mesh::UploadCtx<'_>,
+    pack: &pack::Pack,
+    rail: &RailDef,
+) -> Result<Vec<mesh::MeshBatch>, String> {
+    let colormap = pack.get("train.colormap")?;
+    let segment_glb = pack.get("spline-segment.mesh")?;
+    let sleeper_glb = pack.get("spline-track.mesh")?;
+
+    let segment_local = merge_kit_prims(mesh::extract_primitives(segment_glb)?);
+    let sleeper_local = merge_kit_prims(mesh::extract_primitives(sleeper_glb)?);
+
+    // Ground present top is `2 * FOOT_PATCH_HALF_Y`. Metal segments sit on it;
+    // wooden tracks sit on the segment deck. Segments at 2× sleeper frequency.
+    let ground_top = FOOT_PATCH_HALF_Y * 2.0;
+    let sleeper_xs = rail_centers(rail.x_min, rail.x_max, rail.stride);
+    let segment_xs = rail_centers(rail.x_min, rail.x_max, rail.stride * 0.5);
+
+    let segment_min_y = prim_min_y(&segment_local);
+    let segment_deck_y = prim_deck_y(&segment_local);
+    let sleeper_min_y = prim_min_y(&sleeper_local);
+    let segment_y = sole_on_plane(ground_top, segment_min_y);
+    // Seat wood on the segment deck (below rail-head detail), not mesh max_y.
+    let segment_top = if segment_min_y.is_finite() && segment_deck_y.is_finite() {
+        segment_y + (segment_deck_y - segment_min_y)
+    } else {
+        segment_y
+    };
+    let sleeper_y = sole_on_plane(segment_top, sleeper_min_y);
+
+    let segments = instance_rail_atom(&segment_local, rail, &segment_xs, segment_y);
+    let sleepers = instance_rail_atom(&sleeper_local, rail, &sleeper_xs, sleeper_y);
+
+    Ok(vec![
+        mesh::upload_batch(
+            gpu,
+            colormap,
+            vec![sleepers],
+            Mat4::IDENTITY,
+            "map-a-rail-sleepers",
+        )?,
+        mesh::upload_batch(
+            gpu,
+            colormap,
+            vec![segments],
+            Mat4::IDENTITY,
+            "map-a-rail-segments",
+        )?,
+    ])
+}
+
+#[cfg(target_arch = "wasm32")]
+fn merge_kit_prims(prims: Vec<mesh::CpuPrim>) -> mesh::CpuPrim {
+    let color = prims.first().map(|p| p.2).unwrap_or([1.0, 1.0, 1.0, 1.0]);
+    mesh::merge_transformed_prims(
+        prims.into_iter().map(|p| (p, Mat4::IDENTITY)).collect(),
+        color,
+    )
+}
+
+#[cfg(target_arch = "wasm32")]
+fn rail_centers(x_min: f32, x_max: f32, stride: f32) -> Vec<f32> {
+    let stride = stride.max(1e-3);
+    let span = (x_max - x_min).max(0.0);
+    let count = (span / stride).floor() as usize;
+    (0..count)
+        .map(|i| x_min + (i as f32 + 0.5) * stride)
+        .collect()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn prim_min_y(prim: &mesh::CpuPrim) -> f32 {
+    prim.0
+        .iter()
+        .map(|v| v.position[1])
+        .fold(f32::INFINITY, f32::min)
+}
+
+/// Structural top for seating another mesh: highest Y band below a thin top detail.
+///
+/// `spline-segment` has sole `0`, deck `0.05`, rail-head detail `0.075`. Using raw
+/// `max_y` floats the sleeper on the detail; the deck band is the seat.
+#[cfg(target_arch = "wasm32")]
+fn prim_deck_y(prim: &mesh::CpuPrim) -> f32 {
+    const EPS: f32 = 1e-3;
+    let mut bands: Vec<f32> = Vec::new();
+    for v in &prim.0 {
+        let y = v.position[1];
+        if !y.is_finite() {
+            continue;
+        }
+        if !bands.iter().any(|&b| (b - y).abs() < EPS) {
+            bands.push(y);
+        }
+    }
+    bands.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    match bands.len() {
+        0 => f32::NAN,
+        1 => bands[0],
+        2 => bands[1],
+        _ => bands[bands.len() - 2],
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn sole_on_plane(plane_y: f32, min_y: f32) -> f32 {
+    if min_y.is_finite() {
+        plane_y - min_y
+    } else {
+        plane_y
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn instance_rail_atom(local: &mesh::CpuPrim, rail: &RailDef, xs: &[f32], y: f32) -> mesh::CpuPrim {
+    let color = local.2;
+    let parts = xs
+        .iter()
+        .map(|&x| {
+            let root = Mat4::from_translation(Vec3::new(x, y, rail.centerline_z))
+                * Mat4::from_rotation_y(rail.yaw);
+            (local.clone(), root)
+        })
+        .collect();
+    mesh::merge_transformed_prims(parts, color)
 }
 
 fn map_world_from_def(def: &MapDef) -> MapWorld {
@@ -670,6 +824,23 @@ fn foot_surfaces_from_def(def: &MapDef) -> Result<FootSurfaces, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn map_a_rail_deserializes() {
+        let json = include_str!("../../../assets/source/map-a.json");
+        let def: MapDef = serde_json::from_str(json).unwrap();
+        let rail = def.rail.expect("map a has rail");
+        assert!((rail.centerline_z - (-8.0)).abs() < 1e-5);
+        assert!((def.ground.half_extents[0] - 24.0).abs() < 1e-5);
+        assert!((def.ground.half_extents[1] - 24.0).abs() < 1e-5);
+        assert!(def.shipment_container.position[2] > -8.0);
+        for b in &def.boxes {
+            assert!(b.position[2] > -8.0);
+        }
+        for p in &def.foot_patches {
+            assert!(p.position[2] - p.half_extents[1] > -8.0);
+        }
+    }
 
     #[test]
     fn default_outside_is_gravel() {

@@ -2,36 +2,43 @@
   "id": "a",
   "ground": {
     "position": [0.0, 0.0, 0.0],
-    "half_extents": [12.0, 12.0]
+    "half_extents": [24.0, 24.0]
+  },
+  "rail": {
+    "centerline_z": -8.0,
+    "x_min": -24.0,
+    "x_max": 24.0,
+    "stride": 1.0,
+    "yaw": 1.5707964
   },
   "shipment_container": {
-    "position": [8.0, 1.22, 0.0],
+    "position": [8.0, 1.22, 12.0],
     "half_extents": [1.22, 1.22, 3.04]
   },
   "boxes": [
     {
-      "position": [2.5, 0.175, 1.5],
+      "position": [2.5, 0.175, 13.5],
       "half_extents": [0.7, 0.175, 0.7]
     },
     {
-      "position": [2.5, 0.45, -1.5],
+      "position": [2.5, 0.45, 10.5],
       "half_extents": [0.7, 0.45, 0.7]
     },
     {
-      "position": [4.5, 0.12, 3.0],
+      "position": [4.5, 0.12, 15.0],
       "half_extents": [0.35, 0.12, 0.3]
     },
     {
-      "position": [5.0, 0.24, 3.0],
+      "position": [5.0, 0.24, 15.0],
       "half_extents": [0.35, 0.24, 0.3]
     },
     {
-      "position": [5.5, 0.36, 3.0],
+      "position": [5.5, 0.36, 15.0],
       "half_extents": [0.35, 0.36, 0.3]
     }
   ],
   "ramp": {
-    "position": [2.5, 0.0, 4.5],
+    "position": [2.5, 0.0, 16.5],
     "half_extents": [1.0, 2.0],
     "height": 1.0,
     "yaw": 0.0
@@ -39,32 +46,32 @@
   "foot_patches": [
     {
       "kind": "cement",
-      "position": [-3.0, 0.0, -3.0],
+      "position": [-3.0, 0.0, 9.0],
       "half_extents": [2.5, 2.5]
     },
     {
       "kind": "cement",
-      "position": [0.5, 0.0, 5.5],
+      "position": [0.5, 0.0, 17.5],
       "half_extents": [2.0, 1.8]
     },
     {
       "kind": "grass",
-      "position": [-5.0, 0.0, 2.0],
+      "position": [-5.0, 0.0, 14.0],
       "half_extents": [2.5, 2.5]
     },
     {
       "kind": "grass",
-      "position": [5.0, 0.0, -3.5],
+      "position": [5.0, 0.0, 8.5],
       "half_extents": [2.5, 2.0]
     },
     {
       "kind": "wet_cement",
-      "position": [0.0, 0.0, -6.0],
+      "position": [0.0, 0.0, 6.0],
       "half_extents": [2.5, 2.0]
     },
     {
       "kind": "wet_cement",
-      "position": [5.5, 0.0, 2.5],
+      "position": [5.5, 0.0, 14.5],
       "half_extents": [2.0, 2.0]
     }
   ]

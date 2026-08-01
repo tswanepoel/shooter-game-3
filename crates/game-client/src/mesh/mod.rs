@@ -17,7 +17,7 @@ mod upload;
 
 pub use anim::{extract_clip, pose_character_kit, AnimClip};
 pub use gltf::{extract_character_parts, extract_primitives, CharPart};
-pub use gpu::{UnlitMeshGpu, UnlitMeshLayout};
+pub use gpu::{MeshBatch, UnlitMeshGpu, UnlitMeshLayout, UploadCtx};
 pub use kit::{
     held_blaster_root, kit_to_world, letter_index, load_kenney_core, muzzle_locals,
     muzzle_world_points, weapon_grip,
