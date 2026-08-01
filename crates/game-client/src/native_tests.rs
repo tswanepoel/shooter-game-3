@@ -29,3 +29,6 @@ mod soft_pointer;
 
 #[path = "preferences.rs"]
 mod preferences;
+
+#[path = "map_present.rs"]
+mod map_present;

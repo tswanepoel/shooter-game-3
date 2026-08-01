@@ -1,10 +1,15 @@
-//! Cooked map load and draw (064 landmark, 066 solids, 070/072/073 foot patches).
+//! Cooked map load and draw (064 landmark, 066 solids, 070/072/073 foot patches, 082 ground).
 
-use glam::{Mat4, Vec3};
+#[cfg(target_arch = "wasm32")]
+use glam::Mat4;
+use glam::Vec3;
 use serde::Deserialize;
+#[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsValue;
 
+#[cfg(target_arch = "wasm32")]
 use crate::mesh::{self, UnlitMeshGpu, UnlitMeshLayout};
+#[cfg(target_arch = "wasm32")]
 use crate::pack;
 use game_sim::{MapBox, MapRamp, MapWorld};
 
@@ -13,11 +18,7 @@ pub const MAP_A_PACK: &str = "maps-a";
 const LANDMARK_COLOR: [f32; 4] = [0.55, 0.62, 0.72, 1.0];
 const BOX_COLOR: [f32; 4] = [0.72, 0.58, 0.42, 1.0];
 const RAMP_COLOR: [f32; 4] = [0.48, 0.66, 0.52, 1.0];
-const CEMENT_PATCH_COLOR: [f32; 4] = [0.58, 0.58, 0.6, 1.0];
-const WET_CEMENT_PATCH_COLOR: [f32; 4] = [0.42, 0.48, 0.52, 1.0];
-const GRAVEL_PATCH_COLOR: [f32; 4] = [0.55, 0.48, 0.38, 1.0];
-const GRASS_PATCH_COLOR: [f32; 4] = [0.42, 0.58, 0.36, 1.0];
-/// Visual slab half-height for foot patches (present only — not collide).
+/// Visual slab half-height for ground and foot pads (present only — not collide).
 const FOOT_PATCH_HALF_Y: f32 = 0.02;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,6 +27,18 @@ pub enum FootKind {
     Cement,
     WetCement,
     Grass,
+}
+
+impl FootKind {
+    /// Shared kind → albedo for ground and foot pads (082).
+    pub fn albedo(self) -> [f32; 4] {
+        match self {
+            Self::Gravel => [0.55, 0.48, 0.38, 1.0],
+            Self::Cement => [0.58, 0.58, 0.6, 1.0],
+            Self::WetCement => [0.42, 0.48, 0.52, 1.0],
+            Self::Grass => [0.42, 0.58, 0.36, 1.0],
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -67,6 +80,7 @@ impl FootSurfaces {
 
 #[derive(Debug, Deserialize)]
 struct MapDef {
+    ground: GroundDef,
     landmark: LandmarkDef,
     #[serde(default)]
     boxes: Vec<LandmarkDef>,
@@ -74,6 +88,13 @@ struct MapDef {
     ramp: Option<RampDef>,
     #[serde(default)]
     foot_patches: Vec<FootPatchDef>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GroundDef {
+    position: [f32; 3],
+    /// `[half_x, half_z]` footprint on the ground plane.
+    half_extents: [f32; 2],
 }
 
 #[derive(Debug, Deserialize)]
@@ -100,10 +121,12 @@ struct FootPatchDef {
     half_extents: [f32; 2],
 }
 
+#[cfg(target_arch = "wasm32")]
 pub struct MapGpu {
     mesh: UnlitMeshGpu,
 }
 
+#[cfg(target_arch = "wasm32")]
 pub enum MapPresentState {
     Idle,
     Loading,
@@ -111,6 +134,7 @@ pub enum MapPresentState {
     Failed,
 }
 
+#[cfg(target_arch = "wasm32")]
 impl MapGpu {
     pub async fn load_map_a(
         device: &wgpu::Device,
@@ -124,21 +148,41 @@ impl MapGpu {
             .map_err(|e| JsValue::from_str(&format!("map-a.def: {e}")))?;
 
         let world = map_world_from_def(&def);
-        let feet = foot_surfaces_from_def(&def)?;
+        let feet = foot_surfaces_from_def(&def).map_err(|e| JsValue::from_str(&e))?;
 
         let layout = UnlitMeshLayout::create(device, surface_format, sample_count);
         let gpu = layout.upload_ctx(device, queue);
         let mut batches = Vec::new();
 
+        // Ground under override pads (082).
+        let gravel = FootKind::Gravel.albedo();
+        let ground_half = Vec3::new(
+            def.ground.half_extents[0],
+            FOOT_PATCH_HALF_Y,
+            def.ground.half_extents[1],
+        );
+        let ground_root = Mat4::from_translation(Vec3::new(
+            def.ground.position[0],
+            FOOT_PATCH_HALF_Y,
+            def.ground.position[2],
+        ));
+        batches.push(
+            mesh::upload_solid_batch(
+                &gpu,
+                mesh::box_prim(ground_half, gravel),
+                ground_root,
+                gravel,
+                "map-a-ground",
+            )
+            .map_err(|e| JsValue::from_str(&e))?,
+        );
+
+        // Pads sit on the ground top to avoid z-fight with the gravel slab.
+        let pad_center_y = FOOT_PATCH_HALF_Y * 3.0;
         for (i, p) in feet.patches.iter().enumerate() {
-            let color = match p.kind {
-                FootKind::Cement => CEMENT_PATCH_COLOR,
-                FootKind::WetCement => WET_CEMENT_PATCH_COLOR,
-                FootKind::Gravel => GRAVEL_PATCH_COLOR,
-                FootKind::Grass => GRASS_PATCH_COLOR,
-            };
+            let color = p.kind.albedo();
             let half = Vec3::new(p.half_x, FOOT_PATCH_HALF_Y, p.half_z);
-            let root = Mat4::from_translation(Vec3::new(p.center_x, FOOT_PATCH_HALF_Y, p.center_z));
+            let root = Mat4::from_translation(Vec3::new(p.center_x, pad_center_y, p.center_z));
             batches.push(
                 mesh::upload_solid_batch(
                     &gpu,
@@ -246,7 +290,7 @@ fn map_world_from_def(def: &MapDef) -> MapWorld {
     MapWorld { boxes, ramps }
 }
 
-fn foot_surfaces_from_def(def: &MapDef) -> Result<FootSurfaces, JsValue> {
+fn foot_surfaces_from_def(def: &MapDef) -> Result<FootSurfaces, String> {
     let mut patches = Vec::with_capacity(def.foot_patches.len());
     for p in &def.foot_patches {
         let kind = match p.kind.as_str() {
@@ -255,9 +299,7 @@ fn foot_surfaces_from_def(def: &MapDef) -> Result<FootSurfaces, JsValue> {
             "wet_cement" => FootKind::WetCement,
             "grass" => FootKind::Grass,
             other => {
-                return Err(JsValue::from_str(&format!(
-                    "map-a.def foot_patch kind: unknown {other:?}"
-                )));
+                return Err(format!("map-a.def foot_patch kind: unknown {other:?}"));
             }
         };
         patches.push(FootPatch {
@@ -288,5 +330,28 @@ mod tests {
         };
         assert_eq!(feet.at(0.0, 0.0), FootKind::Cement);
         assert_eq!(feet.at(3.0, 0.0), FootKind::Gravel);
+    }
+
+    #[test]
+    fn foot_kind_albedo_table() {
+        assert_eq!(FootKind::Gravel.albedo()[0], 0.55);
+        assert_eq!(FootKind::Cement.albedo()[0], 0.58);
+        assert_eq!(FootKind::WetCement.albedo()[0], 0.42);
+        assert_eq!(FootKind::Grass.albedo()[1], 0.58);
+    }
+
+    #[test]
+    fn map_def_requires_ground() {
+        let json = r#"{
+            "ground": { "position": [0.0, 0.0, 0.0], "half_extents": [12.0, 12.0] },
+            "landmark": { "position": [0.0, 1.0, 0.0], "half_extents": [1.0, 1.0, 1.0] }
+        }"#;
+        let def: MapDef = serde_json::from_str(json).unwrap();
+        assert_eq!(def.ground.half_extents, [12.0, 12.0]);
+        assert!(def.foot_patches.is_empty());
+        let world = map_world_from_def(&def);
+        assert_eq!(world.boxes.len(), 1);
+        let feet = foot_surfaces_from_def(&def).unwrap();
+        assert_eq!(feet.at(0.0, 0.0), FootKind::Gravel);
     }
 }

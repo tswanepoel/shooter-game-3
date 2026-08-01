@@ -107,7 +107,7 @@ impl DebugTools {
     }
 
     pub fn draw_grid(&self) -> bool {
-        self.registry.get_bool("draw.grid").unwrap_or(true)
+        self.registry.get_bool("draw.grid").unwrap_or(false)
     }
 
     pub fn draw_lineup(&self) -> bool {

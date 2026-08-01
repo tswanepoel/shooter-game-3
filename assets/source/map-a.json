@@ -1,5 +1,9 @@
 {
   "id": "a",
+  "ground": {
+    "position": [0.0, 0.0, 0.0],
+    "half_extents": [12.0, 12.0]
+  },
   "landmark": {
     "position": [8.0, 1.22, 0.0],
     "half_extents": [1.22, 1.22, 3.04]
@@ -42,16 +46,6 @@
       "kind": "cement",
       "position": [0.5, 0.0, 5.5],
       "half_extents": [2.0, 1.8]
-    },
-    {
-      "kind": "gravel",
-      "position": [3.0, 0.0, 0.0],
-      "half_extents": [2.5, 2.5]
-    },
-    {
-      "kind": "gravel",
-      "position": [-2.0, 0.0, 3.0],
-      "half_extents": [2.0, 1.5]
     },
     {
       "kind": "grass",

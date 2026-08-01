@@ -134,8 +134,9 @@ impl ClientInner {
 
         #[cfg(feature = "debug-tools")]
         let draw_grid = self.debug.draw_grid();
+        // 082: product floor is map ground; grid is not the floor.
         #[cfg(not(feature = "debug-tools"))]
-        let draw_grid = true;
+        let draw_grid = false;
 
         let draw_reticle = reticle_pos.is_some() && !flycam;
         let hit_alpha = self.hit_marker.alpha();

@@ -28,8 +28,8 @@ impl DebugRegistry {
         self.cvars.insert(
             "draw.grid",
             CVar {
-                value: CVarValue::Bool(true),
-                help: "client: world-space debug grid on y = 0",
+                value: CVarValue::Bool(false),
+                help: "client: world-space debug grid on y = 0 (off when map ground present)",
             },
         );
         self.cvars.insert(
@@ -244,6 +244,8 @@ mod tests {
     fn grid_cvar_and_help() {
         let mut r = DebugRegistry::new();
         r.register_defaults();
+        assert_eq!(r.get_bool("draw.grid"), Some(false));
+        assert!(r.execute("grid on").contains("1"));
         assert_eq!(r.get_bool("draw.grid"), Some(true));
         assert!(r.execute("grid off").contains("0"));
         assert_eq!(r.get_bool("draw.grid"), Some(false));
