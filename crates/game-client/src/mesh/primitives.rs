@@ -32,11 +32,9 @@ pub fn assign_world_xz_uvs(verts: &mut [MeshVertex], metres_per_tile: f32) {
 /// Which faces of a box solid to emit (086 multi-material container).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BoxFaceGroup {
-    /// ±X long walls.
     Sides,
-    /// ±Z ends (doors).
-    Ends,
-    /// ±Y roof / floor.
+    Front,
+    Rear,
     Lids,
 }
 
@@ -54,11 +52,38 @@ pub fn assign_box_face_uvs(verts: &mut [MeshVertex], metres_per_tile: f32) {
         v.uv = if ax >= ay && ax >= az {
             [z * s, y * s]
         } else if ay >= ax && ay >= az {
-            // Transpose vs [x, z]: rotate side tiles 90° so grooves run along width.
             [z * s, x * s]
         } else {
             [x * s, y * s]
         };
+    }
+}
+
+/// One door image per leaf: U 0..2 across width, V 0..1 top→bottom (087).
+pub fn assign_rear_door_uvs(verts: &mut [MeshVertex]) {
+    let min_x = verts
+        .iter()
+        .map(|v| v.position[0])
+        .fold(f32::INFINITY, f32::min);
+    let max_x = verts
+        .iter()
+        .map(|v| v.position[0])
+        .fold(f32::NEG_INFINITY, f32::max);
+    let min_y = verts
+        .iter()
+        .map(|v| v.position[1])
+        .fold(f32::INFINITY, f32::min);
+    let max_y = verts
+        .iter()
+        .map(|v| v.position[1])
+        .fold(f32::NEG_INFINITY, f32::max);
+    let width = (max_x - min_x).max(1e-4);
+    let height = (max_y - min_y).max(1e-4);
+    for v in verts {
+        v.uv = [
+            (v.position[0] - min_x) / width * 2.0,
+            (max_y - v.position[1]) / height,
+        ];
     }
 }
 
@@ -87,8 +112,8 @@ pub fn box_face_group_prim(
     ];
     // (normal, quad, group)
     let faces: [([f32; 3], [usize; 4], BoxFaceGroup); 6] = [
-        ([0.0, 0.0, -1.0], [0, 1, 2, 3], BoxFaceGroup::Ends),
-        ([0.0, 0.0, 1.0], [4, 7, 6, 5], BoxFaceGroup::Ends),
+        ([0.0, 0.0, -1.0], [0, 1, 2, 3], BoxFaceGroup::Front),
+        ([0.0, 0.0, 1.0], [4, 7, 6, 5], BoxFaceGroup::Rear),
         ([-1.0, 0.0, 0.0], [0, 3, 7, 4], BoxFaceGroup::Sides),
         ([1.0, 0.0, 0.0], [1, 5, 6, 2], BoxFaceGroup::Sides),
         ([0.0, -1.0, 0.0], [0, 4, 5, 1], BoxFaceGroup::Lids),
@@ -109,6 +134,83 @@ pub fn box_face_group_prim(
             });
         }
         indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+    (verts, indices, color)
+}
+
+/// Capped cylinder along local Y (087).
+pub fn cylinder_y_prim(radius: f32, half_height: f32, segments: u32, color: [f32; 4]) -> CpuPrim {
+    let segments = segments.max(3);
+    let radius = radius.max(0.0);
+    let half_height = half_height.max(0.0);
+    let mut verts = Vec::with_capacity((segments * 4 + 2) as usize);
+    let mut indices = Vec::with_capacity((segments * 12) as usize);
+
+    for i in 0..segments {
+        let angle = std::f32::consts::TAU * i as f32 / segments as f32;
+        let (sin, cos) = angle.sin_cos();
+        let normal = [sin, 0.0, cos];
+        for y in [-half_height, half_height] {
+            verts.push(MeshVertex {
+                position: [sin * radius, y, cos * radius],
+                normal,
+                uv: [
+                    i as f32 / segments as f32,
+                    (y + half_height) / (2.0 * half_height).max(1e-4),
+                ],
+            });
+        }
+    }
+    for i in 0..segments {
+        let next = (i + 1) % segments;
+        let a = i * 2;
+        let b = next * 2;
+        indices.extend_from_slice(&[a, b, a + 1, a + 1, b, b + 1]);
+    }
+
+    for (y, normal, reverse) in [
+        (-half_height, [0.0, -1.0, 0.0], true),
+        (half_height, [0.0, 1.0, 0.0], false),
+    ] {
+        let center = verts.len() as u32;
+        verts.push(MeshVertex {
+            position: [0.0, y, 0.0],
+            normal,
+            uv: [0.5, 0.5],
+        });
+        let rim = verts.len() as u32;
+        for i in 0..segments {
+            let angle = std::f32::consts::TAU * i as f32 / segments as f32;
+            let (sin, cos) = angle.sin_cos();
+            verts.push(MeshVertex {
+                position: [sin * radius, y, cos * radius],
+                normal,
+                uv: [sin * 0.5 + 0.5, cos * 0.5 + 0.5],
+            });
+        }
+        for i in 0..segments {
+            let next = (i + 1) % segments;
+            if reverse {
+                indices.extend_from_slice(&[center, rim + next, rim + i]);
+            } else {
+                indices.extend_from_slice(&[center, rim + i, rim + next]);
+            }
+        }
+    }
+
+    (verts, indices, color)
+}
+
+pub fn merge_transformed_prims(parts: Vec<(CpuPrim, Mat4)>, color: [f32; 4]) -> CpuPrim {
+    let mut verts = Vec::new();
+    let mut indices = Vec::new();
+    for ((mut part_verts, part_indices, _), transform) in parts {
+        let base = verts.len() as u32;
+        for vertex in &mut part_verts {
+            transform_vertex(vertex, transform);
+        }
+        verts.extend(part_verts);
+        indices.extend(part_indices.into_iter().map(|index| base + index));
     }
     (verts, indices, color)
 }
@@ -253,18 +355,57 @@ mod tests {
     }
 
     #[test]
+    fn rear_door_uvs_repeat_one_leaf_twice() {
+        let (mut rear, _, _) = box_face_group_prim(
+            glam::Vec3::new(1.2, 1.3, 3.0),
+            [1.0; 4],
+            Some(BoxFaceGroup::Rear),
+        );
+        assign_rear_door_uvs(&mut rear);
+        assert!(rear.iter().any(|v| v.uv == [0.0, 1.0]));
+        assert!(rear.iter().any(|v| v.uv == [0.0, 0.0]));
+        assert!(rear.iter().any(|v| v.uv == [2.0, 0.0]));
+        assert!(rear.iter().any(|v| v.uv == [2.0, 1.0]));
+    }
+
+    #[test]
     fn box_face_group_emits_only_requested_faces() {
         let half = glam::Vec3::new(1.0, 1.0, 1.0);
         let (sides, _, _) = box_face_group_prim(half, [1.0; 4], Some(BoxFaceGroup::Sides));
         assert_eq!(sides.len(), 8);
         assert!(sides.iter().all(|v| v.normal[0].abs() > 0.5));
 
-        let (ends, _, _) = box_face_group_prim(half, [1.0; 4], Some(BoxFaceGroup::Ends));
-        assert_eq!(ends.len(), 8);
-        assert!(ends.iter().all(|v| v.normal[2].abs() > 0.5));
+        let (front, _, _) = box_face_group_prim(half, [1.0; 4], Some(BoxFaceGroup::Front));
+        assert_eq!(front.len(), 4);
+        assert!(front.iter().all(|v| v.normal[2] < -0.5));
+
+        let (rear, _, _) = box_face_group_prim(half, [1.0; 4], Some(BoxFaceGroup::Rear));
+        assert_eq!(rear.len(), 4);
+        assert!(rear.iter().all(|v| v.normal[2] > 0.5));
 
         let (lids, _, _) = box_face_group_prim(half, [1.0; 4], Some(BoxFaceGroup::Lids));
         assert_eq!(lids.len(), 8);
         assert!(lids.iter().all(|v| v.normal[1].abs() > 0.5));
+    }
+
+    #[test]
+    fn merge_transformed_prims_offsets_indices_and_positions() {
+        let color = [1.0; 4];
+        let merged = merge_transformed_prims(
+            vec![
+                (
+                    box_prim(glam::Vec3::splat(0.5), color),
+                    Mat4::from_translation(Vec3::X),
+                ),
+                (
+                    cylinder_y_prim(0.1, 0.5, 8, color),
+                    Mat4::from_translation(Vec3::Y),
+                ),
+            ],
+            color,
+        );
+        assert_eq!(merged.1.len(), 36 + 8 * 12);
+        assert!(merged.0.iter().any(|v| v.position[0] > 1.4));
+        assert!(merged.1.iter().all(|&i| i < merged.0.len() as u32));
     }
 }

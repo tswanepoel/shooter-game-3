@@ -24,7 +24,8 @@ pub use kit::{
 #[cfg(feature = "debug-tools")]
 pub use primitives::unit_sphere_prim;
 pub use primitives::{
-    box_face_group_prim, box_prim, ramp_prim, transform_vertex, BoxFaceGroup, MeshVertex,
+    box_face_group_prim, box_prim, cylinder_y_prim, merge_transformed_prims, ramp_prim,
+    transform_vertex, BoxFaceGroup, CpuPrim, MeshVertex,
 };
 #[cfg(feature = "debug-tools")]
 pub use upload::upload_held_pair;

@@ -1,4 +1,4 @@
-//! Cooked map load and draw (064 shipment container, 066 solids, 070/072/073 foot patches, 082 ground, 083 gravel, 084 cement, 085 grass, 086 container albedo).
+//! Cooked map load and draw (064 shipment container, 066 solids, 070/072/073 foot patches, 082 ground, 083 gravel, 084 cement, 085 grass, 086 container albedo, 087 closed door hardware).
 
 #[cfg(target_arch = "wasm32")]
 use glam::Mat4;
@@ -27,8 +27,200 @@ const GRAVEL_METRES_PER_TILE: f32 = 1.5;
 const CEMENT_METRES_PER_TILE: f32 = 1.5;
 /// World metres per grass albedo tile (085).
 const GRASS_METRES_PER_TILE: f32 = 1.5;
-/// Local face metres per container albedo tile (086).
-const CONTAINER_METRES_PER_TILE: f32 = 1.5;
+/// Exactly two side-albedo tiles span the container height (087).
+const CONTAINER_SIDE_TILES_HIGH: f32 = 2.0;
+const CONTAINER_FRAME_COLOR: [f32; 4] = [0.39, 0.17, 0.14, 1.0];
+const CONTAINER_GASKET_COLOR: [f32; 4] = [0.025, 0.028, 0.026, 1.0];
+const CONTAINER_HARDWARE_COLOR: [f32; 4] = [0.42, 0.44, 0.41, 1.0];
+
+#[cfg(target_arch = "wasm32")]
+fn container_door_hardware(half: Vec3) -> Vec<(mesh::CpuPrim, [f32; 4], &'static str)> {
+    let cuboid = |center: Vec3, half: Vec3, color| {
+        (mesh::box_prim(half, color), Mat4::from_translation(center))
+    };
+    let cylinder = |center: Vec3, radius: f32, half_height: f32, rotation: Mat4, color| {
+        (
+            mesh::cylinder_y_prim(radius, half_height, 10, color),
+            Mat4::from_translation(center) * rotation,
+        )
+    };
+
+    let mut frame = Vec::new();
+    let mut gasket = Vec::new();
+    let mut hardware = Vec::new();
+
+    for x in [-half.x - 0.035, half.x + 0.035] {
+        for y in [-half.y + 0.055, half.y - 0.055] {
+            frame.push(cuboid(
+                Vec3::new(x, y, 0.0),
+                Vec3::new(0.04, 0.055, half.z + 0.075),
+                CONTAINER_FRAME_COLOR,
+            ));
+        }
+        for z in [-half.z - 0.035, half.z + 0.035] {
+            frame.push(cuboid(
+                Vec3::new(x, 0.0, z),
+                Vec3::new(0.04, half.y - 0.11, 0.04),
+                CONTAINER_FRAME_COLOR,
+            ));
+        }
+    }
+
+    for z_sign in [1.0_f32, -1.0] {
+        let face_z = z_sign * half.z;
+        let out = |d: f32| face_z + z_sign * d;
+
+        let frame_z = out(0.035);
+        frame.push(cuboid(
+            Vec3::new(0.0, half.y - 0.055, frame_z),
+            Vec3::new(half.x + 0.075, 0.055, 0.04),
+            CONTAINER_FRAME_COLOR,
+        ));
+        frame.push(cuboid(
+            Vec3::new(0.0, -half.y + 0.055, frame_z),
+            Vec3::new(half.x + 0.075, 0.055, 0.04),
+            CONTAINER_FRAME_COLOR,
+        ));
+        frame.push(cuboid(
+            Vec3::new(-half.x - 0.035, 0.0, frame_z),
+            Vec3::new(0.04, half.y - 0.11, 0.04),
+            CONTAINER_FRAME_COLOR,
+        ));
+        frame.push(cuboid(
+            Vec3::new(half.x + 0.035, 0.0, frame_z),
+            Vec3::new(0.04, half.y - 0.11, 0.04),
+            CONTAINER_FRAME_COLOR,
+        ));
+        frame.push(cuboid(
+            Vec3::new(0.0, 0.0, out(0.155)),
+            Vec3::new(0.115, 0.08, 0.03),
+            CONTAINER_FRAME_COLOR,
+        ));
+
+        let gasket_z = out(0.082);
+        let gasket_half_thickness = 0.018;
+        let gasket_edge_x = half.x - 0.035;
+        let gasket_edge_y = half.y - 0.115;
+        gasket.push(cuboid(
+            Vec3::new(0.0, gasket_edge_y, gasket_z),
+            Vec3::new(
+                gasket_edge_x + gasket_half_thickness,
+                gasket_half_thickness,
+                0.014,
+            ),
+            CONTAINER_GASKET_COLOR,
+        ));
+        gasket.push(cuboid(
+            Vec3::new(0.0, -gasket_edge_y, gasket_z),
+            Vec3::new(
+                gasket_edge_x + gasket_half_thickness,
+                gasket_half_thickness,
+                0.014,
+            ),
+            CONTAINER_GASKET_COLOR,
+        ));
+        gasket.push(cuboid(
+            Vec3::new(-gasket_edge_x, 0.0, gasket_z),
+            Vec3::new(
+                gasket_half_thickness,
+                gasket_edge_y + gasket_half_thickness,
+                0.014,
+            ),
+            CONTAINER_GASKET_COLOR,
+        ));
+        gasket.push(cuboid(
+            Vec3::new(gasket_edge_x, 0.0, gasket_z),
+            Vec3::new(
+                gasket_half_thickness,
+                gasket_edge_y + gasket_half_thickness,
+                0.014,
+            ),
+            CONTAINER_GASKET_COLOR,
+        ));
+        gasket.push(cuboid(
+            Vec3::new(0.0, 0.0, out(0.088)),
+            Vec3::new(
+                gasket_half_thickness,
+                gasket_edge_y + gasket_half_thickness,
+                0.014,
+            ),
+            CONTAINER_GASKET_COLOR,
+        ));
+
+        let hardware_z = out(0.125);
+        let inner_rod_x = half.x * 0.23;
+        let outer_rod_x = half.x * 0.56;
+        let rod_xs = [-outer_rod_x, -inner_rod_x, inner_rod_x, outer_rod_x];
+        for x in rod_xs {
+            hardware.push(cylinder(
+                Vec3::new(x, 0.0, hardware_z),
+                0.026,
+                half.y - 0.16,
+                Mat4::IDENTITY,
+                CONTAINER_HARDWARE_COLOR,
+            ));
+            for y in [-half.y + 0.13, half.y - 0.13] {
+                hardware.push(cuboid(
+                    Vec3::new(x, y, out(0.100)),
+                    Vec3::new(0.075, 0.06, 0.045),
+                    CONTAINER_HARDWARE_COLOR,
+                ));
+                hardware.push(cuboid(
+                    Vec3::new(x + 0.045, y.signum() * (half.y - 0.19), hardware_z),
+                    Vec3::new(0.065, 0.025, 0.03),
+                    CONTAINER_HARDWARE_COLOR,
+                ));
+            }
+        }
+
+        let linkage_half = (outer_rod_x - inner_rod_x) * 0.5;
+        let linkage_x = (outer_rod_x + inner_rod_x) * 0.5;
+        for sign in [-1.0_f32, 1.0] {
+            hardware.push(cylinder(
+                Vec3::new(sign * linkage_x, -half.y * 0.36, out(0.140)),
+                0.022,
+                linkage_half,
+                Mat4::from_rotation_z(std::f32::consts::FRAC_PI_2),
+                CONTAINER_HARDWARE_COLOR,
+            ));
+        }
+
+        for sign in [-1.0_f32, 1.0] {
+            for y in [-half.y * 0.72, -half.y * 0.24, half.y * 0.24, half.y * 0.72] {
+                frame.push(cuboid(
+                    Vec3::new(sign * (half.x - 0.055), y, out(0.105)),
+                    Vec3::new(0.065, 0.045, 0.025),
+                    CONTAINER_FRAME_COLOR,
+                ));
+                frame.push(cylinder(
+                    Vec3::new(sign * (half.x - 0.010), y, out(0.135)),
+                    0.025,
+                    0.075,
+                    Mat4::IDENTITY,
+                    CONTAINER_FRAME_COLOR,
+                ));
+            }
+        }
+    }
+
+    vec![
+        (
+            mesh::merge_transformed_prims(frame, CONTAINER_FRAME_COLOR),
+            CONTAINER_FRAME_COLOR,
+            "map-a-container-door-frame",
+        ),
+        (
+            mesh::merge_transformed_prims(gasket, CONTAINER_GASKET_COLOR),
+            CONTAINER_GASKET_COLOR,
+            "map-a-container-door-gasket",
+        ),
+        (
+            mesh::merge_transformed_prims(hardware, CONTAINER_HARDWARE_COLOR),
+            CONTAINER_HARDWARE_COLOR,
+            "map-a-container-door-hardware",
+        ),
+    ]
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FootKind {
@@ -255,46 +447,66 @@ impl MapGpu {
         let half = Vec3::from_array(def.shipment_container.half_extents);
         let root = Mat4::from_translation(Vec3::from_array(def.shipment_container.position));
         let container_tint = [1.0, 1.0, 1.0, 1.0];
-        let upload_container_part =
-            |albedo_id: &str, group: mesh::BoxFaceGroup, label: &str| -> Result<_, String> {
-                let png = pack.get(albedo_id)?;
-                mesh::upload_textured_solid_batch(
-                    &gpu,
-                    png,
-                    mesh::box_face_group_prim(half, container_tint, Some(group)),
-                    root,
-                    container_tint,
-                    CONTAINER_METRES_PER_TILE,
-                    SolidUvLayout::BoxFace,
-                    label,
-                )
-            };
+        let side_metres_per_tile = half.y * 2.0 / CONTAINER_SIDE_TILES_HIGH;
+        let upload_container_part = |albedo_id: &str,
+                                     group: mesh::BoxFaceGroup,
+                                     metres_per_tile: f32,
+                                     uv_layout: SolidUvLayout,
+                                     label: &str|
+         -> Result<_, String> {
+            let png = pack.get(albedo_id)?;
+            mesh::upload_textured_solid_batch(
+                &gpu,
+                png,
+                mesh::box_face_group_prim(half, container_tint, Some(group)),
+                root,
+                container_tint,
+                metres_per_tile,
+                uv_layout,
+                label,
+            )
+        };
         let sides = upload_container_part(
             "container-side.albedo",
             mesh::BoxFaceGroup::Sides,
+            side_metres_per_tile,
+            SolidUvLayout::BoxFace,
             "map-a-shipment-container-sides",
+        );
+        let front = upload_container_part(
+            "container-door.albedo",
+            mesh::BoxFaceGroup::Front,
+            1.0,
+            SolidUvLayout::RearDoors,
+            "map-a-shipment-container-front",
         );
         let lids = upload_container_part(
             "container-side.albedo",
             mesh::BoxFaceGroup::Lids,
+            side_metres_per_tile,
+            SolidUvLayout::BoxFace,
             "map-a-shipment-container-lids",
         );
-        let ends = upload_container_part(
+        let rear = upload_container_part(
             "container-door.albedo",
-            mesh::BoxFaceGroup::Ends,
-            "map-a-shipment-container-ends",
+            mesh::BoxFaceGroup::Rear,
+            1.0,
+            SolidUvLayout::RearDoors,
+            "map-a-shipment-container-rear",
         );
-        match (sides, lids, ends) {
-            (Ok(sides), Ok(lids), Ok(ends)) => {
+        match (sides, front, lids, rear) {
+            (Ok(sides), Ok(front), Ok(lids), Ok(rear)) => {
                 batches.push(sides);
+                batches.push(front);
                 batches.push(lids);
-                batches.push(ends);
+                batches.push(rear);
             }
-            (s, l, e) => {
+            (s, f, l, r) => {
                 let err = s
                     .err()
+                    .or(f.err())
                     .or(l.err())
-                    .or(e.err())
+                    .or(r.err())
                     .unwrap_or_else(|| "container albedo".into());
                 web_sys::console::warn_1(
                     &format!("map: container albedo unusable ({err}); flat container").into(),
@@ -310,6 +522,12 @@ impl MapGpu {
                     .map_err(|e| JsValue::from_str(&e))?,
                 );
             }
+        }
+        for (prim, color, label) in container_door_hardware(half) {
+            batches.push(
+                mesh::upload_solid_batch(&gpu, prim, root, color, label)
+                    .map_err(|e| JsValue::from_str(&e))?,
+            );
         }
 
         for (i, b) in def.boxes.iter().enumerate() {

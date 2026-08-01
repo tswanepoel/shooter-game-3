@@ -11,7 +11,8 @@ use super::gpu::{GpuPrimitive, MeshBatch, UploadCtx};
 #[cfg(feature = "debug-tools")]
 use super::kit::{held_blaster_root, kit_to_world, letter_index};
 use super::primitives::{
-    assign_box_face_uvs, assign_world_xz_uvs, transform_vertex, CpuPrim, MeshVertex,
+    assign_box_face_uvs, assign_rear_door_uvs, assign_world_xz_uvs, transform_vertex, CpuPrim,
+    MeshVertex,
 };
 use super::shader::MaterialUniforms;
 
@@ -22,6 +23,8 @@ pub enum SolidUvLayout {
     WorldXz,
     /// UV from local face metres; assign before world transform (shipment container).
     BoxFace,
+    /// One door image per leaf; U repeats twice, V clamps (087).
+    RearDoors,
 }
 
 /// Upload character + held blaster. Returns batches and the **held_blaster** root (037)
@@ -375,10 +378,8 @@ pub fn upload_textured_solid_batch(
         }),
     );
 
-    // Container side/door albedos are not vertically seamless. Mirrored V repeat keeps
-    // each upper tile unchanged and reflects it into the tile immediately below.
-    let material_sampler = (uv_layout == SolidUvLayout::BoxFace).then(|| {
-        gpu.device.create_sampler(&wgpu::SamplerDescriptor {
+    let material_sampler = match uv_layout {
+        SolidUvLayout::BoxFace => Some(gpu.device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("map-box-face-mirrored-v-sampler"),
             address_mode_u: wgpu::AddressMode::Repeat,
             address_mode_v: wgpu::AddressMode::MirrorRepeat,
@@ -387,8 +388,19 @@ pub fn upload_textured_solid_batch(
             min_filter: wgpu::FilterMode::Linear,
             mipmap_filter: wgpu::FilterMode::Linear,
             ..Default::default()
-        })
-    });
+        })),
+        SolidUvLayout::RearDoors => Some(gpu.device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("map-rear-door-sampler"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        })),
+        SolidUvLayout::WorldXz => None,
+    };
     let sampler = material_sampler.as_ref().unwrap_or(gpu.sampler);
 
     let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -420,6 +432,12 @@ pub fn upload_textured_solid_batch(
         }
         SolidUvLayout::BoxFace => {
             assign_box_face_uvs(&mut verts, metres_per_tile);
+            for v in &mut verts {
+                transform_vertex(v, root);
+            }
+        }
+        SolidUvLayout::RearDoors => {
+            assign_rear_door_uvs(&mut verts);
             for v in &mut verts {
                 transform_vertex(v, root);
             }
