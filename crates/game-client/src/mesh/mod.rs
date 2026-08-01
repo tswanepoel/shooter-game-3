@@ -26,4 +26,4 @@ pub use primitives::unit_sphere_prim;
 pub use primitives::{box_prim, ramp_prim, transform_vertex, MeshVertex};
 #[cfg(feature = "debug-tools")]
 pub use upload::upload_held_pair;
-pub use upload::{upload_batch, upload_solid_batch, upload_textured_solid_batch};
+pub use upload::{upload_batch, upload_solid_batch, upload_textured_solid_batch, SolidUvLayout};

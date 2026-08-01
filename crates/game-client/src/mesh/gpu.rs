@@ -15,6 +15,7 @@ pub struct MeshBatch {
     pub(crate) _texture: wgpu::Texture,
     pub(crate) _texture_view: wgpu::TextureView,
     pub(crate) _material_uniform: wgpu::Buffer,
+    pub(crate) _sampler: Option<wgpu::Sampler>,
 }
 
 pub struct UnlitMeshGpu {

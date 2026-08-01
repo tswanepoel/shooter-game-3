@@ -84,6 +84,7 @@ const PACKS = [
       const gravel = pickAlbedo('gravel');
       const cement = pickAlbedo('cement');
       const grass = pickAlbedo('grass');
+      const container = pickAlbedo('container');
       return [
         {
           id: 'map-a.def',
@@ -104,6 +105,11 @@ const PACKS = [
           id: 'grass.albedo',
           path: path.join(materialsDir, grass.file),
           kind: grass.kind,
+        },
+        {
+          id: 'container.albedo',
+          path: path.join(materialsDir, container.file),
+          kind: container.kind,
         },
       ];
     },

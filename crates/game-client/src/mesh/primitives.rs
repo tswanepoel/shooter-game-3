@@ -29,6 +29,26 @@ pub fn assign_world_xz_uvs(verts: &mut [MeshVertex], metres_per_tile: f32) {
     }
 }
 
+/// Assign UVs from local face metres so corrugation stays upright on box sides (086).
+/// Call before transforming verts into world space. `v` follows local +Y on vertical faces.
+pub fn assign_box_face_uvs(verts: &mut [MeshVertex], metres_per_tile: f32) {
+    let s = 1.0 / metres_per_tile.max(1e-4);
+    for v in verts {
+        let [x, y, z] = v.position;
+        let [nx, ny, nz] = v.normal;
+        let ax = nx.abs();
+        let ay = ny.abs();
+        let az = nz.abs();
+        v.uv = if ax >= ay && ax >= az {
+            [z * s, y * s]
+        } else if ay >= ax && ay >= az {
+            [x * s, z * s]
+        } else {
+            [x * s, y * s]
+        };
+    }
+}
+
 pub fn box_prim(half: glam::Vec3, color: [f32; 4]) -> CpuPrim {
     let hx = half.x;
     let hy = half.y;
@@ -171,5 +191,26 @@ mod tests {
         assign_world_xz_uvs(&mut verts, 1.5);
         assert!((verts[0].uv[0] - 2.0).abs() < 1e-5);
         assert!((verts[0].uv[1] - (-1.0)).abs() < 1e-5);
+    }
+
+    #[test]
+    fn box_face_uvs_upright_on_sides() {
+        let mut side = [MeshVertex {
+            position: [1.0, 0.5, -0.25],
+            normal: [1.0, 0.0, 0.0],
+            uv: [0.0, 0.0],
+        }];
+        assign_box_face_uvs(&mut side, 1.0);
+        assert!((side[0].uv[0] - (-0.25)).abs() < 1e-5);
+        assert!((side[0].uv[1] - 0.5).abs() < 1e-5);
+
+        let mut end = [MeshVertex {
+            position: [-0.5, 1.0, 2.0],
+            normal: [0.0, 0.0, 1.0],
+            uv: [0.0, 0.0],
+        }];
+        assign_box_face_uvs(&mut end, 1.0);
+        assert!((end[0].uv[0] - (-0.5)).abs() < 1e-5);
+        assert!((end[0].uv[1] - 1.0).abs() < 1e-5);
     }
 }

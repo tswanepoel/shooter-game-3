@@ -10,8 +10,19 @@ use super::gltf::{extract_character_hold, extract_primitives};
 use super::gpu::{GpuPrimitive, MeshBatch, UploadCtx};
 #[cfg(feature = "debug-tools")]
 use super::kit::{held_blaster_root, kit_to_world, letter_index};
-use super::primitives::{assign_world_xz_uvs, transform_vertex, CpuPrim, MeshVertex};
+use super::primitives::{
+    assign_box_face_uvs, assign_world_xz_uvs, transform_vertex, CpuPrim, MeshVertex,
+};
 use super::shader::MaterialUniforms;
+
+/// How textured solids map albedo onto geometry (083 world-XZ pads; 086 box faces).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SolidUvLayout {
+    /// UV from world XZ metres (ground / foot pads).
+    WorldXz,
+    /// UV from local face metres; assign before world transform (shipment container).
+    BoxFace,
+}
 
 /// Upload character + held blaster. Returns batches and the **held_blaster** root (037)
 /// so callers (lineup muzzles) sample blaster-local points under the same matrix.
@@ -181,6 +192,7 @@ pub fn upload_batch(
         _texture: texture,
         _texture_view: texture_view,
         _material_uniform: material_uniform,
+        _sampler: None,
     })
 }
 
@@ -293,10 +305,11 @@ pub fn upload_solid_batch(
         _texture: texture,
         _texture_view: texture_view,
         _material_uniform: material_uniform,
+        _sampler: None,
     })
 }
 
-/// Unlit solid with a real albedo PNG, world-XZ tiling UVs, and full mips (083).
+/// Unlit solid with a real albedo PNG, tiling UVs, and full mips (083 / 086).
 pub fn upload_textured_solid_batch(
     gpu: &UploadCtx<'_>,
     png: &[u8],
@@ -304,6 +317,7 @@ pub fn upload_textured_solid_batch(
     root: Mat4,
     color: [f32; 4],
     metres_per_tile: f32,
+    uv_layout: SolidUvLayout,
     label: &str,
 ) -> Result<MeshBatch, String> {
     let (tex_w, tex_h, rgba) = decode_rgba8(png)?;
@@ -361,6 +375,22 @@ pub fn upload_textured_solid_batch(
         }),
     );
 
+    // The sole container image is not vertically seamless. Mirrored V repeat keeps
+    // each upper tile unchanged and reflects it into the tile immediately below.
+    let material_sampler = (uv_layout == SolidUvLayout::BoxFace).then(|| {
+        gpu.device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("map-box-face-mirrored-v-sampler"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::MirrorRepeat,
+            address_mode_w: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        })
+    });
+    let sampler = material_sampler.as_ref().unwrap_or(gpu.sampler);
+
     let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("map-textured-solid-material-bg"),
         layout: gpu.material_bgl,
@@ -375,16 +405,26 @@ pub fn upload_textured_solid_batch(
             },
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: wgpu::BindingResource::Sampler(gpu.sampler),
+                resource: wgpu::BindingResource::Sampler(sampler),
             },
         ],
     });
 
     let (mut verts, indices, _) = prim;
-    for v in &mut verts {
-        transform_vertex(v, root);
+    match uv_layout {
+        SolidUvLayout::WorldXz => {
+            for v in &mut verts {
+                transform_vertex(v, root);
+            }
+            assign_world_xz_uvs(&mut verts, metres_per_tile);
+        }
+        SolidUvLayout::BoxFace => {
+            assign_box_face_uvs(&mut verts, metres_per_tile);
+            for v in &mut verts {
+                transform_vertex(v, root);
+            }
+        }
     }
-    assign_world_xz_uvs(&mut verts, metres_per_tile);
 
     let vbuf = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("map-textured-solid-vertices"),
@@ -414,6 +454,7 @@ pub fn upload_textured_solid_batch(
         _texture: texture,
         _texture_view: texture_view,
         _material_uniform: material_uniform,
+        _sampler: material_sampler,
     })
 }
 

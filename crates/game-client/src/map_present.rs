@@ -1,4 +1,4 @@
-//! Cooked map load and draw (064 landmark, 066 solids, 070/072/073 foot patches, 082 ground, 083 gravel, 084 cement, 085 grass).
+//! Cooked map load and draw (064 shipment container, 066 solids, 070/072/073 foot patches, 082 ground, 083 gravel, 084 cement, 085 grass, 086 container albedo).
 
 #[cfg(target_arch = "wasm32")]
 use glam::Mat4;
@@ -8,14 +8,15 @@ use serde::Deserialize;
 use wasm_bindgen::JsValue;
 
 #[cfg(target_arch = "wasm32")]
-use crate::mesh::{self, UnlitMeshGpu, UnlitMeshLayout};
+use crate::mesh::{self, SolidUvLayout, UnlitMeshGpu, UnlitMeshLayout};
 #[cfg(target_arch = "wasm32")]
 use crate::pack;
 use game_sim::{MapBox, MapRamp, MapWorld};
 
 pub const MAP_A_PACK: &str = "maps-a";
 
-const LANDMARK_COLOR: [f32; 4] = [0.55, 0.62, 0.72, 1.0];
+/// Flat fallback when `container.albedo` fails (086).
+const CONTAINER_FALLBACK_COLOR: [f32; 4] = [0.55, 0.62, 0.72, 1.0];
 const BOX_COLOR: [f32; 4] = [0.72, 0.58, 0.42, 1.0];
 const RAMP_COLOR: [f32; 4] = [0.48, 0.66, 0.52, 1.0];
 /// Visual slab half-height for ground and foot pads (present only — not collide).
@@ -26,6 +27,8 @@ const GRAVEL_METRES_PER_TILE: f32 = 1.5;
 const CEMENT_METRES_PER_TILE: f32 = 1.5;
 /// World metres per grass albedo tile (085).
 const GRASS_METRES_PER_TILE: f32 = 1.5;
+/// Local face metres per container albedo tile (086).
+const CONTAINER_METRES_PER_TILE: f32 = 1.5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FootKind {
@@ -87,9 +90,9 @@ impl FootSurfaces {
 #[derive(Debug, Deserialize)]
 struct MapDef {
     ground: GroundDef,
-    landmark: LandmarkDef,
+    shipment_container: SolidBoxDef,
     #[serde(default)]
-    boxes: Vec<LandmarkDef>,
+    boxes: Vec<SolidBoxDef>,
     #[serde(default)]
     ramp: Option<RampDef>,
     #[serde(default)]
@@ -104,7 +107,7 @@ struct GroundDef {
 }
 
 #[derive(Debug, Deserialize)]
-struct LandmarkDef {
+struct SolidBoxDef {
     position: [f32; 3],
     half_extents: [f32; 3],
 }
@@ -180,6 +183,7 @@ impl MapGpu {
                 ground_root,
                 gravel,
                 GRAVEL_METRES_PER_TILE,
+                SolidUvLayout::WorldXz,
                 "map-a-ground",
             )
         });
@@ -222,6 +226,7 @@ impl MapGpu {
                         root,
                         color,
                         metres_per_tile,
+                        SolidUvLayout::WorldXz,
                         &label,
                     )
                 }) {
@@ -247,18 +252,37 @@ impl MapGpu {
             batches.push(batch);
         }
 
-        let half = Vec3::from_array(def.landmark.half_extents);
-        let root = Mat4::from_translation(Vec3::from_array(def.landmark.position));
-        batches.push(
-            mesh::upload_solid_batch(
+        let half = Vec3::from_array(def.shipment_container.half_extents);
+        let root = Mat4::from_translation(Vec3::from_array(def.shipment_container.position));
+        let container_tint = [1.0, 1.0, 1.0, 1.0];
+        let container_batch = match pack.get("container.albedo").and_then(|png| {
+            mesh::upload_textured_solid_batch(
                 &gpu,
-                mesh::box_prim(half, LANDMARK_COLOR),
+                png,
+                mesh::box_prim(half, container_tint),
                 root,
-                LANDMARK_COLOR,
-                "map-a-landmark",
+                container_tint,
+                CONTAINER_METRES_PER_TILE,
+                SolidUvLayout::BoxFace,
+                "map-a-shipment-container",
             )
-            .map_err(|e| JsValue::from_str(&e))?,
-        );
+        }) {
+            Ok(batch) => batch,
+            Err(e) => {
+                web_sys::console::warn_1(
+                    &format!("map: container albedo unusable ({e}); flat container").into(),
+                );
+                mesh::upload_solid_batch(
+                    &gpu,
+                    mesh::box_prim(half, CONTAINER_FALLBACK_COLOR),
+                    root,
+                    CONTAINER_FALLBACK_COLOR,
+                    "map-a-shipment-container",
+                )
+                .map_err(|e| JsValue::from_str(&e))?
+            }
+        };
+        batches.push(container_batch);
 
         for (i, b) in def.boxes.iter().enumerate() {
             let half = Vec3::from_array(b.half_extents);
@@ -316,8 +340,8 @@ impl MapGpu {
 fn map_world_from_def(def: &MapDef) -> MapWorld {
     let mut boxes = Vec::with_capacity(1 + def.boxes.len());
     boxes.push(MapBox {
-        center: Vec3::from_array(def.landmark.position),
-        half: Vec3::from_array(def.landmark.half_extents),
+        center: Vec3::from_array(def.shipment_container.position),
+        half: Vec3::from_array(def.shipment_container.half_extents),
     });
     for b in &def.boxes {
         boxes.push(MapBox {
@@ -396,7 +420,7 @@ mod tests {
     fn map_def_requires_ground() {
         let json = r#"{
             "ground": { "position": [0.0, 0.0, 0.0], "half_extents": [12.0, 12.0] },
-            "landmark": { "position": [0.0, 1.0, 0.0], "half_extents": [1.0, 1.0, 1.0] }
+            "shipment_container": { "position": [0.0, 1.0, 0.0], "half_extents": [1.0, 1.0, 1.0] }
         }"#;
         let def: MapDef = serde_json::from_str(json).unwrap();
         assert_eq!(def.ground.half_extents, [12.0, 12.0]);
