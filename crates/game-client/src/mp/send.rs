@@ -1,6 +1,6 @@
 //! Reliable/datagram C2S helpers while Shared is borrowed.
 
-use game_net::{encode_c2s, ClientToServer, NetActiveWeapon, DEFAULT_MAP};
+use game_net::{encode_c2s_frame, ClientToServer, NetActiveWeapon, DEFAULT_MAP};
 use game_sim::ActiveWeapon;
 use js_sys::Uint8Array;
 
@@ -32,7 +32,7 @@ pub(crate) fn send_start_match_locked(s: &Shared) {
 }
 
 pub(crate) fn send_reliable_locked(s: &Shared, msg: &ClientToServer) {
-    let Ok(payload) = encode_c2s(msg) else {
+    let Ok(payload) = encode_c2s_frame(msg) else {
         return;
     };
     let Some(w) = s.reliable_writer.as_ref() else {

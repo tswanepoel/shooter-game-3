@@ -8,7 +8,10 @@ use game_sim::{HitBodyPart, PlayerHealth, SelfState};
 use crate::mp;
 use crate::self_present::SelfPresentState;
 
-use super::super::impact::apply_impact_in_present;
+use super::super::impact::{
+    apply_impact_in_present, apply_server_death_local, apply_server_death_remote,
+    flinch_impulse_damage,
+};
 use super::super::ClientInner;
 
 impl ClientInner {
@@ -217,6 +220,10 @@ impl ClientInner {
                 })
         };
         for h in &hits {
+            if self.mp.in_room() {
+                // 080: firer claims contact; server owns health. Keep marker/claim only.
+                continue;
+            }
             let dmg = apply_impact_in_present(
                 h.target_id,
                 h.ammo,
@@ -246,6 +253,16 @@ impl ClientInner {
             let Some(part) = HitBodyPart::from_wire(batch.hit.part) else {
                 continue;
             };
+            if self.mp.in_room() {
+                // Accepted non-lethal FX only — never drop health / conclude death (080).
+                if local_id == Some(batch.hit.target) && self.self_state.alive {
+                    let dmg = flinch_impulse_damage(ammo, batch.hit.speed, part);
+                    if dmg > 0.0 {
+                        self.fire.add_hit_impulse(&mut self.self_state, dmg);
+                    }
+                }
+                continue;
+            }
             let dmg = apply_impact_in_present(
                 batch.hit.target,
                 ammo,
@@ -258,6 +275,17 @@ impl ClientInner {
             if dmg > 0.0 {
                 self.fire.add_hit_impulse(&mut self.self_state, dmg);
             }
+        }
+
+        for death in self.mp.take_death_announces() {
+            if local_id == Some(death.victim) {
+                if let Some(id) = local_id {
+                    apply_server_death_local(id, &mut self.self_state, &mut self.health_by_id);
+                }
+            } else {
+                apply_server_death_remote(death.victim, &mut self.health_by_id);
+            }
+            let _ = death.killer;
         }
 
         self.self_state.tick_health(dt);

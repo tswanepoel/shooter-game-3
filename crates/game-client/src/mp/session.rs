@@ -4,7 +4,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use game_net::{
-    decode_s2c, drain_s2c_frames, encode_c2s, ClientToServer, ServerToClient, PROTOCOL_VERSION,
+    decode_s2c, drain_s2c_frames, encode_c2s_frame, take_s2c_frame, ClientToServer, ServerToClient,
+    PROTOCOL_VERSION,
 };
 use js_sys::{Array, Object, Reflect, Uint8Array};
 use wasm_bindgen::prelude::*;
@@ -14,7 +15,7 @@ use web_sys::ReadableStreamDefaultReader;
 
 use super::apply::{apply_roster, apply_you_spawned};
 use super::cookie::save_display_name_cookie;
-use super::shared::{BlasterGrantBatch, LootGrantBatch};
+use super::shared::{BlasterGrantBatch, DeathAnnounceBatch, LootGrantBatch};
 use super::{client_now_secs, MpPhase, PeerImpactHitBatch, PeerProjectileBatch, Shared};
 
 const IDENTITY_PATH: &str = "/__debug/wt-identity";
@@ -36,7 +37,7 @@ pub async fn join_session(shared: Rc<RefCell<Shared>>) -> Result<(), JsValue> {
     let bi = JsFuture::from(js_sys::Promise::from(create_bi.call0(&transport)?)).await?;
     let writable: web_sys::WritableStream = Reflect::get(&bi, &"writable".into())?.dyn_into()?;
     let writer = writable.get_writer()?;
-    let hello = encode_c2s(&ClientToServer::Hello {
+    let hello = encode_c2s_frame(&ClientToServer::Hello {
         protocol: PROTOCOL_VERSION,
         room_code,
         display_name: display_name.clone(),
@@ -49,15 +50,26 @@ pub async fn join_session(shared: Rc<RefCell<Shared>>) -> Result<(), JsValue> {
         .get_reader()
         .dyn_into()
         .map_err(|_| JsValue::from_str("bi.readable reader"))?;
-    let read = JsFuture::from(reader.read()).await?;
-    if Reflect::get(&read, &"done".into())?
-        .as_bool()
-        .unwrap_or(true)
-    {
-        return Err(JsValue::from_str("stream closed before Welcome"));
-    }
-    let bytes = Uint8Array::new(&Reflect::get(&read, &"value".into())?).to_vec();
-    let s2c = decode_s2c(&bytes).map_err(|_| JsValue::from_str("decode S2C failed"))?;
+
+    // The server may coalesce the roster behind Welcome; keep the tail for the
+    // reader task below.
+    let mut frame_buf: Vec<u8> = Vec::new();
+    let s2c = loop {
+        if let Some(msg) =
+            take_s2c_frame(&mut frame_buf).map_err(|e| JsValue::from_str(&e.to_string()))?
+        {
+            break msg;
+        }
+        let read = JsFuture::from(reader.read()).await?;
+        if Reflect::get(&read, &"done".into())?
+            .as_bool()
+            .unwrap_or(true)
+        {
+            return Err(JsValue::from_str("stream closed before Welcome"));
+        }
+        let bytes = Uint8Array::new(&Reflect::get(&read, &"value".into())?).to_vec();
+        frame_buf.extend_from_slice(&bytes);
+    };
     let (player_id, tick, server_time) = match s2c {
         ServerToClient::Reject { reason } => {
             return Err(JsValue::from_str(&format!("rejected: {reason}")));
@@ -114,8 +126,11 @@ pub async fn join_session(shared: Rc<RefCell<Shared>>) -> Result<(), JsValue> {
 
     let shared_bi = Rc::clone(&shared);
     wasm_bindgen_futures::spawn_local(async move {
-        let mut frame_buf: Vec<u8> = Vec::new();
-        loop {
+        while let Ok(msgs) = drain_s2c_frames(&mut frame_buf) {
+            let t = client_now_secs();
+            for msg in msgs {
+                handle_s2c(&shared_bi, msg, t);
+            }
             let read = match JsFuture::from(reader.read()).await {
                 Ok(v) => v,
                 Err(_) => break,
@@ -132,10 +147,6 @@ pub async fn join_session(shared: Rc<RefCell<Shared>>) -> Result<(), JsValue> {
                 Err(_) => break,
             };
             frame_buf.extend_from_slice(&Uint8Array::new(&value).to_vec());
-            let t = client_now_secs();
-            for msg in drain_s2c_frames(&mut frame_buf) {
-                handle_s2c(&shared_bi, msg, t);
-            }
         }
     });
 
@@ -244,6 +255,12 @@ fn handle_s2c(shared: &Rc<RefCell<Shared>>, msg: ServerToClient, t4: f64) {
                 return;
             }
             s.pending_hits.push(PeerImpactHitBatch { hit });
+        }
+        ServerToClient::DeathAnnounce { victim, killer, .. } => {
+            shared
+                .borrow_mut()
+                .pending_deaths
+                .push(DeathAnnounceBatch { victim, killer });
         }
         ServerToClient::CorpseSpawn { corpse, .. } => {
             shared.borrow_mut().pending_corpse_spawns.push(corpse);

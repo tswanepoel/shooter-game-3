@@ -18,6 +18,75 @@ use crate::loot::{
 
 pub const SPAWN_RADIUS_M: f32 = 8.0;
 
+/// Why a claimed hit was not applied. Peers still present the relayed hit, so a
+/// reject means client and server disagree about that death.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImpactReject {
+    NoRoom,
+    MatchNotStarted,
+    SelfHit,
+    UnknownAmmo,
+    UnknownPart,
+    FirerNotLiving,
+    TargetMissing,
+    TargetNotLiving,
+    NoDamage,
+}
+
+impl std::fmt::Display for ImpactReject {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::NoRoom => "firer not in a room",
+            Self::MatchNotStarted => "match not started",
+            Self::SelfHit => "self hit",
+            Self::UnknownAmmo => "unknown ammo",
+            Self::UnknownPart => "unknown body part",
+            Self::FirerNotLiving => "firer not living",
+            Self::TargetMissing => "target not in room",
+            Self::TargetNotLiving => "target not living",
+            Self::NoDamage => "zero damage",
+        };
+        f.write_str(s)
+    }
+}
+
+/// Why a Spawn request was not granted. The client resends until `YouSpawned`,
+/// so a reject that is not `AlreadyLiving` leaves them stuck on the bench.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpawnReject {
+    NoRoom,
+    MatchNotStarted,
+    NotAMember,
+    NotPlayerRole,
+    UnknownCharacter,
+    IllegalLoadout,
+    AlreadyLiving,
+}
+
+impl std::fmt::Display for SpawnReject {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::NoRoom => "not in a room",
+            Self::MatchNotStarted => "match not started",
+            Self::NotAMember => "not a room member",
+            Self::NotPlayerRole => "role is not player",
+            Self::UnknownCharacter => "unknown character",
+            Self::IllegalLoadout => "illegal loadout",
+            Self::AlreadyLiving => "already living",
+        };
+        f.write_str(s)
+    }
+}
+
+/// Result of a claimed hit landing on a target's combat state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImpactOutcome {
+    Kill,
+    Damaged,
+    TargetNotLiving,
+    NoDamage,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct CombatState {
     pub living: bool,
@@ -47,22 +116,27 @@ impl CombatState {
         true
     }
 
-    /// Apply damage while living. Returns true when this hit kills.
-    pub fn receive_impact(&mut self, ammo: AmmoKind, speed: f32, part: HitBodyPart) -> bool {
+    /// Apply damage while living.
+    pub fn receive_impact(
+        &mut self,
+        ammo: AmmoKind,
+        speed: f32,
+        part: HitBodyPart,
+    ) -> ImpactOutcome {
         if !self.living {
-            return false;
+            return ImpactOutcome::TargetNotLiving;
         }
         let dmg = impact_damage(ammo, speed, part);
         if dmg <= 0.0 {
-            return false;
+            return ImpactOutcome::NoDamage;
         }
         self.health = (self.health - dmg).max(0.0);
         if self.health > 0.0 {
-            return false;
+            return ImpactOutcome::Damaged;
         }
         self.living = false;
         self.health = 0.0;
-        true
+        ImpactOutcome::Kill
     }
 }
 
@@ -126,30 +200,37 @@ impl CombatStore for Roster {
     }
 }
 
-/// Shared claimed-hit rules. Returns true when a kill was scored.
-fn apply_impact_store(store: &mut impl CombatStore, firer: PlayerId, hit: &NetImpactHit) -> bool {
+/// Shared claimed-hit rules. `Ok(true)` when a kill was scored.
+fn apply_impact_store(
+    store: &mut impl CombatStore,
+    firer: PlayerId,
+    hit: &NetImpactHit,
+) -> Result<bool, ImpactReject> {
     if firer == hit.target {
-        return false;
+        return Err(ImpactReject::SelfHit);
     }
     let Some(ammo) = ammo_from_wire(hit.ammo) else {
-        return false;
+        return Err(ImpactReject::UnknownAmmo);
     };
     let Some(part) = HitBodyPart::from_wire(hit.part) else {
-        return false;
+        return Err(ImpactReject::UnknownPart);
     };
     if !store.living_of(firer) {
-        return false;
+        return Err(ImpactReject::FirerNotLiving);
     }
     let Some(target) = store.combat_mut(hit.target) else {
-        return false;
+        return Err(ImpactReject::TargetMissing);
     };
-    if !target.receive_impact(ammo, hit.speed, part) {
-        return false;
+    match target.receive_impact(ammo, hit.speed, part) {
+        ImpactOutcome::Kill => {}
+        ImpactOutcome::Damaged => return Ok(false),
+        ImpactOutcome::TargetNotLiving => return Err(ImpactReject::TargetNotLiving),
+        ImpactOutcome::NoDamage => return Err(ImpactReject::NoDamage),
     }
     if let Some(firer_combat) = store.combat_mut(firer) {
         firer_combat.score = firer_combat.score.saturating_add(1);
     }
-    true
+    Ok(true)
 }
 
 impl Rooms {
@@ -209,9 +290,16 @@ impl Rooms {
         self.room(id).is_some_and(|r| r.living(id))
     }
 
-    pub fn try_spawn(&mut self, id: PlayerId, primary: Option<u8>, secondary: Option<u8>) -> bool {
-        self.room_mut(id)
-            .is_some_and(|r| r.try_spawn(id, primary, secondary))
+    pub fn try_spawn(
+        &mut self,
+        id: PlayerId,
+        primary: Option<u8>,
+        secondary: Option<u8>,
+    ) -> Result<(), SpawnReject> {
+        match self.room_mut(id) {
+            Some(r) => r.try_spawn(id, primary, secondary),
+            None => Err(SpawnReject::NoRoom),
+        }
     }
 
     pub fn try_pick_map(&mut self, id: PlayerId, map: u8) -> bool {
@@ -235,9 +323,15 @@ impl Rooms {
         self.room(id).and_then(|r| r.character(id))
     }
 
-    pub fn apply_impact(&mut self, firer: PlayerId, hit: &NetImpactHit) -> bool {
-        self.room_mut(firer)
-            .is_some_and(|r| r.apply_impact(firer, hit))
+    pub fn apply_impact(
+        &mut self,
+        firer: PlayerId,
+        hit: &NetImpactHit,
+    ) -> Result<bool, ImpactReject> {
+        match self.room_mut(firer) {
+            Some(r) => r.apply_impact(firer, hit),
+            None => Err(ImpactReject::NoRoom),
+        }
     }
 
     /// After a scored kill: mint corpse from victim last drive and broadcast.
@@ -314,6 +408,12 @@ impl Rooms {
     pub fn broadcast_roster(&self, id: PlayerId, tick: u64) {
         if let Some(roster) = self.room(id) {
             roster.broadcast_roster(tick);
+        }
+    }
+
+    pub fn broadcast_reliable_all(&self, id: PlayerId, bytes: &[u8]) {
+        if let Some(roster) = self.room(id) {
+            roster.broadcast_reliable_all(bytes);
         }
     }
 
@@ -416,6 +516,11 @@ impl Roster {
         tick: u64,
     ) {
         if self.living(victim) {
+            // Clients only dump on local death, so the two sides disagree here.
+            warn!(
+                player_id = victim,
+                "death ammo dump from a member the server still has living"
+            );
             return;
         }
         if let Some(drop) = self.loot.accept_dump(victim, ammo, rounds, position) {
@@ -524,12 +629,17 @@ impl Roster {
         }
     }
 
-    pub fn try_spawn(&mut self, id: PlayerId, primary: Option<u8>, secondary: Option<u8>) -> bool {
+    pub fn try_spawn(
+        &mut self,
+        id: PlayerId,
+        primary: Option<u8>,
+        secondary: Option<u8>,
+    ) -> Result<(), SpawnReject> {
         if !self.match_started {
-            return false;
+            return Err(SpawnReject::MatchNotStarted);
         }
         let Some(peer) = self.peers.get_mut(&id) else {
-            return false;
+            return Err(SpawnReject::NotAMember);
         };
         try_spawn_member(
             &peer.role,
@@ -576,9 +686,13 @@ impl Roster {
     }
 
     /// Apply a claimed hit in place. Returns true when a kill was scored.
-    pub fn apply_impact(&mut self, firer: PlayerId, hit: &NetImpactHit) -> bool {
+    pub fn apply_impact(
+        &mut self,
+        firer: PlayerId,
+        hit: &NetImpactHit,
+    ) -> Result<bool, ImpactReject> {
         if !self.match_started {
-            return false;
+            return Err(ImpactReject::MatchNotStarted);
         }
         apply_impact_store(self, firer, hit)
     }
@@ -692,14 +806,20 @@ pub fn try_spawn_member(
     combat: &mut CombatState,
     primary: Option<u8>,
     secondary: Option<u8>,
-) -> bool {
-    if *role != NetRole::Player || !is_known_character(character) {
-        return false;
+) -> Result<(), SpawnReject> {
+    if *role != NetRole::Player {
+        return Err(SpawnReject::NotPlayerRole);
+    }
+    if !is_known_character(character) {
+        return Err(SpawnReject::UnknownCharacter);
     }
     if !loadout_legal(primary, secondary) {
-        return false;
+        return Err(SpawnReject::IllegalLoadout);
     }
-    combat.try_enter_map()
+    if !combat.try_enter_map() {
+        return Err(SpawnReject::AlreadyLiving);
+    }
+    Ok(())
 }
 
 pub fn ammo_from_wire(ammo: u8) -> Option<AmmoKind> {
@@ -847,10 +967,13 @@ mod tests {
             speed: 400.0,
             part: 0,
         };
-        assert!(apply_impact_store(&mut states, 1, &hit));
+        assert_eq!(apply_impact_store(&mut states, 1, &hit), Ok(true));
         assert!(!states[&2].living);
         assert_eq!(states[&1].score, 1);
-        assert!(!apply_impact_store(&mut states, 1, &hit));
+        assert_eq!(
+            apply_impact_store(&mut states, 1, &hit),
+            Err(ImpactReject::TargetNotLiving)
+        );
     }
 
     #[test]
@@ -881,7 +1004,10 @@ mod tests {
             speed: 400.0,
             part: 0,
         };
-        assert!(!apply_impact_store(&mut states, 1, &hit));
+        assert_eq!(
+            apply_impact_store(&mut states, 1, &hit),
+            Err(ImpactReject::FirerNotLiving)
+        );
         assert!(states[&2].living);
 
         states.get_mut(&1).unwrap().living = true;
@@ -892,7 +1018,10 @@ mod tests {
             speed: 400.0,
             part: 0,
         };
-        assert!(!apply_impact_store(&mut states, 1, &self_hit));
+        assert_eq!(
+            apply_impact_store(&mut states, 1, &self_hit),
+            Err(ImpactReject::SelfHit)
+        );
     }
 
     #[test]
@@ -956,49 +1085,38 @@ mod tests {
     #[test]
     fn try_spawn_member_gates() {
         let mut combat = CombatState::fresh();
-        assert!(!try_spawn_member(
-            &NetRole::Spectator,
-            b'a',
-            &mut combat,
-            Some(b'p'),
-            Some(b'b'),
-        ));
-        assert!(!try_spawn_member(
-            &NetRole::Player,
-            b'z',
-            &mut combat,
-            Some(b'p'),
-            Some(b'b'),
-        ));
-        assert!(!try_spawn_member(
-            &NetRole::Player,
-            b'a',
-            &mut combat,
-            Some(b'p'),
-            Some(b'd'),
-        ));
-        assert!(try_spawn_member(
-            &NetRole::Player,
-            b'a',
-            &mut combat,
-            Some(b'p'),
-            Some(b'b'),
-        ));
+        assert_eq!(
+            try_spawn_member(
+                &NetRole::Spectator,
+                b'a',
+                &mut combat,
+                Some(b'p'),
+                Some(b'b'),
+            ),
+            Err(SpawnReject::NotPlayerRole)
+        );
+        assert_eq!(
+            try_spawn_member(&NetRole::Player, b'z', &mut combat, Some(b'p'), Some(b'b'),),
+            Err(SpawnReject::UnknownCharacter)
+        );
+        assert_eq!(
+            try_spawn_member(&NetRole::Player, b'a', &mut combat, Some(b'p'), Some(b'd'),),
+            Err(SpawnReject::IllegalLoadout)
+        );
+        assert_eq!(
+            try_spawn_member(&NetRole::Player, b'a', &mut combat, Some(b'p'), Some(b'b'),),
+            Ok(())
+        );
         assert!(combat.living && combat.has_entered);
-        assert!(!try_spawn_member(
-            &NetRole::Player,
-            b'a',
-            &mut combat,
-            Some(b'p'),
-            Some(b'b'),
-        ));
+        // A resend while already living is the stuck-on-bench case.
+        assert_eq!(
+            try_spawn_member(&NetRole::Player, b'a', &mut combat, Some(b'p'), Some(b'b'),),
+            Err(SpawnReject::AlreadyLiving)
+        );
         combat.living = false;
-        assert!(try_spawn_member(
-            &NetRole::Player,
-            b'a',
-            &mut combat,
-            None,
-            None,
-        ));
+        assert_eq!(
+            try_spawn_member(&NetRole::Player, b'a', &mut combat, None, None,),
+            Ok(())
+        );
     }
 }

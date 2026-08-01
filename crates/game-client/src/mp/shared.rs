@@ -24,6 +24,12 @@ pub struct PeerImpactHitBatch {
     pub hit: NetImpactHit,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct DeathAnnounceBatch {
+    pub victim: PlayerId,
+    pub killer: PlayerId,
+}
+
 #[derive(Debug, Clone)]
 pub struct LootGrantBatch {
     pub drop_id: u64,
@@ -62,6 +68,7 @@ pub(crate) struct Shared {
     pub(crate) roster: Vec<RosterEntry>,
     pub(crate) pending_projectiles: Vec<PeerProjectileBatch>,
     pub(crate) pending_hits: Vec<PeerImpactHitBatch>,
+    pub(crate) pending_deaths: Vec<DeathAnnounceBatch>,
     pub(crate) pending_corpse_spawns: Vec<NetCorpseSpawn>,
     pub(crate) pending_corpse_ends: Vec<u64>,
     pub(crate) pending_drop_spawns: Vec<NetAmmoDropSpawn>,
@@ -104,6 +111,7 @@ impl Shared {
             roster: Vec::new(),
             pending_projectiles: Vec::new(),
             pending_hits: Vec::new(),
+            pending_deaths: Vec::new(),
             pending_corpse_spawns: Vec::new(),
             pending_corpse_ends: Vec::new(),
             pending_drop_spawns: Vec::new(),
@@ -147,6 +155,7 @@ impl Shared {
         self.roster.clear();
         self.pending_projectiles.clear();
         self.pending_hits.clear();
+        self.pending_deaths.clear();
         self.pending_corpse_spawns.clear();
         self.pending_corpse_ends.clear();
         self.pending_drop_spawns.clear();

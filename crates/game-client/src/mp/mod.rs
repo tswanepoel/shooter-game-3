@@ -19,7 +19,8 @@ pub use drive::drive_to_state;
 pub use phase::{CamIntent, MpPhase, StagedLoadout};
 pub use remotes::{RemoteKitKey, RemoteTable};
 pub use shared::{
-    BlasterGrantBatch, FrameEffects, LootGrantBatch, PeerImpactHitBatch, PeerProjectileBatch,
+    BlasterGrantBatch, DeathAnnounceBatch, FrameEffects, LootGrantBatch, PeerImpactHitBatch,
+    PeerProjectileBatch,
 };
 // Named type for `FrameEffects::pending_spawn` (phase module is private).
 #[allow(unused_imports)]
@@ -187,6 +188,10 @@ impl MpClient {
 
     pub fn take_peer_hits(&mut self) -> Vec<PeerImpactHitBatch> {
         std::mem::take(&mut self.shared.borrow_mut().pending_hits)
+    }
+
+    pub fn take_death_announces(&mut self) -> Vec<DeathAnnounceBatch> {
+        std::mem::take(&mut self.shared.borrow_mut().pending_deaths)
     }
 
     pub fn take_corpse_spawns(&mut self) -> Vec<NetCorpseSpawn> {

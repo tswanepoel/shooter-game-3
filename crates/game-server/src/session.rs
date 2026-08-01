@@ -3,8 +3,9 @@
 use std::sync::Arc;
 
 use game_net::{
-    decode_c2s, display_name_key, encode_s2c, encode_s2c_frame, normalize_display_name,
-    ClientToServer, NetRole, PlayerId, ServerToClient, DEFAULT_CHARACTER, PROTOCOL_VERSION,
+    decode_c2s, display_name_key, drain_c2s_frames, encode_s2c, encode_s2c_frame,
+    normalize_display_name, take_c2s_frame, ClientToServer, NetRole, PlayerId, ServerToClient,
+    DEFAULT_CHARACTER, PROTOCOL_VERSION,
 };
 use tokio::sync::{mpsc, Mutex};
 use tracing::{info, warn};
@@ -61,13 +62,15 @@ struct HelloOk {
     display_name: String,
     send: wtransport::SendStream,
     recv: wtransport::RecvStream,
+    /// Bytes the client coalesced behind Hello; belongs to the control reader.
+    carry: Vec<u8>,
 }
 
 async fn write_reject(
     send: &mut wtransport::SendStream,
     reason: impl Into<String>,
 ) -> Result<(), SessionError> {
-    let rej = encode_s2c(&ServerToClient::Reject {
+    let rej = encode_s2c_frame(&ServerToClient::Reject {
         reason: reason.into(),
     })?;
     send.write_all(&rej).await?;
@@ -80,18 +83,25 @@ async fn accept_hello(
     mut recv: wtransport::RecvStream,
     rooms: &Mutex<Rooms>,
 ) -> Result<Option<HelloOk>, SessionError> {
-    let mut buf = vec![0u8; 4096];
-    let n = recv
-        .read(&mut buf)
-        .await?
-        .ok_or("client closed stream before Hello")?;
+    let mut carry = Vec::new();
+    let mut chunk = vec![0u8; 4096];
+    let first = loop {
+        if let Some(msg) = take_c2s_frame(&mut carry)? {
+            break msg;
+        }
+        let n = recv
+            .read(&mut chunk)
+            .await?
+            .ok_or("client closed stream before Hello")?;
+        carry.extend_from_slice(&chunk[..n]);
+    };
 
-    let (protocol, room_code_raw, display_name_raw) = match decode_c2s(&buf[..n]) {
-        Ok(ClientToServer::Hello {
+    let (protocol, room_code_raw, display_name_raw) = match first {
+        ClientToServer::Hello {
             protocol,
             room_code,
             display_name,
-        }) => (protocol, room_code, display_name),
+        } => (protocol, room_code, display_name),
         _ => {
             write_reject(&mut send, "expected Hello").await?;
             return Ok(None);
@@ -138,6 +148,7 @@ async fn accept_hello(
         display_name,
         send,
         recv,
+        carry,
     }))
 }
 
@@ -159,9 +170,10 @@ async fn admit_member(
         display_name,
         mut send,
         mut recv,
+        mut carry,
     } = hello;
 
-    let welcome = encode_s2c(&ServerToClient::Welcome {
+    let welcome = encode_s2c_frame(&ServerToClient::Welcome {
         protocol: PROTOCOL_VERSION,
         player_id,
         tick: clock.tick(),
@@ -181,12 +193,21 @@ async fn admit_member(
 
     let (control_tx, control_rx) = mpsc::unbounded_channel::<ClientToServer>();
     tokio::spawn(async move {
-        let mut buf = vec![0u8; 4096];
-        while let Ok(Some(n)) = recv.read(&mut buf).await {
-            if let Ok(msg) = decode_c2s(&buf[..n]) {
-                if control_tx.send(msg).is_err() {
+        let mut chunk = vec![0u8; 4096];
+        loop {
+            let msgs = match drain_c2s_frames(&mut carry) {
+                Ok(msgs) => msgs,
+                Err(e) => {
+                    warn!(player_id, "control stream: {e}");
                     break;
                 }
+            };
+            if msgs.into_iter().any(|msg| control_tx.send(msg).is_err()) {
+                break;
+            }
+            match recv.read(&mut chunk).await {
+                Ok(Some(n)) => carry.extend_from_slice(&chunk[..n]),
+                _ => break,
             }
         }
     });
@@ -364,24 +385,49 @@ async fn handle_datagram(
         }
         ClientToServer::ImpactHit { tick, hit } => {
             let victim = hit.target;
-            let roster_dirty = {
+            let outcome = {
                 let mut guard = rooms.lock().await;
                 guard.apply_impact(player_id, &hit)
             };
-            let Ok(relay) = encode_s2c(&ServerToClient::PeerImpactHit {
-                tick,
-                id: player_id,
-                hit,
-            }) else {
-                return false;
-            };
-            {
-                let mut guard = rooms.lock().await;
-                guard.relay_datagram(player_id, &relay);
-                if roster_dirty {
+            match outcome {
+                Err(reason) => {
+                    warn!(
+                        firer = player_id,
+                        victim,
+                        part = hit.part,
+                        ammo = hit.ammo,
+                        speed = hit.speed,
+                        "impact claim rejected: {reason}"
+                    );
+                    // 080: never relay rejects — peers must not present unaccepted damage.
+                }
+                Ok(false) => {
+                    let Ok(relay) = encode_s2c(&ServerToClient::PeerImpactHit {
+                        tick,
+                        id: player_id,
+                        hit,
+                    }) else {
+                        return false;
+                    };
+                    let guard = rooms.lock().await;
+                    guard.relay_datagram(player_id, &relay);
+                }
+                Ok(true) => {
+                    info!(firer = player_id, victim, "kill accepted");
                     let t = clock.tick();
-                    guard.spawn_corpse_for_kill(victim, t);
-                    guard.broadcast_roster(player_id, t);
+                    let Ok(death) = encode_s2c_frame(&ServerToClient::DeathAnnounce {
+                        tick: t,
+                        victim,
+                        killer: player_id,
+                    }) else {
+                        return false;
+                    };
+                    {
+                        let mut guard = rooms.lock().await;
+                        guard.broadcast_reliable_all(player_id, &death);
+                        guard.spawn_corpse_for_kill(victim, t);
+                        guard.broadcast_roster(player_id, t);
+                    }
                 }
             }
             false
@@ -476,13 +522,17 @@ async fn handle_spawn(
 ) {
     let tick = clock.tick();
     let (position, facing) = spawn_pose(tick, player_id);
-    let ok = {
+    let granted = {
         let mut guard = rooms.lock().await;
         guard.try_spawn(player_id, primary, secondary)
     };
-    if !ok {
+    if let Err(reason) = granted {
+        // The client resends Spawn until YouSpawned arrives, so a repeating
+        // reject here is a client stuck on the bench.
+        warn!(player_id, "spawn rejected: {reason}");
         return;
     }
+    info!(player_id, tick, "spawn granted");
     let Ok(you) = encode_s2c_frame(&ServerToClient::YouSpawned {
         tick,
         position,

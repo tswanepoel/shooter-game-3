@@ -7,7 +7,10 @@ pub const TICK_HZ: u32 = 180;
 pub const TICK_DURATION_SECS: f64 = 1.0 / TICK_HZ as f64;
 
 /// Alpha wire; bumped when variants change (no distributed compat promise).
-pub const PROTOCOL_VERSION: u16 = 16;
+pub const PROTOCOL_VERSION: u16 = 18;
+
+/// Largest accepted body of a length-prefixed reliable-stream frame.
+pub const MAX_FRAME_BYTES: usize = 64 * 1024;
 
 /// Max display-name length after trim (051).
 pub const DISPLAY_NAME_MAX_CHARS: usize = 24;
@@ -286,11 +289,18 @@ pub enum ServerToClient {
         id: PlayerId,
         projectiles: Vec<NetProjectileSpawn>,
     },
-    /// Relayed peer impact hit (043). `id` is the firer.
+    /// Relayed peer impact hit (043 / 080). `id` is the firer.
+    /// Accepted claims only; never the sole death authority (080).
     PeerImpactHit {
         tick: u64,
         id: PlayerId,
         hit: NetImpactHit,
+    },
+    /// Server-owned death (080). Reliable stream. Sole death authority for clients.
+    DeathAnnounce {
+        tick: u64,
+        victim: PlayerId,
+        killer: PlayerId,
     },
     /// Room corpse present after accepted death (059).
     CorpseSpawn {
@@ -369,32 +379,94 @@ pub fn decode_s2c(buf: &[u8]) -> Result<ServerToClient, postcard::Error> {
     postcard::from_bytes(buf)
 }
 
-/// `u32` LE length + postcard body (reliable stream after Welcome).
-pub fn encode_s2c_frame(msg: &ServerToClient) -> Result<Vec<u8>, postcard::Error> {
-    let body = encode_s2c(msg)?;
+/// A peer announced a frame longer than [`MAX_FRAME_BYTES`]. The stream is
+/// desynced past this point, so the caller must drop the connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FrameTooLarge(pub usize);
+
+impl std::fmt::Display for FrameTooLarge {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "frame of {} bytes exceeds {MAX_FRAME_BYTES}", self.0)
+    }
+}
+
+impl std::error::Error for FrameTooLarge {}
+
+fn encode_frame(body: Vec<u8>) -> Vec<u8> {
     let mut out = Vec::with_capacity(4 + body.len());
     out.extend_from_slice(&(body.len() as u32).to_le_bytes());
     out.extend_from_slice(&body);
+    out
+}
+
+/// QUIC streams carry bytes, not messages: one `read` may return several frames
+/// or half of one. Pop the first complete frame and leave the tail in `buf`.
+///
+/// A frame whose body fails to decode is skipped rather than fatal — the length
+/// prefix lets us resync on the next frame.
+fn take_frame<T>(
+    buf: &mut Vec<u8>,
+    decode: fn(&[u8]) -> Result<T, postcard::Error>,
+) -> Result<Option<T>, FrameTooLarge> {
+    loop {
+        if buf.len() < 4 {
+            return Ok(None);
+        }
+        let len = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
+        if len > MAX_FRAME_BYTES {
+            return Err(FrameTooLarge(len));
+        }
+        if buf.len() < 4 + len {
+            return Ok(None);
+        }
+        let body: Vec<u8> = buf.drain(..4 + len).skip(4).collect();
+        if let Ok(msg) = decode(&body) {
+            return Ok(Some(msg));
+        }
+    }
+}
+
+fn drain_frames<T>(
+    buf: &mut Vec<u8>,
+    decode: fn(&[u8]) -> Result<T, postcard::Error>,
+) -> Result<Vec<T>, FrameTooLarge> {
+    let mut out = Vec::new();
+    while let Some(msg) = take_frame(buf, decode)? {
+        out.push(msg);
+    }
     Ok(out)
 }
 
-/// Decode complete frames; leaves a partial tail in `buf`.
-pub fn drain_s2c_frames(buf: &mut Vec<u8>) -> Vec<ServerToClient> {
-    let mut out = Vec::new();
-    loop {
-        if buf.len() < 4 {
-            break;
-        }
-        let len = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
-        if buf.len() < 4 + len {
-            break;
-        }
-        let body: Vec<u8> = buf.drain(..4 + len).skip(4).collect();
-        if let Ok(msg) = decode_s2c(&body) {
-            out.push(msg);
-        }
-    }
-    out
+/// `u32` LE length + postcard body (reliable stream, including the handshake).
+pub fn encode_c2s_frame(msg: &ClientToServer) -> Result<Vec<u8>, postcard::Error> {
+    Ok(encode_frame(encode_c2s(msg)?))
+}
+
+/// See [`drain_frames`].
+pub fn drain_c2s_frames(buf: &mut Vec<u8>) -> Result<Vec<ClientToServer>, FrameTooLarge> {
+    drain_frames(buf, decode_c2s)
+}
+
+/// Pop one frame, for the handshake, where the bytes behind it belong to the
+/// reader that takes over afterwards. See [`take_frame`].
+pub fn take_c2s_frame(buf: &mut Vec<u8>) -> Result<Option<ClientToServer>, FrameTooLarge> {
+    take_frame(buf, decode_c2s)
+}
+
+/// `u32` LE length + postcard body (reliable stream, including the handshake).
+pub fn encode_s2c_frame(msg: &ServerToClient) -> Result<Vec<u8>, postcard::Error> {
+    Ok(encode_frame(encode_s2c(msg)?))
+}
+
+/// See [`drain_frames`].
+pub fn drain_s2c_frames(buf: &mut Vec<u8>) -> Result<Vec<ServerToClient>, FrameTooLarge> {
+    drain_frames(buf, decode_s2c)
+}
+
+/// Pop one frame, for the handshake, where the bytes behind it belong to the
+/// reader that takes over afterwards. See [`take_frame`].
+pub fn take_s2c_frame(buf: &mut Vec<u8>) -> Result<Option<ServerToClient>, FrameTooLarge> {
+    take_frame(buf, decode_s2c)
 }
 
 /// `server ≈ local + offset` → floor to tick.
@@ -616,6 +688,17 @@ mod tests {
         };
         let b = encode_s2c(&s2c).unwrap();
         assert_eq!(decode_s2c(&b).unwrap(), s2c);
+
+        let death = ServerToClient::DeathAnnounce {
+            tick: 16,
+            victim: 2,
+            killer: 1,
+        };
+        let b = encode_s2c(&death).unwrap();
+        assert_eq!(decode_s2c(&b).unwrap(), death);
+        let framed = encode_s2c_frame(&death).unwrap();
+        let mut buf = framed;
+        assert_eq!(drain_s2c_frames(&mut buf).unwrap(), vec![death]);
     }
 
     #[test]
@@ -777,8 +860,89 @@ mod tests {
         buf.extend(encode_s2c_frame(&b).unwrap());
         // partial tail
         buf.extend_from_slice(&[3, 0, 0, 0, 9]);
-        let msgs = drain_s2c_frames(&mut buf);
+        let msgs = drain_s2c_frames(&mut buf).unwrap();
         assert_eq!(msgs, vec![a, b]);
         assert_eq!(buf, vec![3, 0, 0, 0, 9]);
+    }
+
+    /// Bare postcard silently keeps the first message and discards the rest, so
+    /// coalesced control writes used to vanish without an error.
+    #[test]
+    fn unframed_c2s_pair_loses_the_tail() {
+        let a = ClientToServer::SetCharacter { character: b'c' };
+        let mut buf = encode_c2s(&a).unwrap();
+        buf.extend(encode_c2s(&ClientToServer::StartMatch).unwrap());
+        assert_eq!(decode_c2s(&buf).unwrap(), a);
+    }
+
+    #[test]
+    fn framed_c2s_survives_coalesced_writes() {
+        let msgs = [
+            ClientToServer::SetRole {
+                role: NetRole::Spectator,
+            },
+            ClientToServer::SetCharacter { character: b'c' },
+            ClientToServer::PickMap { map: DEFAULT_MAP },
+            ClientToServer::StartMatch,
+        ];
+        let mut buf = Vec::new();
+        for m in &msgs {
+            buf.extend(encode_c2s_frame(m).unwrap());
+        }
+        assert_eq!(drain_c2s_frames(&mut buf).unwrap(), msgs);
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn framed_c2s_survives_a_write_split_across_reads() {
+        let spawn = ClientToServer::Spawn {
+            primary: Some(b'p'),
+            secondary: Some(b'b'),
+            active: NetActiveWeapon::Primary,
+        };
+        let wire = encode_c2s_frame(&spawn).unwrap();
+        // Every split point must recover the message once both halves arrive.
+        for cut in 0..wire.len() {
+            let mut buf = wire[..cut].to_vec();
+            assert!(drain_c2s_frames(&mut buf).unwrap().is_empty());
+            buf.extend_from_slice(&wire[cut..]);
+            assert_eq!(drain_c2s_frames(&mut buf).unwrap(), vec![spawn.clone()]);
+            assert!(buf.is_empty());
+        }
+    }
+
+    #[test]
+    fn oversized_frame_is_rejected() {
+        let len = MAX_FRAME_BYTES + 1;
+        let mut buf = (len as u32).to_le_bytes().to_vec();
+        buf.extend_from_slice(&[0u8; 8]);
+        assert_eq!(drain_c2s_frames(&mut buf), Err(FrameTooLarge(len)));
+        assert_eq!(drain_s2c_frames(&mut buf), Err(FrameTooLarge(len)));
+    }
+
+    /// Whatever the peer coalesced behind the handshake must be left for the
+    /// reader that takes over, not eaten with it.
+    #[test]
+    fn take_frame_leaves_the_rest_for_the_next_reader() {
+        let hello = ClientToServer::Hello {
+            protocol: PROTOCOL_VERSION,
+            room_code: "dev".into(),
+            display_name: "Ace".into(),
+        };
+        let follow = ClientToServer::SetCharacter { character: b'c' };
+        let mut buf = encode_c2s_frame(&hello).unwrap();
+        buf.extend(encode_c2s_frame(&follow).unwrap());
+
+        assert_eq!(take_c2s_frame(&mut buf).unwrap(), Some(hello));
+        assert_eq!(drain_c2s_frames(&mut buf).unwrap(), vec![follow]);
+    }
+
+    /// An undecodable body must not desync the stream: the next frame still lands.
+    #[test]
+    fn undecodable_frame_is_skipped() {
+        let mut buf = encode_frame(vec![0xff, 0xff, 0xff]);
+        let good = ClientToServer::StartMatch;
+        buf.extend(encode_c2s_frame(&good).unwrap());
+        assert_eq!(drain_c2s_frames(&mut buf).unwrap(), vec![good]);
     }
 }
