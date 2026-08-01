@@ -1,4 +1,4 @@
-//! Cooked map load and draw (064 shipment container, 066 solids, 070/072/073 foot patches, 082 ground, 083 gravel, 084 cement, 085 grass, 086 container albedo, 087 closed door hardware, 088 lit map solids).
+//! Cooked map load and draw (064 shipment container, 066 solids, 070/072/073 foot patches, 082 ground, 083 gravel, 084 cement, 085 grass, 086 container albedo, 087 closed door hardware, 088 lit map solids, 089 morning light).
 
 #[cfg(target_arch = "wasm32")]
 use glam::Mat4;
@@ -8,12 +8,29 @@ use serde::Deserialize;
 use wasm_bindgen::JsValue;
 
 #[cfg(target_arch = "wasm32")]
-use crate::mesh::{self, SolidUvLayout, UnlitMeshGpu, UnlitMeshLayout};
+use crate::mesh::{self, LightPlate, SolidUvLayout, UnlitMeshGpu, UnlitMeshLayout};
 #[cfg(target_arch = "wasm32")]
 use crate::pack;
 use game_sim::{MapBox, MapRamp, MapWorld};
 
 pub const MAP_A_PACK: &str = "maps-a";
+
+/// Map **a** morning key + ambient (**089**). Peak ≈ 0.76 — headroom for later locals.
+#[cfg(target_arch = "wasm32")]
+pub const MAP_A_MORNING_LIGHT: LightPlate = LightPlate {
+    light_dir: Vec3::new(0.82, 0.22, 0.38),
+    key_color: [0.40, 0.37, 0.32],
+    ambient: [0.36, 0.39, 0.45],
+};
+
+/// Flat morning sky stand-in while map **a** is drawn (**089**).
+#[cfg(target_arch = "wasm32")]
+pub const MAP_A_CLEAR_COLOR: wgpu::Color = wgpu::Color {
+    r: 0.30,
+    g: 0.38,
+    b: 0.48,
+    a: 1.0,
+};
 
 /// Flat fallback when container albedos fail (086).
 const CONTAINER_FALLBACK_COLOR: [f32; 4] = [0.55, 0.62, 0.72, 1.0];
@@ -589,8 +606,8 @@ impl MapGpu {
         ))
     }
 
-    pub fn write_view_proj(&self, queue: &wgpu::Queue, view_proj: Mat4) {
-        self.mesh.write_view_proj(queue, view_proj);
+    pub fn write_view_proj(&self, queue: &wgpu::Queue, view_proj: Mat4, light: LightPlate) {
+        self.mesh.write_view_proj(queue, view_proj, light);
     }
 
     pub fn draw<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {

@@ -4,7 +4,8 @@ use wasm_bindgen::prelude::*;
 
 #[cfg(feature = "debug-tools")]
 use crate::lineup::LineupState;
-use crate::map_present::MapPresentState;
+use crate::map_present::{MapPresentState, MAP_A_CLEAR_COLOR, MAP_A_MORNING_LIGHT};
+use crate::mesh::DEFAULT_LIGHT_PLATE;
 use crate::mp::{self, CamIntent};
 use crate::self_present::SelfPresentState;
 use crate::ui_overlay::{DebugDraw, FloatingNameLabel, OverlayGpu, ProductSession};
@@ -86,20 +87,39 @@ impl ClientInner {
             &self.projectiles.projectiles,
         );
 
+        let map_ref = match &self.map_present {
+            MapPresentState::Ready(gpu) if self.mp.match_started() => Some(gpu),
+            _ => None,
+        };
+        // 089: map a owns the morning plate for match lit draws; lineup keeps 018 defaults.
+        let match_light = if map_ref.is_some() {
+            MAP_A_MORNING_LIGHT
+        } else {
+            DEFAULT_LIGHT_PLATE
+        };
+        let clear_color = if map_ref.is_some() {
+            MAP_A_CLEAR_COLOR
+        } else {
+            crate::renderer::DEFAULT_CLEAR_COLOR
+        };
+
         if draw_local_self {
             if let SelfPresentState::Ready(gpu) = &self.self_present {
-                gpu.write_view_proj(&self.renderer.queue, view_proj);
+                gpu.write_view_proj(&self.renderer.queue, view_proj, match_light);
             }
         }
         if self.mp.in_room() {
             self.remote_present
-                .write_view_proj_all(&self.renderer.queue, view_proj);
+                .write_view_proj_all(&self.renderer.queue, view_proj, match_light);
             self.corpse_present
-                .write_view_proj_all(&self.renderer.queue, view_proj);
+                .write_view_proj_all(&self.renderer.queue, view_proj, match_light);
         }
         if !self.world_loot.blaster_drops.is_empty() {
-            self.blaster_drop_present
-                .write_view_proj_all(&self.renderer.queue, view_proj);
+            self.blaster_drop_present.write_view_proj_all(
+                &self.renderer.queue,
+                view_proj,
+                match_light,
+            );
         }
         let self_ref = if draw_local_self {
             match &self.self_present {
@@ -124,12 +144,8 @@ impl ClientInner {
         } else {
             Some(&self.blaster_drop_present)
         };
-        let map_ref = match &self.map_present {
-            MapPresentState::Ready(gpu) if self.mp.match_started() => Some(gpu),
-            _ => None,
-        };
         if let Some(gpu) = map_ref {
-            gpu.write_view_proj(&self.renderer.queue, view_proj);
+            gpu.write_view_proj(&self.renderer.queue, view_proj, match_light);
         }
 
         #[cfg(feature = "debug-tools")]
@@ -164,7 +180,7 @@ impl ClientInner {
             let want_lineup = self.debug.draw_lineup();
             if want_lineup {
                 if let LineupState::Ready(gpu) = &self.lineup {
-                    gpu.write_view_proj(&self.renderer.queue, view_proj);
+                    gpu.write_view_proj(&self.renderer.queue, view_proj, DEFAULT_LIGHT_PLATE);
                 }
             }
             let lineup_ref = match &self.lineup {
@@ -172,6 +188,7 @@ impl ClientInner {
                 _ => None,
             };
             self.renderer.render_scene(
+                clear_color,
                 draw_grid,
                 map_ref,
                 self_ref,
@@ -186,6 +203,7 @@ impl ClientInner {
         };
         #[cfg(not(feature = "debug-tools"))]
         let frame = self.renderer.render_scene(
+            clear_color,
             draw_grid,
             map_ref,
             self_ref,

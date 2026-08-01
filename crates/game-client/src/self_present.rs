@@ -6,7 +6,9 @@ use glam::{Mat4, Vec3};
 use wasm_bindgen::JsValue;
 
 use crate::body_hit::{self, PartHit};
-use crate::mesh::{self, AnimClip, CharPart, MeshVertex, UnlitMeshGpu, UnlitMeshLayout};
+use crate::mesh::{
+    self, AnimClip, CharPart, LightPlate, MeshVertex, UnlitMeshGpu, UnlitMeshLayout,
+};
 
 pub struct MountedView {
     pub look_origin: Vec3,
@@ -368,8 +370,8 @@ impl SelfGpu {
             .all(|letter| self.has_blaster_letter(letter))
     }
 
-    pub fn write_view_proj(&self, queue: &wgpu::Queue, view_proj: Mat4) {
-        self.mesh.write_view_proj(queue, view_proj);
+    pub fn write_view_proj(&self, queue: &wgpu::Queue, view_proj: Mat4, light: LightPlate) {
+        self.mesh.write_view_proj(queue, view_proj, light);
     }
 
     pub fn draw<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {

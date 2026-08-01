@@ -1,7 +1,8 @@
 //! Kit meshes: load, hold pose, held-weapon attach, GPU upload.
 //!
 //! Characters, blasters, and map solids use lit matte shading: albedo × (ambient + key × N·L).
-//! Debug batches (markers) stay unlit via a material flag.
+//! Debug batches (markers) stay unlit via a material flag. Light plates (**018** default,
+//! map **a** morning **089**) bind per frame write.
 //!
 //! Held attach:
 //! `held_blaster = kit_to_world · arm_right · H · inv(G) · S_blaster`
@@ -27,6 +28,7 @@ pub use primitives::{
     box_face_group_prim, box_prim, cylinder_y_prim, merge_transformed_prims, ramp_prim,
     transform_vertex, BoxFaceGroup, CpuPrim, MeshVertex,
 };
+pub use shader::{LightPlate, DEFAULT_LIGHT_PLATE};
 #[cfg(feature = "debug-tools")]
 pub use upload::upload_held_pair;
 pub use upload::{

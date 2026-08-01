@@ -18,7 +18,7 @@ use game_sim::{
     CAMERA_FAR_M, CAMERA_NEAR_M, CAMERA_VERTICAL_FOV_RAD, DEBUG_GRID_HALF_EXTENT_M,
     GRID_MAJOR_EVERY, GRID_MINOR_SPACING_M,
 };
-const CLEAR_COLOR: wgpu::Color = wgpu::Color {
+pub(crate) const DEFAULT_CLEAR_COLOR: wgpu::Color = wgpu::Color {
     r: 0.05,
     g: 0.06,
     b: 0.08,
@@ -318,6 +318,7 @@ impl Renderer {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn render_scene(
         &mut self,
+        clear_color: wgpu::Color,
         draw_grid: bool,
         map: Option<&crate::map_present::MapGpu>,
         self_body: Option<&SelfGpu>,
@@ -350,7 +351,7 @@ impl Renderer {
                     view: &self.msaa_color_view,
                     resolve_target: Some(&resolve_view),
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(CLEAR_COLOR),
+                        load: wgpu::LoadOp::Clear(clear_color),
                         store: wgpu::StoreOp::Discard,
                     },
                 })],

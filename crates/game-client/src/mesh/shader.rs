@@ -1,11 +1,22 @@
 use glam::Vec3;
 
-/// Direction **toward** the key light (world space). Slightly elevated front-right.
-pub(crate) const KEY_LIGHT_DIR: Vec3 = Vec3::new(0.45, 0.82, 0.35);
-/// Key contribution at N·L = 1 (display-referred multiply).
-pub(crate) const KEY_COLOR: [f32; 3] = [0.70, 0.70, 0.68];
-/// Ambient fill so unlit sides stay readable (moderately darker than full-bright).
-pub(crate) const AMBIENT_COLOR: [f32; 3] = [0.42, 0.42, 0.44];
+/// Key + ambient plate for the lit matte path (**018**).
+#[derive(Clone, Copy, Debug)]
+pub struct LightPlate {
+    /// Direction **toward** the key light (world space); normalized on write.
+    pub light_dir: Vec3,
+    /// Key contribution at N·L wrap = 1 (display-referred multiply).
+    pub key_color: [f32; 3],
+    /// Ambient fill so unlit sides stay readable.
+    pub ambient: [f32; 3],
+}
+
+/// Default plate for lineup / non-map present (**018**).
+pub const DEFAULT_LIGHT_PLATE: LightPlate = LightPlate {
+    light_dir: Vec3::new(0.45, 0.82, 0.35),
+    key_color: [0.70, 0.70, 0.68],
+    ambient: [0.42, 0.42, 0.44],
+};
 
 pub(crate) const KIT_SHADER: &str = r#"
 struct FrameUniforms {

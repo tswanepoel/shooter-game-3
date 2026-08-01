@@ -1,7 +1,7 @@
 use glam::Mat4;
 
 use super::primitives::MeshVertex;
-use super::shader::{FrameUniforms, AMBIENT_COLOR, KEY_COLOR, KEY_LIGHT_DIR, KIT_SHADER};
+use super::shader::{FrameUniforms, LightPlate, KIT_SHADER};
 
 pub(crate) struct GpuPrimitive {
     pub vertex_buffer: wgpu::Buffer,
@@ -213,15 +213,15 @@ impl UnlitMeshLayout {
 }
 
 impl UnlitMeshGpu {
-    pub fn write_view_proj(&self, queue: &wgpu::Queue, view_proj: Mat4) {
-        let dir = KEY_LIGHT_DIR.normalize_or_zero();
+    pub fn write_view_proj(&self, queue: &wgpu::Queue, view_proj: Mat4, light: LightPlate) {
+        let dir = light.light_dir.normalize_or_zero();
         let uniforms = FrameUniforms {
             view_proj: view_proj.to_cols_array_2d(),
             light_dir: dir.to_array(),
             _pad0: 0.0,
-            key_color: KEY_COLOR,
+            key_color: light.key_color,
             _pad1: 0.0,
-            ambient: AMBIENT_COLOR,
+            ambient: light.ambient,
             _pad2: 0.0,
         };
         queue.write_buffer(&self.frame_uniform, 0, bytemuck::bytes_of(&uniforms));

@@ -6,6 +6,7 @@ use game_sim::{LocomotionMode, SelfState};
 use glam::Vec3;
 use wasm_bindgen::JsValue;
 
+use crate::mesh::LightPlate;
 use crate::self_present::SelfGpu;
 use crate::world_loot::WorldCorpse;
 
@@ -92,10 +93,15 @@ impl CorpsePresent {
         }
     }
 
-    pub fn write_view_proj_all(&self, queue: &wgpu::Queue, view_proj: glam::Mat4) {
+    pub fn write_view_proj_all(
+        &self,
+        queue: &wgpu::Queue,
+        view_proj: glam::Mat4,
+        light: LightPlate,
+    ) {
         for slot in self.slots.values() {
             if let Slot::Ready { gpu, .. } = slot {
-                gpu.write_view_proj(queue, view_proj);
+                gpu.write_view_proj(queue, view_proj, light);
             }
         }
     }

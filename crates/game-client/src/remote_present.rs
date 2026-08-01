@@ -8,6 +8,7 @@ use glam::Vec3;
 use wasm_bindgen::JsValue;
 
 use crate::body_hit::PartHit;
+use crate::mesh::LightPlate;
 use crate::mp::{drive_to_state, RemoteKitKey};
 use crate::self_present::SelfGpu;
 
@@ -110,10 +111,15 @@ impl RemotePresent {
         }
     }
 
-    pub fn write_view_proj_all(&self, queue: &wgpu::Queue, view_proj: glam::Mat4) {
+    pub fn write_view_proj_all(
+        &self,
+        queue: &wgpu::Queue,
+        view_proj: glam::Mat4,
+        light: LightPlate,
+    ) {
         for slot in self.slots.values() {
             if let Slot::Ready { gpu, .. } = slot {
-                gpu.write_view_proj(queue, view_proj);
+                gpu.write_view_proj(queue, view_proj, light);
             }
         }
     }

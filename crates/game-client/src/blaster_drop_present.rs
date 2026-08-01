@@ -6,7 +6,7 @@ use glam::{Mat4, Quat, Vec3};
 use std::f32::consts::FRAC_PI_2;
 use wasm_bindgen::JsValue;
 
-use crate::mesh::{self, UnlitMeshGpu, UnlitMeshLayout};
+use crate::mesh::{self, LightPlate, UnlitMeshGpu, UnlitMeshLayout};
 
 enum Slot {
     Loading { letter: u8 },
@@ -66,10 +66,10 @@ impl BlasterDropPresent {
         }
     }
 
-    pub fn write_view_proj_all(&self, queue: &wgpu::Queue, view_proj: Mat4) {
+    pub fn write_view_proj_all(&self, queue: &wgpu::Queue, view_proj: Mat4, light: LightPlate) {
         for slot in self.slots.values() {
             if let Slot::Ready { gpu, .. } = slot {
-                gpu.write_view_proj(queue, view_proj);
+                gpu.write_view_proj(queue, view_proj, light);
             }
         }
     }
