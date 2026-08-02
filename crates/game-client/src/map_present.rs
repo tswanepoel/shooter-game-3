@@ -1,4 +1,4 @@
-//! Cooked map load and draw (064 shipment container, 066 solids, 070/072/073 foot patches, 082 ground, 083 gravel, 084 cement, 085 grass, 086 container albedo, 087 closed door hardware, 088 lit map solids, 089 morning light, 090 rail corridor, 091 stationed train, 092 train collide, 093 parallel rail, 094 yard tractor).
+//! Cooked map load and draw (064 shipment container, 066 solids, 070/072/073 foot patches, 082 ground, 083 gravel, 084 cement, 085 grass, 086 container albedo, 087 closed door hardware, 088 lit map solids, 089 morning light, 090 rail corridor, 091 stationed train, 092 train collide, 093 parallel rail, 094 yard tractor, 095 open-door container shell).
 
 #[cfg(target_arch = "wasm32")]
 use glam::Mat4;
@@ -46,9 +46,171 @@ const CEMENT_METRES_PER_TILE: f32 = 1.5;
 const GRASS_METRES_PER_TILE: f32 = 1.5;
 /// Exactly two side-albedo tiles span the container height (087).
 const CONTAINER_SIDE_TILES_HIGH: f32 = 2.0;
+/// Shell skin thickness for open-door collide (095).
+const CONTAINER_SHELL_T: f32 = 0.08;
+/// Front mouth frame centre (same as hardware).
+const CONTAINER_FRONT_FRAME_Z: f32 = 0.035;
+const CONTAINER_FRONT_FRAME_HALF_Z: f32 = 0.04;
+/// Side post centre offset past container half-x, and post half-extent in X.
+const CONTAINER_FRONT_POST_X: f32 = 0.035;
+const CONTAINER_FRONT_POST_HALF_X: f32 = 0.04;
+const CONTAINER_FRONT_PIN_R: f32 = 0.025;
+/// Pin on frame inside-edge X (matches closed-end cylinders).
+const CONTAINER_FRONT_PIN_X_INSET: f32 = 0.010;
+/// Asymmetric open (outward). Left wide, right ajar.
+const CONTAINER_LEFT_DOOR_OPEN_RAD: f32 = 1.85; // ~106°
+const CONTAINER_RIGHT_DOOR_OPEN_RAD: f32 = 0.30; // ~17°
+/// Hinge door-strap half-thickness (095 bar).
+const CONTAINER_HINGE_STRAP_HZ: f32 = 0.006;
+/// Strap along door face: half-length, half-Y at pin, half-Y at tip (tapers away from pin).
+const CONTAINER_HINGE_STRAP_HALF_LEN: f32 = 0.105;
+const CONTAINER_HINGE_STRAP_HALF_Y_PIN: f32 = 0.055;
+const CONTAINER_HINGE_STRAP_HALF_Y_TIP: f32 = 0.035;
+/// Pin barrel half-height — matches strap width at the pin.
+const CONTAINER_HINGE_PIN_HALF_Y: f32 = CONTAINER_HINGE_STRAP_HALF_Y_PIN;
 const CONTAINER_FRAME_COLOR: [f32; 4] = [0.39, 0.17, 0.14, 1.0];
 const CONTAINER_GASKET_COLOR: [f32; 4] = [0.025, 0.028, 0.026, 1.0];
 const CONTAINER_HARDWARE_COLOR: [f32; 4] = [0.42, 0.44, 0.41, 1.0];
+
+/// Swivel pin XZ — rests on the Front frame outer face, on the inside edge.
+fn front_hinge_pin_xz(half: Vec3, side: f32) -> (f32, f32) {
+    let front_z = -half.z - CONTAINER_FRONT_FRAME_Z;
+    let frame_outer_z = front_z - CONTAINER_FRONT_FRAME_HALF_Z;
+    (
+        side * (half.x - CONTAINER_FRONT_PIN_X_INSET),
+        frame_outer_z - CONTAINER_FRONT_PIN_R,
+    )
+}
+
+#[derive(Clone, Copy)]
+struct FrontLeafPose {
+    center: Vec3,
+    yaw: f32,
+    half: Vec3,
+}
+
+/// Doors sized to the mouth frame clear; hinged about the pin (095).
+fn front_leaf_poses(half: Vec3) -> [FrontLeafPose; 2] {
+    let leaf_half = leaf_half_extents(half);
+    [
+        front_leaf_pose(half, leaf_half, -1.0, CONTAINER_LEFT_DOOR_OPEN_RAD),
+        front_leaf_pose(half, leaf_half, 1.0, CONTAINER_RIGHT_DOOR_OPEN_RAD),
+    ]
+}
+
+fn front_leaf_pose(half: Vec3, leaf_half: Vec3, side: f32, open_rad: f32) -> FrontLeafPose {
+    let (pin_x, pin_z) = front_hinge_pin_xz(half, side);
+    let pin = Vec3::new(pin_x, 0.0, pin_z);
+    let front_z = -half.z - CONTAINER_FRONT_FRAME_Z;
+    let frame_outer_z = front_z - CONTAINER_FRONT_FRAME_HALF_Z;
+    let door_center_x = side * leaf_half.x;
+    let closed_z = frame_outer_z + leaf_half.z;
+    let closed_offset = Vec3::new(door_center_x - pin_x, 0.0, closed_z - pin_z);
+    let yaw = -side * open_rad;
+    let (s, c) = yaw.sin_cos();
+    let rotated = Vec3::new(
+        c * closed_offset.x + s * closed_offset.z,
+        closed_offset.y,
+        -s * closed_offset.x + c * closed_offset.z,
+    );
+    FrontLeafPose {
+        center: pin + rotated,
+        yaw,
+        half: leaf_half,
+    }
+}
+
+fn frame_inner_half_x(half: Vec3) -> f32 {
+    half.x + CONTAINER_FRONT_POST_X - CONTAINER_FRONT_POST_HALF_X
+}
+
+fn leaf_half_extents(half: Vec3) -> Vec3 {
+    let leaf_hx = frame_inner_half_x(half) * 0.5;
+    let leaf_hy = half.y - 0.11;
+    Vec3::new(leaf_hx, leaf_hy, 0.02)
+}
+
+/// Closed rear leaves — outer face flush with the rear frame (095).
+fn rear_leaf_poses(half: Vec3) -> [FrontLeafPose; 2] {
+    let leaf_half = leaf_half_extents(half);
+    let rear_frame_outer_z = half.z + CONTAINER_FRONT_FRAME_Z + CONTAINER_FRONT_FRAME_HALF_Z;
+    let closed_z = rear_frame_outer_z - leaf_half.z;
+    [
+        FrontLeafPose {
+            center: Vec3::new(-leaf_half.x, 0.0, closed_z),
+            yaw: 0.0,
+            half: leaf_half,
+        },
+        FrontLeafPose {
+            center: Vec3::new(leaf_half.x, 0.0, closed_z),
+            yaw: 0.0,
+            half: leaf_half,
+        },
+    ]
+}
+
+/// Open-door shell volumes from the map-def outer AABB (095). Floor first.
+fn shipment_container_shell(center: Vec3, half: Vec3) -> Vec<MapBox> {
+    let t = CONTAINER_SHELL_T;
+    let mut out = Vec::with_capacity(11);
+    out.push(MapBox {
+        center: Vec3::new(center.x, center.y - half.y + t * 0.5, center.z),
+        half: Vec3::new(half.x, t * 0.5, half.z),
+        yaw: 0.0,
+    });
+    out.push(MapBox {
+        center: Vec3::new(center.x, center.y + half.y - t * 0.5, center.z),
+        half: Vec3::new(half.x, t * 0.5, half.z),
+        yaw: 0.0,
+    });
+    out.push(MapBox {
+        center: Vec3::new(center.x - half.x + t * 0.5, center.y, center.z),
+        half: Vec3::new(t * 0.5, half.y, half.z),
+        yaw: 0.0,
+    });
+    out.push(MapBox {
+        center: Vec3::new(center.x + half.x - t * 0.5, center.y, center.z),
+        half: Vec3::new(t * 0.5, half.y, half.z),
+        yaw: 0.0,
+    });
+    // Closed rear (+Z).
+    out.push(MapBox {
+        center: Vec3::new(center.x, center.y, center.z + half.z - t * 0.5),
+        half: Vec3::new(half.x, half.y, t * 0.5),
+        yaw: 0.0,
+    });
+    let jamb = t * 0.5;
+    let mouth_z = center.z - half.z + t * 0.5;
+    // Front jambs / header / sill (−Z mouth).
+    out.push(MapBox {
+        center: Vec3::new(center.x - half.x + t + jamb, center.y, mouth_z),
+        half: Vec3::new(jamb, half.y - t, t * 0.5),
+        yaw: 0.0,
+    });
+    out.push(MapBox {
+        center: Vec3::new(center.x + half.x - t - jamb, center.y, mouth_z),
+        half: Vec3::new(jamb, half.y - t, t * 0.5),
+        yaw: 0.0,
+    });
+    out.push(MapBox {
+        center: Vec3::new(center.x, center.y + half.y - t * 0.5, mouth_z),
+        half: Vec3::new(half.x - t, t * 0.5, t * 0.5),
+        yaw: 0.0,
+    });
+    out.push(MapBox {
+        center: Vec3::new(center.x, center.y - half.y + t * 0.5, mouth_z),
+        half: Vec3::new(half.x - t, t * 0.5, t * 0.5),
+        yaw: 0.0,
+    });
+    for leaf in front_leaf_poses(half) {
+        out.push(MapBox {
+            center: center + leaf.center,
+            half: leaf.half,
+            yaw: leaf.yaw,
+        });
+    }
+    out
+}
 
 #[cfg(target_arch = "wasm32")]
 fn container_door_hardware(half: Vec3) -> Vec<(mesh::CpuPrim, [f32; 4], &'static str)> {
@@ -83,140 +245,204 @@ fn container_door_hardware(half: Vec3) -> Vec<(mesh::CpuPrim, [f32; 4], &'static
         }
     }
 
-    for z_sign in [1.0_f32, -1.0] {
-        let face_z = z_sign * half.z;
-        let out = |d: f32| face_z + z_sign * d;
+    // Closed rear (+Z) only — Front (−Z) is the open mouth (095).
+    let z_sign = 1.0_f32;
+    let face_z = z_sign * half.z;
+    let out = |d: f32| face_z + z_sign * d;
 
-        let frame_z = out(0.035);
-        frame.push(cuboid(
-            Vec3::new(0.0, half.y - 0.055, frame_z),
-            Vec3::new(half.x + 0.075, 0.055, 0.04),
-            CONTAINER_FRAME_COLOR,
-        ));
-        frame.push(cuboid(
-            Vec3::new(0.0, -half.y + 0.055, frame_z),
-            Vec3::new(half.x + 0.075, 0.055, 0.04),
-            CONTAINER_FRAME_COLOR,
-        ));
-        frame.push(cuboid(
-            Vec3::new(-half.x - 0.035, 0.0, frame_z),
-            Vec3::new(0.04, half.y - 0.11, 0.04),
-            CONTAINER_FRAME_COLOR,
-        ));
-        frame.push(cuboid(
-            Vec3::new(half.x + 0.035, 0.0, frame_z),
-            Vec3::new(0.04, half.y - 0.11, 0.04),
-            CONTAINER_FRAME_COLOR,
-        ));
-        frame.push(cuboid(
-            Vec3::new(0.0, 0.0, out(0.155)),
-            Vec3::new(0.115, 0.08, 0.03),
-            CONTAINER_FRAME_COLOR,
-        ));
+    let frame_z = out(0.035);
+    frame.push(cuboid(
+        Vec3::new(0.0, half.y - 0.055, frame_z),
+        Vec3::new(half.x + 0.075, 0.055, 0.04),
+        CONTAINER_FRAME_COLOR,
+    ));
+    frame.push(cuboid(
+        Vec3::new(0.0, -half.y + 0.055, frame_z),
+        Vec3::new(half.x + 0.075, 0.055, 0.04),
+        CONTAINER_FRAME_COLOR,
+    ));
+    frame.push(cuboid(
+        Vec3::new(-half.x - 0.035, 0.0, frame_z),
+        Vec3::new(0.04, half.y - 0.11, 0.04),
+        CONTAINER_FRAME_COLOR,
+    ));
+    frame.push(cuboid(
+        Vec3::new(half.x + 0.035, 0.0, frame_z),
+        Vec3::new(0.04, half.y - 0.11, 0.04),
+        CONTAINER_FRAME_COLOR,
+    ));
+    frame.push(cuboid(
+        Vec3::new(0.0, 0.0, out(0.155)),
+        Vec3::new(0.115, 0.08, 0.03),
+        CONTAINER_FRAME_COLOR,
+    ));
 
-        let gasket_z = out(0.082);
-        let gasket_half_thickness = 0.018;
-        let gasket_edge_x = half.x - 0.035;
-        let gasket_edge_y = half.y - 0.115;
-        gasket.push(cuboid(
-            Vec3::new(0.0, gasket_edge_y, gasket_z),
-            Vec3::new(
-                gasket_edge_x + gasket_half_thickness,
-                gasket_half_thickness,
-                0.014,
-            ),
-            CONTAINER_GASKET_COLOR,
-        ));
-        gasket.push(cuboid(
-            Vec3::new(0.0, -gasket_edge_y, gasket_z),
-            Vec3::new(
-                gasket_edge_x + gasket_half_thickness,
-                gasket_half_thickness,
-                0.014,
-            ),
-            CONTAINER_GASKET_COLOR,
-        ));
-        gasket.push(cuboid(
-            Vec3::new(-gasket_edge_x, 0.0, gasket_z),
-            Vec3::new(
-                gasket_half_thickness,
-                gasket_edge_y + gasket_half_thickness,
-                0.014,
-            ),
-            CONTAINER_GASKET_COLOR,
-        ));
-        gasket.push(cuboid(
-            Vec3::new(gasket_edge_x, 0.0, gasket_z),
-            Vec3::new(
-                gasket_half_thickness,
-                gasket_edge_y + gasket_half_thickness,
-                0.014,
-            ),
-            CONTAINER_GASKET_COLOR,
-        ));
-        gasket.push(cuboid(
-            Vec3::new(0.0, 0.0, out(0.088)),
-            Vec3::new(
-                gasket_half_thickness,
-                gasket_edge_y + gasket_half_thickness,
-                0.014,
-            ),
-            CONTAINER_GASKET_COLOR,
-        ));
+    let gasket_z = out(0.082);
+    let gasket_half_thickness = 0.020;
+    let gasket_half_z = 0.0025;
+    let gasket_edge_x = half.x - 0.035;
+    let gasket_edge_y = half.y - 0.115;
+    gasket.push(cuboid(
+        Vec3::new(0.0, gasket_edge_y, gasket_z),
+        Vec3::new(
+            gasket_edge_x + gasket_half_thickness,
+            gasket_half_thickness,
+            gasket_half_z,
+        ),
+        CONTAINER_GASKET_COLOR,
+    ));
+    gasket.push(cuboid(
+        Vec3::new(0.0, -gasket_edge_y, gasket_z),
+        Vec3::new(
+            gasket_edge_x + gasket_half_thickness,
+            gasket_half_thickness,
+            gasket_half_z,
+        ),
+        CONTAINER_GASKET_COLOR,
+    ));
+    gasket.push(cuboid(
+        Vec3::new(-gasket_edge_x, 0.0, gasket_z),
+        Vec3::new(
+            gasket_half_thickness,
+            gasket_edge_y + gasket_half_thickness,
+            gasket_half_z,
+        ),
+        CONTAINER_GASKET_COLOR,
+    ));
+    gasket.push(cuboid(
+        Vec3::new(gasket_edge_x, 0.0, gasket_z),
+        Vec3::new(
+            gasket_half_thickness,
+            gasket_edge_y + gasket_half_thickness,
+            gasket_half_z,
+        ),
+        CONTAINER_GASKET_COLOR,
+    ));
+    gasket.push(cuboid(
+        Vec3::new(0.0, 0.0, gasket_z),
+        Vec3::new(
+            gasket_half_thickness,
+            gasket_edge_y + gasket_half_thickness,
+            gasket_half_z,
+        ),
+        CONTAINER_GASKET_COLOR,
+    ));
 
-        let hardware_z = out(0.125);
-        let inner_rod_x = half.x * 0.23;
-        let outer_rod_x = half.x * 0.56;
-        let rod_xs = [-outer_rod_x, -inner_rod_x, inner_rod_x, outer_rod_x];
-        for x in rod_xs {
-            hardware.push(cylinder(
-                Vec3::new(x, 0.0, hardware_z),
-                0.026,
-                half.y - 0.16,
+    let hardware_z = out(0.125);
+    let inner_rod_x = half.x * 0.23;
+    let outer_rod_x = half.x * 0.56;
+    let rod_xs = [-outer_rod_x, -inner_rod_x, inner_rod_x, outer_rod_x];
+    for x in rod_xs {
+        hardware.push(cylinder(
+            Vec3::new(x, 0.0, hardware_z),
+            0.026,
+            half.y - 0.16,
+            Mat4::IDENTITY,
+            CONTAINER_HARDWARE_COLOR,
+        ));
+        for y in [-half.y + 0.13, half.y - 0.13] {
+            hardware.push(cuboid(
+                Vec3::new(x, y, out(0.100)),
+                Vec3::new(0.075, 0.06, 0.045),
+                CONTAINER_HARDWARE_COLOR,
+            ));
+            hardware.push(cuboid(
+                Vec3::new(x + 0.045, y.signum() * (half.y - 0.19), hardware_z),
+                Vec3::new(0.065, 0.025, 0.03),
+                CONTAINER_HARDWARE_COLOR,
+            ));
+        }
+    }
+
+    let linkage_half = (outer_rod_x - inner_rod_x) * 0.5;
+    let linkage_x = (outer_rod_x + inner_rod_x) * 0.5;
+    for sign in [-1.0_f32, 1.0] {
+        hardware.push(cylinder(
+            Vec3::new(sign * linkage_x, -half.y * 0.36, out(0.140)),
+            0.022,
+            linkage_half,
+            Mat4::from_rotation_z(std::f32::consts::FRAC_PI_2),
+            CONTAINER_HARDWARE_COLOR,
+        ));
+    }
+
+    // Closed rear hinges: pin on frame + door strap (095).
+    let rear_frame_z = out(CONTAINER_FRONT_FRAME_Z);
+    let rear_frame_outer_z = rear_frame_z + CONTAINER_FRONT_FRAME_HALF_Z;
+    let pin_r = CONTAINER_FRONT_PIN_R;
+    for sign in [-1.0_f32, 1.0] {
+        let pin_x = sign * (half.x - CONTAINER_FRONT_PIN_X_INSET);
+        let pin_z = rear_frame_outer_z + pin_r;
+        for y in [-half.y * 0.72, -half.y * 0.24, half.y * 0.24, half.y * 0.72] {
+            frame.push(cylinder(
+                Vec3::new(pin_x, y, pin_z),
+                pin_r,
+                CONTAINER_HINGE_PIN_HALF_Y,
                 Mat4::IDENTITY,
-                CONTAINER_HARDWARE_COLOR,
-            ));
-            for y in [-half.y + 0.13, half.y - 0.13] {
-                hardware.push(cuboid(
-                    Vec3::new(x, y, out(0.100)),
-                    Vec3::new(0.075, 0.06, 0.045),
-                    CONTAINER_HARDWARE_COLOR,
-                ));
-                hardware.push(cuboid(
-                    Vec3::new(x + 0.045, y.signum() * (half.y - 0.19), hardware_z),
-                    Vec3::new(0.065, 0.025, 0.03),
-                    CONTAINER_HARDWARE_COLOR,
-                ));
-            }
-        }
-
-        let linkage_half = (outer_rod_x - inner_rod_x) * 0.5;
-        let linkage_x = (outer_rod_x + inner_rod_x) * 0.5;
-        for sign in [-1.0_f32, 1.0] {
-            hardware.push(cylinder(
-                Vec3::new(sign * linkage_x, -half.y * 0.36, out(0.140)),
-                0.022,
-                linkage_half,
-                Mat4::from_rotation_z(std::f32::consts::FRAC_PI_2),
-                CONTAINER_HARDWARE_COLOR,
+                CONTAINER_FRAME_COLOR,
             ));
         }
+    }
+    for leaf in rear_leaf_poses(half) {
+        let leaf_xf = Mat4::from_translation(leaf.center) * Mat4::from_rotation_y(leaf.yaw);
+        let side = if leaf.center.x < 0.0 { -1.0_f32 } else { 1.0 };
+        for y in [-half.y * 0.72, -half.y * 0.24, half.y * 0.24, half.y * 0.72] {
+            frame.push(door_hinge_strap(leaf_xf, leaf.half, side, y, 1.0));
+        }
+    }
 
-        for sign in [-1.0_f32, 1.0] {
-            for y in [-half.y * 0.72, -half.y * 0.24, half.y * 0.24, half.y * 0.72] {
-                frame.push(cuboid(
-                    Vec3::new(sign * (half.x - 0.055), y, out(0.105)),
-                    Vec3::new(0.065, 0.045, 0.025),
-                    CONTAINER_FRAME_COLOR,
-                ));
-                frame.push(cylinder(
-                    Vec3::new(sign * (half.x - 0.010), y, out(0.135)),
-                    0.025,
-                    0.075,
-                    Mat4::IDENTITY,
-                    CONTAINER_FRAME_COLOR,
-                ));
-            }
+    // Open Front (−Z): mouth frame + hinge pins (doors are separate batches).
+    let front_z = -half.z - CONTAINER_FRONT_FRAME_Z;
+    frame.push(cuboid(
+        Vec3::new(0.0, half.y - 0.055, front_z),
+        Vec3::new(half.x + 0.075, 0.055, CONTAINER_FRONT_FRAME_HALF_Z),
+        CONTAINER_FRAME_COLOR,
+    ));
+    frame.push(cuboid(
+        Vec3::new(0.0, -half.y + 0.055, front_z),
+        Vec3::new(half.x + 0.075, 0.055, CONTAINER_FRONT_FRAME_HALF_Z),
+        CONTAINER_FRAME_COLOR,
+    ));
+    frame.push(cuboid(
+        Vec3::new(-half.x - CONTAINER_FRONT_POST_X, 0.0, front_z),
+        Vec3::new(
+            CONTAINER_FRONT_POST_HALF_X,
+            half.y - 0.11,
+            CONTAINER_FRONT_FRAME_HALF_Z,
+        ),
+        CONTAINER_FRAME_COLOR,
+    ));
+    frame.push(cuboid(
+        Vec3::new(half.x + CONTAINER_FRONT_POST_X, 0.0, front_z),
+        Vec3::new(
+            CONTAINER_FRONT_POST_HALF_X,
+            half.y - 0.11,
+            CONTAINER_FRONT_FRAME_HALF_Z,
+        ),
+        CONTAINER_FRAME_COLOR,
+    ));
+    for sign in [-1.0_f32, 1.0] {
+        let (pin_x, pin_z) = front_hinge_pin_xz(half, sign);
+        for y in [-half.y * 0.72, -half.y * 0.24, half.y * 0.24, half.y * 0.72] {
+            frame.push(cylinder(
+                Vec3::new(pin_x, y, pin_z),
+                CONTAINER_FRONT_PIN_R,
+                CONTAINER_HINGE_PIN_HALF_Y,
+                Mat4::IDENTITY,
+                CONTAINER_FRAME_COLOR,
+            ));
+        }
+    }
+    for side in [-1.0_f32, 1.0] {
+        let open = if side < 0.0 {
+            CONTAINER_LEFT_DOOR_OPEN_RAD
+        } else {
+            CONTAINER_RIGHT_DOOR_OPEN_RAD
+        };
+        let leaf = front_leaf_pose(half, leaf_half_extents(half), side, open);
+        let leaf_xf = Mat4::from_translation(leaf.center) * Mat4::from_rotation_y(leaf.yaw);
+        for y in [-half.y * 0.72, -half.y * 0.24, half.y * 0.24, half.y * 0.72] {
+            frame.push(door_hinge_strap(leaf_xf, leaf.half, side, y, -1.0));
         }
     }
 
@@ -237,6 +463,76 @@ fn container_door_hardware(half: Vec3) -> Vec<(mesh::CpuPrim, [f32; 4], &'static
             "map-a-container-door-hardware",
         ),
     ]
+}
+
+/// Door-face hinge strap. `z_out` +1 rear / −1 front.
+#[cfg(target_arch = "wasm32")]
+fn door_hinge_strap(
+    leaf_xf: Mat4,
+    leaf_half: Vec3,
+    side: f32,
+    y: f32,
+    z_out: f32,
+) -> (mesh::CpuPrim, Mat4) {
+    let strap_hz = CONTAINER_HINGE_STRAP_HZ;
+    let strap_local = Vec3::new(
+        side * (leaf_half.x - CONTAINER_HINGE_STRAP_HALF_LEN),
+        y,
+        z_out * (leaf_half.z + strap_hz),
+    );
+    // Prim pin is at local −X; yaw 180° on the +X leaf so pin points toward the hinge.
+    let pin_yaw = if side > 0.0 {
+        std::f32::consts::PI
+    } else {
+        0.0
+    };
+    let local = leaf_xf * Mat4::from_translation(strap_local) * Mat4::from_rotation_y(pin_yaw);
+    (
+        mesh::hinge_strap_prim(
+            CONTAINER_HINGE_STRAP_HALF_LEN,
+            CONTAINER_HINGE_STRAP_HALF_Y_PIN,
+            CONTAINER_HINGE_STRAP_HALF_Y_TIP,
+            strap_hz,
+            CONTAINER_FRAME_COLOR,
+        ),
+        local,
+    )
+}
+
+/// Front door leaves: hinged about the pin, sized to the mouth frame (095).
+#[cfg(target_arch = "wasm32")]
+fn container_open_front_leaves(half: Vec3) -> Vec<(mesh::CpuPrim, Mat4)> {
+    front_leaf_poses(half)
+        .into_iter()
+        .map(|leaf| {
+            let prim = mesh::box_prim(leaf.half, [1.0, 1.0, 1.0, 1.0]);
+            let local = Mat4::from_translation(leaf.center) * Mat4::from_rotation_y(leaf.yaw);
+            (prim, local)
+        })
+        .collect()
+}
+
+/// Closed rear leaves flush with the rear frame outer face (095).
+#[cfg(target_arch = "wasm32")]
+fn container_closed_rear_leaves(half: Vec3) -> Vec<(mesh::CpuPrim, Mat4)> {
+    rear_leaf_poses(half)
+        .into_iter()
+        .map(|leaf| {
+            let prim = mesh::box_prim(leaf.half, [1.0, 1.0, 1.0, 1.0]);
+            let local = Mat4::from_translation(leaf.center) * Mat4::from_rotation_y(leaf.yaw);
+            (prim, local)
+        })
+        .collect()
+}
+
+/// Interior floor deck — same skin as the roof, on the shell floor (095).
+#[cfg(target_arch = "wasm32")]
+fn container_interior_floor(half: Vec3) -> (mesh::CpuPrim, Mat4) {
+    let t = CONTAINER_SHELL_T;
+    let floor_half = Vec3::new(half.x, t * 0.5, half.z);
+    let prim = mesh::box_prim(floor_half, [1.0, 1.0, 1.0, 1.0]);
+    let local = Mat4::from_translation(Vec3::new(0.0, -half.y + t * 0.5, 0.0));
+    (prim, local)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -806,19 +1102,13 @@ impl MapGpu {
                 label,
             )
         };
+        // Open Front mouth (095); rear is flush door leaves.
         let sides = upload_container_part(
             "container-side.albedo",
             mesh::BoxFaceGroup::Sides,
             side_metres_per_tile,
             SolidUvLayout::BoxFace,
             "map-a-shipment-container-sides",
-        );
-        let front = upload_container_part(
-            "container-door.albedo",
-            mesh::BoxFaceGroup::Front,
-            1.0,
-            SolidUvLayout::RearDoors,
-            "map-a-shipment-container-front",
         );
         let lids = upload_container_part(
             "container-side.albedo",
@@ -827,38 +1117,102 @@ impl MapGpu {
             SolidUvLayout::BoxFace,
             "map-a-shipment-container-lids",
         );
-        let rear = upload_container_part(
-            "container-door.albedo",
-            mesh::BoxFaceGroup::Rear,
-            1.0,
-            SolidUvLayout::RearDoors,
-            "map-a-shipment-container-rear",
-        );
-        match (sides, front, lids, rear) {
-            (Ok(sides), Ok(front), Ok(lids), Ok(rear)) => {
+        match (sides, lids) {
+            (Ok(sides), Ok(lids)) => {
                 batches.push(sides);
-                batches.push(front);
                 batches.push(lids);
-                batches.push(rear);
+                if let Ok(side_png) = pack.get("container-side.albedo") {
+                    let (floor_prim, floor_local) = container_interior_floor(half);
+                    match mesh::upload_textured_solid_batch(
+                        &gpu,
+                        side_png,
+                        floor_prim,
+                        root * floor_local,
+                        container_tint,
+                        side_metres_per_tile,
+                        SolidUvLayout::BoxFace,
+                        mesh::SolidShading::Lit,
+                        "map-a-shipment-container-floor",
+                    ) {
+                        Ok(batch) => batches.push(batch),
+                        Err(e) => web_sys::console::warn_1(
+                            &format!("map: container floor unusable ({e})").into(),
+                        ),
+                    }
+                }
+                if let Ok(door_png) = pack.get("container-door.albedo") {
+                    for (i, (prim, local)) in
+                        container_closed_rear_leaves(half).into_iter().enumerate()
+                    {
+                        match mesh::upload_textured_solid_batch(
+                            &gpu,
+                            door_png,
+                            prim,
+                            root * local,
+                            container_tint,
+                            1.0,
+                            SolidUvLayout::RearDoors,
+                            mesh::SolidShading::Lit,
+                            &format!("map-a-shipment-container-rear-leaf-{i}"),
+                        ) {
+                            Ok(batch) => batches.push(batch),
+                            Err(e) => web_sys::console::warn_1(
+                                &format!("map: rear door leaf unusable ({e})").into(),
+                            ),
+                        }
+                    }
+                    for (i, (prim, local)) in
+                        container_open_front_leaves(half).into_iter().enumerate()
+                    {
+                        match mesh::upload_textured_solid_batch(
+                            &gpu,
+                            door_png,
+                            prim,
+                            root * local,
+                            container_tint,
+                            1.0,
+                            SolidUvLayout::RearDoors,
+                            mesh::SolidShading::Lit,
+                            &format!("map-a-shipment-container-open-leaf-{i}"),
+                        ) {
+                            Ok(batch) => batches.push(batch),
+                            Err(e) => web_sys::console::warn_1(
+                                &format!("map: open door leaf unusable ({e})").into(),
+                            ),
+                        }
+                    }
+                }
             }
-            (s, f, l, r) => {
+            (s, l) => {
                 let err = s
                     .err()
-                    .or(f.err())
                     .or(l.err())
-                    .or(r.err())
                     .unwrap_or_else(|| "container albedo".into());
                 web_sys::console::warn_1(
                     &format!("map: container albedo unusable ({err}); flat container").into(),
                 );
+                for group in [mesh::BoxFaceGroup::Sides, mesh::BoxFaceGroup::Lids] {
+                    batches.push(
+                        mesh::upload_solid_batch(
+                            &gpu,
+                            mesh::box_face_group_prim(half, CONTAINER_FALLBACK_COLOR, Some(group)),
+                            root,
+                            CONTAINER_FALLBACK_COLOR,
+                            mesh::SolidShading::Lit,
+                            "map-a-shipment-container",
+                        )
+                        .map_err(|e| JsValue::from_str(&e))?,
+                    );
+                }
+                let (floor_prim, floor_local) = container_interior_floor(half);
                 batches.push(
                     mesh::upload_solid_batch(
                         &gpu,
-                        mesh::box_prim(half, CONTAINER_FALLBACK_COLOR),
-                        root,
+                        floor_prim,
+                        root * floor_local,
                         CONTAINER_FALLBACK_COLOR,
                         mesh::SolidShading::Lit,
-                        "map-a-shipment-container",
+                        "map-a-shipment-container-floor",
                     )
                     .map_err(|e| JsValue::from_str(&e))?,
                 );
@@ -1219,13 +1573,13 @@ fn map_world_from_def(def: &MapDef) -> MapWorld {
             t.units.len() + usize::from(t.ground_cargo.is_some()) + usize::from(t.tractor.is_some())
         })
         .unwrap_or(0);
-    let mut boxes = Vec::with_capacity(1 + def.boxes.len() + train_n);
+    let shell = shipment_container_shell(
+        Vec3::from_array(def.shipment_container.position),
+        Vec3::from_array(def.shipment_container.half_extents),
+    );
+    let mut boxes = Vec::with_capacity(shell.len() + def.boxes.len() + train_n);
     let mut ramps = Vec::with_capacity(1 + usize::from(def.train.is_some()));
-    boxes.push(MapBox {
-        center: Vec3::from_array(def.shipment_container.position),
-        half: Vec3::from_array(def.shipment_container.half_extents),
-        yaw: 0.0,
-    });
+    boxes.extend(shell);
     for b in &def.boxes {
         boxes.push(MapBox {
             center: Vec3::from_array(b.position),
@@ -1314,6 +1668,13 @@ fn foot_surfaces_from_def(def: &MapDef) -> Result<FootSurfaces, String> {
                 patches.push(undrawn_foot_from_box(FootKind::Steel, tractor_box));
             }
         }
+    }
+    let shell = shipment_container_shell(
+        Vec3::from_array(def.shipment_container.position),
+        Vec3::from_array(def.shipment_container.half_extents),
+    );
+    if let Some(&floor) = shell.first() {
+        patches.push(undrawn_foot_from_box(FootKind::Steel, floor));
     }
     Ok(FootSurfaces { patches })
 }
@@ -1423,7 +1784,9 @@ mod tests {
         assert!(cmax_x - cmin_x > cargo_box.half.x * 2.0 + 0.2);
         // World-AABB north tip is outside the oriented pile.
         assert!(
-            (world.support_y(cargo_box.center.x, cmax_z - 0.05) - cargo_box.max_y()).abs() > 0.2
+            (world.support_y(cargo_box.center.x, cmax_z - 0.05, f32::MAX) - cargo_box.max_y())
+                .abs()
+                > 0.2
         );
         // Unit boxes seal along-track except lumber→tank (nose ramp fills that joint).
         for i in 0..train.units.len() - 1 {
@@ -1445,15 +1808,15 @@ mod tests {
         // Nose: yaw=consist+π → local −Z is east (lumber) = low end.
         let nose_east = nose.center_x + nose.half_z;
         let nose_mid = nose.center_x - nose.half_z;
-        let nose_y = world.support_y(nose_east, train.centerline_z);
-        let nose_mid_y = world.support_y(nose_mid, train.centerline_z);
+        let nose_y = world.support_y(nose_east, train.centerline_z, nose.base_y);
+        let nose_mid_y = world.support_y(nose_mid, train.centerline_z, f32::MAX);
         assert!((nose_y - nose.base_y).abs() < 0.05);
         assert!(nose_mid_y > nose_y + 0.5);
         // Rear: consist yaw → local −Z is west tip = low end.
         let rear_west = rear.center_x - rear.half_z;
         let rear_mid = rear.center_x + rear.half_z;
-        let rear_y = world.support_y(rear_west, train.centerline_z);
-        let rear_mid_y = world.support_y(rear_mid, train.centerline_z);
+        let rear_y = world.support_y(rear_west, train.centerline_z, rear.base_y);
+        let rear_mid_y = world.support_y(rear_mid, train.centerline_z, f32::MAX);
         assert!((rear_y - rear.base_y).abs() < 0.05);
         assert!(rear_mid_y > rear_y + 0.5);
         let feet = foot_surfaces_from_def(&def).unwrap();
@@ -1511,8 +1874,55 @@ mod tests {
         assert_eq!(def.ground.half_extents, [12.0, 12.0]);
         assert!(def.foot_patches.is_empty());
         let world = map_world_from_def(&def);
-        assert_eq!(world.boxes.len(), 1);
+        assert_eq!(world.boxes.len(), 11);
         let feet = foot_surfaces_from_def(&def).unwrap();
-        assert_eq!(feet.at(0.0, 0.0), FootKind::Gravel);
+        assert_eq!(feet.at(0.0, 0.0), FootKind::Steel);
+        assert_eq!(feet.at(3.0, 0.0), FootKind::Gravel);
+        let floor_top = world.support_y(0.0, 0.0, 0.0);
+        assert!(floor_top > 0.0 && floor_top < 0.2);
+        assert!(!world.inside_solid(0.0, floor_top, 0.0));
+        // Closed rear blocks; open mouth does not.
+        assert!(world.inside_solid(0.0, floor_top, 0.95));
+        assert!(!world.inside_solid(0.0, floor_top, -0.95));
+    }
+
+    #[test]
+    fn shipment_container_shell_is_walkable_pocket() {
+        let center = Vec3::new(8.0, 1.22, 12.0);
+        let half = Vec3::new(1.22, 1.22, 3.04);
+        let shell = shipment_container_shell(center, half);
+        assert_eq!(shell.len(), 11);
+        let world = MapWorld {
+            boxes: shell,
+            ramps: vec![],
+        };
+        let floor_top = world.support_y(center.x, center.z, 0.0);
+        assert!((floor_top - CONTAINER_SHELL_T).abs() < 1e-4);
+        assert!((world.support_y(center.x, center.z, floor_top) - floor_top).abs() < 1e-4);
+        assert!(!world.inside_solid(center.x, floor_top, center.z));
+        assert!(world.inside_solid(center.x, floor_top, center.z + half.z - 0.02));
+        assert!(!world.inside_solid(center.x, floor_top, center.z - half.z - 0.2));
+        // Closed pose: fills frame clear, outer face flush, free edges meet at centre.
+        let shut = front_leaf_pose(half, leaf_half_extents(half), -1.0, 0.0);
+        let frame_inner_x = frame_inner_half_x(half);
+        let front_z = -half.z - CONTAINER_FRONT_FRAME_Z;
+        let frame_outer_z = front_z - CONTAINER_FRONT_FRAME_HALF_Z;
+        let outer_edge_x = shut.center.x - shut.half.x;
+        assert!(
+            (outer_edge_x + frame_inner_x).abs() < 1e-4,
+            "outer edge on post inside"
+        );
+        assert!(
+            (shut.center.x + shut.half.x).abs() < 1e-4,
+            "meets centre seal"
+        );
+        assert!((shut.center.z - shut.half.z - frame_outer_z).abs() < 1e-4);
+        assert!((shut.half.y - (half.y - 0.11)).abs() < 1e-4);
+        assert!(shut.yaw.abs() < 1e-5);
+        // Rear closed leaves flush with rear frame outer face.
+        let rear = rear_leaf_poses(half)[0];
+        let rear_outer = half.z + CONTAINER_FRONT_FRAME_Z + CONTAINER_FRONT_FRAME_HALF_Z;
+        assert!((rear.center.z + rear.half.z - rear_outer).abs() < 1e-4);
+        assert!((rear.center.x - rear.half.x + frame_inner_x).abs() < 1e-4);
     }
 }

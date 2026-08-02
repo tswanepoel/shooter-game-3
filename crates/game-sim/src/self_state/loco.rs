@@ -203,7 +203,7 @@ impl SelfState {
         } else {
             self.sprint_latched = false;
             // Stay snapped to support while idle on solids.
-            let support = world.support_y(self.position.x, self.position.z);
+            let support = world.support_y(self.position.x, self.position.z, self.position.y);
             if self.position.y > support + STEP_DOWN_M {
                 self.velocity_y = 0.0;
                 self.air_vel_x = 0.0;
@@ -253,7 +253,7 @@ impl SelfState {
     fn probe_ground_step(&mut self, dx: f32, dz: f32, world: &MapWorld) -> GroundStep {
         let nx = self.position.x + dx;
         let nz = self.position.z + dz;
-        let floor = world.support_y(nx, nz);
+        let floor = world.support_y(nx, nz, self.position.y);
         let dy = floor - self.position.y;
 
         if dy > STEP_UP_M {
@@ -317,7 +317,7 @@ impl SelfState {
         self.position.y += self.velocity_y * dt;
         self.locomotion = LocomotionMode::Air;
 
-        let floor = world.support_y(self.position.x, self.position.z);
+        let floor = world.support_y(self.position.x, self.position.z, self.position.y);
         if self.position.y <= floor && self.velocity_y <= 0.0 {
             self.position.y = floor;
             self.velocity_y = 0.0;

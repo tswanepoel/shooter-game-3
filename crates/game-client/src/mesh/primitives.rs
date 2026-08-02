@@ -201,6 +201,63 @@ pub fn cylinder_y_prim(radius: f32, half_height: f32, segments: u32, color: [f32
     (verts, indices, color)
 }
 
+/// Hinge strap: pin at local −X (wide in Y), tip at +X (narrow), thickness ±Z.
+pub fn hinge_strap_prim(
+    half_len: f32,
+    half_y_pin: f32,
+    half_y_tip: f32,
+    half_thick: f32,
+    color: [f32; 4],
+) -> CpuPrim {
+    let hl = half_len.max(1e-4);
+    let hyp = half_y_pin.max(0.0);
+    let hyt = half_y_tip.max(0.0);
+    let ht = half_thick.max(0.0);
+    let pin_lo = [-hl, -hyp, -ht];
+    let pin_hi = [-hl, hyp, -ht];
+    let tip_lo = [hl, -hyt, -ht];
+    let tip_hi = [hl, hyt, -ht];
+    let pin_lo_z = [-hl, -hyp, ht];
+    let pin_hi_z = [-hl, hyp, ht];
+    let tip_lo_z = [hl, -hyt, ht];
+    let tip_hi_z = [hl, hyt, ht];
+
+    let mut verts = Vec::new();
+    let mut indices = Vec::new();
+    let mut push_tri = |a: [f32; 3], b: [f32; 3], c: [f32; 3]| {
+        let ab = Vec3::from_array(b) - Vec3::from_array(a);
+        let ac = Vec3::from_array(c) - Vec3::from_array(a);
+        let n = ab.cross(ac);
+        let n = if n.length_squared() > 1e-12 {
+            n.normalize().to_array()
+        } else {
+            [0.0, 1.0, 0.0]
+        };
+        let base = verts.len() as u32;
+        for p in [a, b, c] {
+            verts.push(MeshVertex {
+                position: p,
+                normal: n,
+                uv: [0.0, 0.0],
+            });
+        }
+        indices.extend_from_slice(&[base, base + 1, base + 2]);
+    };
+    let mut push_quad = |a: [f32; 3], b: [f32; 3], c: [f32; 3], d: [f32; 3]| {
+        push_tri(a, b, c);
+        push_tri(a, c, d);
+    };
+
+    push_quad(pin_lo, tip_lo, tip_hi, pin_hi);
+    push_quad(pin_lo_z, pin_hi_z, tip_hi_z, tip_lo_z);
+    push_quad(pin_lo, pin_hi, pin_hi_z, pin_lo_z);
+    push_quad(tip_lo, tip_lo_z, tip_hi_z, tip_hi);
+    push_quad(pin_hi, tip_hi, tip_hi_z, pin_hi_z);
+    push_quad(pin_lo, pin_lo_z, tip_lo_z, tip_lo);
+
+    (verts, indices, color)
+}
+
 pub fn merge_transformed_prims(parts: Vec<(CpuPrim, Mat4)>, color: [f32; 4]) -> CpuPrim {
     let mut verts = Vec::new();
     let mut indices = Vec::new();

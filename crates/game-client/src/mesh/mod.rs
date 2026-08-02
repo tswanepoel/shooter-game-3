@@ -25,8 +25,8 @@ pub use kit::{
 #[cfg(feature = "debug-tools")]
 pub use primitives::unit_sphere_prim;
 pub use primitives::{
-    box_face_group_prim, box_prim, cylinder_y_prim, merge_transformed_prims, ramp_prim,
-    transform_vertex, BoxFaceGroup, CpuPrim, MeshVertex,
+    box_face_group_prim, box_prim, cylinder_y_prim, hinge_strap_prim, merge_transformed_prims,
+    ramp_prim, transform_vertex, BoxFaceGroup, CpuPrim, MeshVertex,
 };
 pub use shader::{LightPlate, DEFAULT_LIGHT_PLATE};
 #[cfg(feature = "debug-tools")]

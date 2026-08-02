@@ -184,20 +184,40 @@ impl MapWorld {
         Self::default()
     }
 
-    /// Highest standable surface under `(x, z)` (ground or solid top).
-    pub fn support_y(&self, x: f32, z: f32) -> f32 {
-        let mut y = 0.0_f32;
+    /// Highest standable surface under `(x, z)` relative to `sole_y`.
+    ///
+    /// Prefers tops at or below `sole_y + `[`STEP_UP_M`] so a roof over a floor
+    /// does not steal interior support. When nothing is within step-up reach,
+    /// falls back to the absolute highest top (tall walls still block).
+    pub fn support_y(&self, x: f32, z: f32, sole_y: f32) -> f32 {
+        let reach = sole_y + STEP_UP_M;
+        let mut best_reachable = 0.0_f32;
+        let mut best_any = 0.0_f32;
+        let mut found_reachable = false;
         for b in &self.boxes {
             if b.contains_xz(x, z) {
-                y = y.max(b.max_y());
+                let top = b.max_y();
+                best_any = best_any.max(top);
+                if top <= reach + 1e-4 {
+                    best_reachable = best_reachable.max(top);
+                    found_reachable = true;
+                }
             }
         }
         for r in &self.ramps {
             if let Some(sy) = r.surface_y(x, z) {
-                y = y.max(sy);
+                best_any = best_any.max(sy);
+                if sy <= reach + 1e-4 {
+                    best_reachable = best_reachable.max(sy);
+                    found_reachable = true;
+                }
             }
         }
-        y
+        if found_reachable {
+            best_reachable
+        } else {
+            best_any
+        }
     }
 
     /// True when the segment `from`→`to` passes through any solid box.
@@ -230,7 +250,7 @@ mod tests {
 
     #[test]
     fn empty_support_is_zero() {
-        assert_eq!(MapWorld::empty().support_y(1.0, 2.0), 0.0);
+        assert_eq!(MapWorld::empty().support_y(1.0, 2.0, 0.0), 0.0);
     }
 
     #[test]
@@ -243,10 +263,33 @@ mod tests {
             }],
             ramps: vec![],
         };
-        assert!((world.support_y(0.0, 0.0) - 1.0).abs() < 1e-5);
+        assert!((world.support_y(0.0, 0.0, 0.0) - 1.0).abs() < 1e-5);
         assert!(world.inside_solid(0.0, 0.2, 0.0));
         assert!(!world.inside_solid(0.0, 1.0, 0.0));
         assert!(!world.inside_solid(3.0, 0.2, 0.0));
+    }
+
+    #[test]
+    fn stacked_shell_support_uses_sole_reach() {
+        // Floor under roof: from the floor, roof must not win.
+        let world = MapWorld {
+            boxes: vec![
+                MapBox {
+                    center: Vec3::new(0.0, 0.05, 0.0),
+                    half: Vec3::new(1.0, 0.05, 2.0),
+                    yaw: 0.0,
+                },
+                MapBox {
+                    center: Vec3::new(0.0, 2.35, 0.0),
+                    half: Vec3::new(1.0, 0.05, 2.0),
+                    yaw: 0.0,
+                },
+            ],
+            ramps: vec![],
+        };
+        assert!((world.support_y(0.0, 0.0, 0.05) - 0.1).abs() < 1e-4);
+        assert!((world.support_y(0.0, 0.0, 2.4) - 2.4).abs() < 1e-4);
+        assert!((world.support_y(0.0, 0.0, f32::MAX) - 2.4).abs() < 1e-4);
     }
 
     #[test]
@@ -266,10 +309,10 @@ mod tests {
         // Point along local +Z in world (world_from_local).
         let on_x = s * 1.5;
         let on_z = c * 1.5;
-        assert!((world.support_y(on_x, on_z) - 1.0).abs() < 1e-4);
+        assert!((world.support_y(on_x, on_z, 0.0) - 1.0).abs() < 1e-4);
         // Off-axis corners a world AABB would cover; OBB does not.
-        assert!(world.support_y(1.5, 0.0).abs() < 1e-4);
-        assert!(world.support_y(0.0, 1.5).abs() < 1e-4);
+        assert!(world.support_y(1.5, 0.0, 0.0).abs() < 1e-4);
+        assert!(world.support_y(0.0, 1.5, 0.0).abs() < 1e-4);
     }
 
     #[test]
@@ -287,9 +330,9 @@ mod tests {
             boxes: vec![],
             ramps: vec![ramp],
         };
-        assert!((world.support_y(0.0, -2.0) - 2.5).abs() < 1e-4);
-        assert!((world.support_y(0.0, 2.0) - 3.5).abs() < 1e-4);
-        assert!((world.support_y(0.0, 0.0) - 3.0).abs() < 1e-4);
+        assert!((world.support_y(0.0, -2.0, 2.5) - 2.5).abs() < 1e-4);
+        assert!((world.support_y(0.0, 2.0, 2.5) - 3.5).abs() < 1e-4);
+        assert!((world.support_y(0.0, 0.0, 2.5) - 3.0).abs() < 1e-4);
     }
 
     #[test]
@@ -307,8 +350,8 @@ mod tests {
             boxes: vec![],
             ramps: vec![ramp],
         };
-        assert!(world.support_y(0.0, -2.0).abs() < 1e-4);
-        assert!((world.support_y(0.0, 2.0) - 1.0).abs() < 1e-4);
-        assert!((world.support_y(0.0, 0.0) - 0.5).abs() < 1e-4);
+        assert!(world.support_y(0.0, -2.0, 0.0).abs() < 1e-4);
+        assert!((world.support_y(0.0, 2.0, 0.0) - 1.0).abs() < 1e-4);
+        assert!((world.support_y(0.0, 0.0, 0.0) - 0.5).abs() < 1e-4);
     }
 }
