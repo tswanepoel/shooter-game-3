@@ -2,7 +2,7 @@
 
 use super::types::LocomotionMode;
 use super::SelfState;
-use crate::{MapWorld, STEP_DOWN_M, STEP_UP_M};
+use crate::{MapWorld, FIGURE_RADIUS_M, STEP_DOWN_M, STEP_UP_M};
 
 /// Walk speed on the ground plane (016).
 /// Kenney `walk` at 1×: stance sole slip = \(2 L \sin\theta\) per half-cycle
@@ -33,6 +33,10 @@ pub const JUMP_PEAK_M: f32 = 1.1;
 pub const JUMP_TIME_TO_APEX_S: f32 = 0.25;
 pub const JUMP_GRAVITY_M_S2: f32 = 2.0 * JUMP_PEAK_M / (JUMP_TIME_TO_APEX_S * JUMP_TIME_TO_APEX_S);
 pub const JUMP_LAUNCH_M_S: f32 = JUMP_GRAVITY_M_S2 * JUMP_TIME_TO_APEX_S;
+/// Grace after leaving support where jump still launches (late edge press).
+pub const JUMP_COYOTE_S: f32 = 0.1;
+/// Remember a jump press in air and fire it on the next land (early press).
+pub const JUMP_BUFFER_S: f32 = 0.1;
 
 impl SelfState {
     pub fn is_grounded(&self) -> bool {
@@ -48,12 +52,33 @@ impl SelfState {
         }
     }
 
+    fn jump_launch_speed(&self) -> f32 {
+        if (self.sprint_latched && self.wish_forward > 1e-6) || self.locomotion.is_sprint() {
+            SPRINT_SPEED_M_S
+        } else {
+            WALK_SPEED_M_S
+        }
+    }
+
+    fn can_jump(&self) -> bool {
+        self.is_grounded() || self.coyote_s > 1e-6
+    }
+
+    /// Jump press edge: launch if grounded/coyote, else buffer while airborne.
     pub fn try_jump(&mut self) {
-        if !self.alive || !self.is_grounded() {
+        if !self.alive {
             return;
         }
+        if self.can_jump() {
+            self.launch_jump();
+        } else if self.locomotion.is_air() {
+            self.jump_buffer_s = JUMP_BUFFER_S;
+        }
+    }
+
+    fn launch_jump(&mut self) {
         self.clear_emote();
-        let speed = self.ground_speed();
+        let speed = self.jump_launch_speed();
         let mut wish =
             self.look_forward_xz() * self.wish_forward + self.look_right_xz() * self.wish_strafe;
         wish.y = 0.0;
@@ -66,6 +91,8 @@ impl SelfState {
             self.air_vel_z = 0.0;
         }
         self.velocity_y = JUMP_LAUNCH_M_S;
+        self.coyote_s = 0.0;
+        self.jump_buffer_s = 0.0;
         self.locomotion = LocomotionMode::Air;
     }
 
@@ -146,6 +173,11 @@ impl SelfState {
                 self.air_vel_z = dir.z * speed;
                 self.velocity_y = 0.0;
                 self.locomotion = LocomotionMode::Air;
+                // Step cleared support under the feet centre, but FIGURE_RADIUS still
+                // overlaps the lip — eject along the exit dir so air XZ is not stuck
+                // scraping the face (feels like all forward momentum vanishes).
+                self.position.x += dir.x * FIGURE_RADIUS_M;
+                self.position.z += dir.z * FIGURE_RADIUS_M;
             } else {
                 self.locomotion = if sprinting {
                     LocomotionMode::Sprint
@@ -193,6 +225,13 @@ impl SelfState {
                 self.regen_stamina(dt);
             }
         }
+
+        if self.is_grounded() {
+            self.coyote_s = JUMP_COYOTE_S;
+        } else {
+            self.coyote_s = (self.coyote_s - dt).max(0.0);
+        }
+        self.jump_buffer_s = (self.jump_buffer_s - dt).max(0.0);
 
         self.sync_pose();
     }
@@ -290,6 +329,10 @@ impl SelfState {
             } else {
                 LocomotionMode::Stand
             };
+            self.coyote_s = JUMP_COYOTE_S;
+            if self.jump_buffer_s > 1e-6 {
+                self.launch_jump();
+            }
         }
     }
 

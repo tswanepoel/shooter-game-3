@@ -44,6 +44,10 @@ Map **a** stationed train (**091**): same yaw as the rail, own `train.scale`; co
 
 Map **a** train collide (**092**): kit AABBs on those roots enter `MapWorld` (flatbed top = deck). Ground cargo `seat_y` buries ~half the pile so only the top layer protrudes — jump pad onto the mid flatbeds.
 
+Map **a** yard tractor (**094**): Kenney Car Kit mesh beside `ground_cargo` (see `assets/source/cars/`); pose on `train.tractor`. Mid step from empty flatbed to lumber-car load roof.
+
+Map **a** tank dome (**094**): tank mesh unchanged; collide replaces the tall AABB with elevated undrawn ramps on both ends (low tips → mid-barrel) plus a thin mid seal box.
+
 ## Materials
 
 - Shared material name **`colormap`**: glTF URI `Textures/colormap.png`; this repo stores `textures/colormap.png`

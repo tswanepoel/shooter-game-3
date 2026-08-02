@@ -311,6 +311,124 @@ fn jump_while_airborne_is_ignored() {
     s.try_jump();
     assert!((s.position.y - y).abs() < 1e-6);
     assert!((s.velocity_y - vy).abs() < 1e-6);
+    assert!(s.jump_buffer_s > 0.0);
+}
+
+#[test]
+fn coyote_allows_jump_shortly_after_leaving_support() {
+    use crate::{MapBox, MapWorld};
+    let world = MapWorld {
+        boxes: vec![MapBox {
+            center: Vec3::new(0.0, 0.5, 0.0),
+            half: Vec3::new(1.0, 0.5, 1.0),
+            yaw: 0.0,
+        }],
+        ramps: vec![],
+    };
+    let mut s = SelfState::default_loadout();
+    s.position = Vec3::new(0.0, 1.0, 0.0);
+    let dt = 1.0 / 60.0;
+    for _ in 0..20 {
+        s.apply_move_world(dt, 0.0, 0.0, false, &world);
+    }
+    assert!(s.is_grounded());
+    for _ in 0..40 {
+        s.apply_move_world(dt, 1.0, 0.0, false, &world);
+        if s.locomotion.is_air() {
+            break;
+        }
+    }
+    assert!(s.locomotion.is_air());
+    assert!(
+        s.coyote_s > 1e-6,
+        "coyote should remain after leaving support"
+    );
+    s.try_jump();
+    assert!(
+        (s.velocity_y - JUMP_LAUNCH_M_S).abs() < 1e-5,
+        "coyote jump should launch"
+    );
+    assert!(s.coyote_s.abs() < 1e-6);
+}
+
+#[test]
+fn walk_off_edge_keeps_horizontal_air_speed() {
+    use crate::{MapBox, MapWorld};
+    let top = 1.12_f32;
+    let world = MapWorld {
+        boxes: vec![MapBox {
+            center: Vec3::new(0.0, top * 0.5, 0.0),
+            half: Vec3::new(2.0, top * 0.5, 1.0),
+            yaw: 0.0,
+        }],
+        ramps: vec![],
+    };
+    let mut s = SelfState::default_loadout();
+    s.position = Vec3::new(0.0, top, 0.0);
+    let dt = 1.0 / 60.0;
+    for _ in 0..20 {
+        s.apply_move_world(dt, 0.0, 0.0, false, &world);
+    }
+    assert!(s.is_grounded());
+    let mut left = false;
+    for _ in 0..120 {
+        s.apply_move_world(dt, 1.0, 0.0, false, &world);
+        if s.locomotion.is_air() {
+            left = true;
+            break;
+        }
+    }
+    assert!(left, "should walk off the +Z face");
+    assert!(
+        (s.air_vel_z - WALK_SPEED_M_S).abs() < 1e-3,
+        "leave-edge should carry walk speed, air_z={}",
+        s.air_vel_z
+    );
+    let z0 = s.position.z;
+    // A few air frames while still beside the tall box face.
+    let mut moved = 0.0_f32;
+    for _ in 0..10 {
+        let z_before = s.position.z;
+        s.apply_move_world(dt, 1.0, 0.0, false, &world);
+        moved += s.position.z - z_before;
+        assert!(s.locomotion.is_air());
+    }
+    assert!(
+        moved > WALK_SPEED_M_S * dt * 5.0,
+        "expected coast away from ledge, moved={moved} from z0={z0} to z={}",
+        s.position.z
+    );
+}
+
+#[test]
+fn jump_buffer_fires_on_land() {
+    let mut s = SelfState::default_loadout();
+    s.try_jump();
+    let dt = 1.0 / 120.0;
+    // Fall until near the ground with coyote already expired.
+    for _ in 0..400 {
+        s.apply_move(dt, 0.0, 0.0, false);
+        if s.position.y < 0.4 && s.velocity_y < 0.0 && s.coyote_s <= 1e-6 {
+            break;
+        }
+    }
+    assert!(s.locomotion.is_air());
+    assert!(s.coyote_s <= 1e-6);
+    s.try_jump();
+    assert!(s.jump_buffer_s > 0.0);
+
+    for _ in 0..60 {
+        s.apply_move(dt, 0.0, 0.0, false);
+        if (s.velocity_y - JUMP_LAUNCH_M_S).abs() < 1e-4 {
+            assert!(
+                s.position.y < 0.35,
+                "buffered jump should relaunch near the ground, y={}",
+                s.position.y
+            );
+            return;
+        }
+    }
+    panic!("expected buffered jump on land");
 }
 
 #[test]
@@ -684,6 +802,7 @@ fn step_up_onto_low_box_without_jump() {
         boxes: vec![MapBox {
             center: Vec3::new(0.0, top * 0.5, 2.0),
             half: Vec3::new(1.0, top * 0.5, 1.0),
+            yaw: 0.0,
         }],
         ramps: vec![],
     };
@@ -711,6 +830,7 @@ fn tall_box_blocks_without_jump() {
         boxes: vec![MapBox {
             center: Vec3::new(0.0, 0.6, 2.0),
             half: Vec3::new(1.0, 0.6, 1.0),
+            yaw: 0.0,
         }],
         ramps: vec![],
     };
@@ -734,6 +854,7 @@ fn jump_onto_mid_box_and_land_grounded() {
         boxes: vec![MapBox {
             center: Vec3::new(0.0, top * 0.5, 2.0),
             half: Vec3::new(1.5, top * 0.5, 1.5),
+            yaw: 0.0,
         }],
         ramps: vec![],
     };
@@ -768,6 +889,7 @@ fn walk_up_ramp_to_height() {
             half_x: 1.0,
             half_z: 2.0,
             height: 1.0,
+            base_y: 0.0,
             yaw: 0.0,
         }],
     };

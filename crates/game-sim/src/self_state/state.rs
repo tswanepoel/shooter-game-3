@@ -48,6 +48,10 @@ pub struct SelfState {
     /// Horizontal air velocity locked at jump (world XZ).
     pub air_vel_x: f32,
     pub air_vel_z: f32,
+    /// Remaining coyote grace after leaving support (seconds).
+    pub coyote_s: f32,
+    /// Remaining buffered jump press while airborne (seconds).
+    pub jump_buffer_s: f32,
 
     /// Hip fold (look-offset share + residual). Present maps onto kit torso.
     pub hip_fold: f32,
@@ -118,6 +122,8 @@ impl SelfState {
             velocity_y: 0.0,
             air_vel_x: 0.0,
             air_vel_z: 0.0,
+            coyote_s: 0.0,
+            jump_buffer_s: 0.0,
             hip_fold: 0.0,
             shoulder_fold: 0.0,
             shoulder_twist: 0.0,

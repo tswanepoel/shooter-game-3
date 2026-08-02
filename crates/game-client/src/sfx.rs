@@ -1,6 +1,8 @@
 //! Client one-shot SFX (Web Audio). Present only — not sim.
 
-use game_sim::{weapon_def, LocomotionMode, SeatCue, WeaponClass};
+#[cfg(test)]
+use game_sim::weapon_def;
+use game_sim::{LocomotionMode, SeatCue, WeaponClass};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::JsValue;
 use wasm_bindgen_futures::JsFuture;

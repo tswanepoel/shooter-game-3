@@ -29,12 +29,21 @@
     ],
     "ground_cargo": {
       "mesh": "lumber-cargo",
-      "beside_unit": 2,
+      "beside_unit": 1,
       "side_z": -2.4,
       "along_nudge": 0.0,
-      "yaw_nudge": 0.15,
+      "yaw_nudge": -0.22,
       "seat_y": -0.55,
       "scale": 2.0
+    },
+    "tractor": {
+      "mesh": "tractor",
+      "beside_unit": 2,
+      "side_z": -2.9,
+      "along_nudge": -2.2,
+      "yaw_nudge": 1.94,
+      "seat_y": 0.0,
+      "scale": 1.05
     }
   },
   "shipment_container": {

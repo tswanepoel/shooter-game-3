@@ -369,7 +369,7 @@ How far the [figure](#figure) is through its current [walk](#walk) or [sprint](#
 ### Jump
 
 The [figure](#figure) leaving the ground into [air](#air) with an upward velocity, then falling under gravity until it lands.  
-Starts only on the ground. Horizontal velocity at launch holds until land. [Look](#look) still turns. [Phase](#phase) freezes in [air](#air). Land restores [stand](#stand) or [walk](#walk) from [wish](#wish).
+Starts from support, with a short coyote grace after leaving the ground and a short press buffer that fires on the next land. Horizontal velocity at launch holds until land. [Look](#look) still turns. [Phase](#phase) freezes in [air](#air). Land restores [stand](#stand) or [walk](#walk) from [wish](#wish).
 
 ### Stopping
 

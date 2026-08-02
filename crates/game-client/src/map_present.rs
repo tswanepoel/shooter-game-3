@@ -1,4 +1,4 @@
-//! Cooked map load and draw (064 shipment container, 066 solids, 070/072/073 foot patches, 082 ground, 083 gravel, 084 cement, 085 grass, 086 container albedo, 087 closed door hardware, 088 lit map solids, 089 morning light, 090 rail corridor, 091 stationed train, 092 train collide, 093 parallel rail).
+//! Cooked map load and draw (064 shipment container, 066 solids, 070/072/073 foot patches, 082 ground, 083 gravel, 084 cement, 085 grass, 086 container albedo, 087 closed door hardware, 088 lit map solids, 089 morning light, 090 rail corridor, 091 stationed train, 092 train collide, 093 parallel rail, 094 yard tractor).
 
 #[cfg(target_arch = "wasm32")]
 use glam::Mat4;
@@ -268,12 +268,20 @@ struct FootPatch {
     center_z: f32,
     half_x: f32,
     half_z: f32,
+    /// XZ yaw; `0` = axis-aligned (map-def pads / rail strips).
+    yaw: f32,
     draw: bool,
 }
 
 impl FootPatch {
     fn contains(self, x: f32, z: f32) -> bool {
-        (x - self.center_x).abs() <= self.half_x && (z - self.center_z).abs() <= self.half_z
+        let dx = x - self.center_x;
+        let dz = z - self.center_z;
+        let (s, c) = self.yaw.sin_cos();
+        // Same local frame as `MapBox` (inverse of kit world_from_local).
+        let lx = c * dx - s * dz;
+        let lz = s * dx + c * dz;
+        lx.abs() <= self.half_x && lz.abs() <= self.half_z
     }
 }
 
@@ -348,6 +356,8 @@ struct TrainDef {
     units: Vec<String>,
     #[serde(default)]
     ground_cargo: Option<GroundCargoDef>,
+    #[serde(default)]
+    tractor: Option<TractorDef>,
 }
 
 /// Ground lumber pile beside the consist (091 pose; 092 half-buried jump pad).
@@ -365,20 +375,103 @@ struct GroundCargoDef {
     scale: f32,
 }
 
+/// Yard tractor beside the unload pile (094 parkour mid-step).
+#[derive(Debug, Deserialize)]
+struct TractorDef {
+    mesh: String,
+    beside_unit: usize,
+    side_z: f32,
+    #[serde(default)]
+    along_nudge: f32,
+    #[serde(default)]
+    yaw_nudge: f32,
+    seat_y: f32,
+    #[serde(default = "kit_scale_one")]
+    scale: f32,
+}
+
 /// Kit-space collide AABB for a rolling-stock stem (092; flatbed top = deck, not stakes).
+/// Tank mid seal band only — east/west domes are nose + rear ramps (**094**). Do **not** use Z
+/// here for consist packing; see [`train_unit_along_extent`].
 fn train_unit_collide_kit(stem: &str) -> ([f32; 3], [f32; 3]) {
     match stem {
         "train-locomotive-c" => ([-0.75, -0.36, -1.4], [0.68, 1.66, 1.4]),
         "train-carriage-flatbed" => ([-0.55, -0.36, -1.35], [0.55, 0.36, 1.35]),
         "train-carriage-lumber" => ([-0.55, -0.36, -1.35], [0.55, 0.92, 1.35]),
-        "train-carriage-tank" => ([-0.69, -0.36, -1.35], [0.69, 1.75, 1.35]),
+        "train-carriage-tank" => ([-0.69, -0.36, -0.08], [0.69, 1.55, 0.08]),
         _ => ([-0.55, -0.36, -1.35], [0.55, 0.36, 1.35]),
+    }
+}
+
+/// Along-track kit Z span for consist packing / draw roots (full car length).
+fn train_unit_along_extent(stem: &str) -> (f32, f32) {
+    match stem {
+        "train-locomotive-c" => (-1.4, 1.4),
+        _ => (-1.35, 1.35),
+    }
+}
+
+/// Elevated tank dome half: low at the tip, rises to mid-barrel (**094**).
+/// `east_half` — toward lumber (+kit Z); otherwise rear (−kit Z).
+fn tank_dome_ramp(
+    root: Vec3,
+    yaw: f32,
+    scale: f32,
+    seat_y: f32,
+    pad_z: f32,
+    east_half: bool,
+) -> MapRamp {
+    let scale = scale.max(1e-3);
+    let half = 0.675_f32;
+    let kit_z = if east_half {
+        half + pad_z * 0.5
+    } else {
+        -(half + pad_z * 0.5)
+    };
+    let (s, c) = yaw.sin_cos();
+    let lz = kit_z * scale;
+    let center_x = root.x + s * lz;
+    let center_z = root.z + c * lz;
+    let tip_y = 2.48;
+    let mid_y = seat_y + 1.55 * scale;
+    MapRamp {
+        center_x,
+        center_z,
+        half_x: 0.69 * scale,
+        half_z: (half + pad_z * 0.5) * scale,
+        height: (mid_y - tip_y).max(0.1),
+        base_y: tip_y,
+        // East: rise west (yaw+π). Rear: rise east (consist yaw).
+        yaw: if east_half {
+            yaw + std::f32::consts::PI
+        } else {
+            yaw
+        },
     }
 }
 
 /// Kit-space bounds for the stripped lumber pile (`lumber-cargo`, 092).
 fn lumber_cargo_collide_kit() -> ([f32; 3], [f32; 3]) {
     ([-0.48, 0.0, -1.25], [0.48, 0.554, 1.25])
+}
+
+/// Kit-space bounds for the yard tractor body / hood band (`tractor`, 094).
+fn tractor_collide_kit() -> ([f32; 3], [f32; 3]) {
+    ([-0.55, 0.0, -0.95], [0.55, 1.50, 0.95])
+}
+
+/// World root for a beside-unit yard prop (cargo / tractor).
+fn beside_unit_root(
+    train: &TrainDef,
+    roots: &[(f32, f32)],
+    beside_unit: usize,
+    along_nudge: f32,
+    side_z: f32,
+    seat_y: f32,
+) -> Option<Vec3> {
+    roots
+        .get(beside_unit)
+        .map(|&(unit_x, _)| Vec3::new(unit_x + along_nudge, seat_y, train.centerline_z + side_z))
 }
 
 /// Along-track kit origins (`x`) and lateral (`z`) for each unit — shared by draw and collide.
@@ -388,10 +481,7 @@ fn train_unit_roots(train: &TrainDef) -> Vec<(f32, f32)> {
     let extents: Vec<(f32, f32)> = train
         .units
         .iter()
-        .map(|stem| {
-            let (min, max) = train_unit_collide_kit(stem);
-            (min[2], max[2])
-        })
+        .map(|stem| train_unit_along_extent(stem))
         .collect();
     let mut total = gap * train.units.len().saturating_sub(1) as f32;
     for &(min_z, max_z) in &extents {
@@ -415,63 +505,84 @@ fn train_unit_roots(train: &TrainDef) -> Vec<(f32, f32)> {
     roots
 }
 
-/// Axis-aligned `MapBox` for a kit AABB after train yaw (+π/2 → kit +Z = world +X).
+/// Oriented `MapBox` from a kit AABB (half extents stay local; yaw is preserved).
 fn kit_map_box(root: Vec3, yaw: f32, scale: f32, min: [f32; 3], max: [f32; 3]) -> MapBox {
     let scale = scale.max(1e-3);
+    let local_center = Vec3::new(
+        (min[0] + max[0]) * 0.5 * scale,
+        (min[1] + max[1]) * 0.5 * scale,
+        (min[2] + max[2]) * 0.5 * scale,
+    );
+    let half = Vec3::new(
+        (max[0] - min[0]) * 0.5 * scale,
+        (max[1] - min[1]) * 0.5 * scale,
+        (max[2] - min[2]) * 0.5 * scale,
+    );
     let (s, c) = yaw.sin_cos();
-    let corners = [
-        [min[0], min[1], min[2]],
-        [min[0], min[1], max[2]],
-        [min[0], max[1], min[2]],
-        [min[0], max[1], max[2]],
-        [max[0], min[1], min[2]],
-        [max[0], min[1], max[2]],
-        [max[0], max[1], min[2]],
-        [max[0], max[1], max[2]],
-    ];
-    let mut wmin = Vec3::splat(f32::INFINITY);
-    let mut wmax = Vec3::splat(f32::NEG_INFINITY);
-    for p in corners {
-        let lx = p[0] * scale;
-        let ly = p[1] * scale;
-        let lz = p[2] * scale;
-        let world = root + Vec3::new(c * lx + s * lz, ly, -s * lx + c * lz);
-        wmin = wmin.min(world);
-        wmax = wmax.max(world);
-    }
-    MapBox {
-        center: (wmin + wmax) * 0.5,
-        half: (wmax - wmin) * 0.5,
-    }
+    let center = root
+        + Vec3::new(
+            c * local_center.x + s * local_center.z,
+            local_center.y,
+            -s * local_center.x + c * local_center.z,
+        );
+    MapBox { center, half, yaw }
 }
 
 fn train_collide_boxes(train: &TrainDef) -> Vec<MapBox> {
+    train_collide_solids(train).0
+}
+
+fn train_collide_solids(train: &TrainDef) -> (Vec<MapBox>, Vec<MapRamp>) {
     let scale = train.scale.max(1e-3);
     let roots = train_unit_roots(train);
     // Seal `unit_gap` — ground support is point-sampled.
     let pad_z = (train.unit_gap * 0.5 + 0.05) / scale;
-    let mut boxes = Vec::with_capacity(roots.len() + 1);
+    let mut boxes = Vec::with_capacity(
+        roots.len()
+            + usize::from(train.ground_cargo.is_some())
+            + usize::from(train.tractor.is_some()),
+    );
+    let mut ramps = Vec::new();
     for (stem, &(x, z)) in train.units.iter().zip(roots.iter()) {
+        let root = Vec3::new(x, train.seat_y, z);
+        if stem == "train-carriage-tank" {
+            let (min, max) = train_unit_collide_kit(stem);
+            boxes.push(kit_map_box(root, train.yaw, scale, min, max));
+            ramps.push(tank_dome_ramp(
+                root,
+                train.yaw,
+                scale,
+                train.seat_y,
+                pad_z,
+                true,
+            ));
+            ramps.push(tank_dome_ramp(
+                root,
+                train.yaw,
+                scale,
+                train.seat_y,
+                pad_z,
+                false,
+            ));
+            continue;
+        }
         let (min, max) = train_unit_collide_kit(stem);
         let min = [min[0], min[1], min[2] - pad_z];
         let max = [max[0], max[1], max[2] + pad_z];
-        boxes.push(kit_map_box(
-            Vec3::new(x, train.seat_y, z),
-            train.yaw,
-            scale,
-            min,
-            max,
-        ));
+        boxes.push(kit_map_box(root, train.yaw, scale, min, max));
     }
     if let Some(cargo) = &train.ground_cargo {
-        if let Some(&(unit_x, _)) = roots.get(cargo.beside_unit) {
+        if let Some(root) = beside_unit_root(
+            train,
+            &roots,
+            cargo.beside_unit,
+            cargo.along_nudge,
+            cargo.side_z,
+            cargo.seat_y,
+        ) {
             let (min, max) = lumber_cargo_collide_kit();
             boxes.push(kit_map_box(
-                Vec3::new(
-                    unit_x + cargo.along_nudge,
-                    cargo.seat_y,
-                    train.centerline_z + cargo.side_z,
-                ),
+                root,
                 train.yaw + cargo.yaw_nudge,
                 cargo.scale.max(1e-3),
                 min,
@@ -479,7 +590,26 @@ fn train_collide_boxes(train: &TrainDef) -> Vec<MapBox> {
             ));
         }
     }
-    boxes
+    if let Some(tractor) = &train.tractor {
+        if let Some(root) = beside_unit_root(
+            train,
+            &roots,
+            tractor.beside_unit,
+            tractor.along_nudge,
+            tractor.side_z,
+            tractor.seat_y,
+        ) {
+            let (min, max) = tractor_collide_kit();
+            boxes.push(kit_map_box(
+                root,
+                train.yaw + tractor.yaw_nudge,
+                tractor.scale.max(1e-3),
+                min,
+                max,
+            ));
+        }
+    }
+    (boxes, ramps)
 }
 
 fn kit_scale_one() -> f32 {
@@ -798,6 +928,15 @@ impl MapGpu {
                     );
                 }
             }
+            match upload_yard_tractor(&gpu, &pack, train) {
+                Ok(Some(tractor_batch)) => batches.push(tractor_batch),
+                Ok(None) => {}
+                Err(e) => {
+                    web_sys::console::warn_1(
+                        &format!("map: yard tractor unusable ({e}); skipping tractor").into(),
+                    );
+                }
+            }
         }
 
         Ok((
@@ -941,6 +1080,50 @@ fn upload_stationed_train(
     )
 }
 
+/// Park the yard tractor beside the unload pile (094); own car-kit colormap batch.
+#[cfg(target_arch = "wasm32")]
+fn upload_yard_tractor(
+    gpu: &mesh::UploadCtx<'_>,
+    pack: &pack::Pack,
+    train: &TrainDef,
+) -> Result<Option<mesh::MeshBatch>, String> {
+    let Some(tractor) = &train.tractor else {
+        return Ok(None);
+    };
+    let roots = train_unit_roots(train);
+    let Some(root_pos) = beside_unit_root(
+        train,
+        &roots,
+        tractor.beside_unit,
+        tractor.along_nudge,
+        tractor.side_z,
+        tractor.seat_y,
+    ) else {
+        return Err(format!(
+            "tractor.beside_unit {} out of range ({} units)",
+            tractor.beside_unit,
+            roots.len()
+        ));
+    };
+    let id = format!("{}.mesh", tractor.mesh);
+    let local = merge_kit_prims(mesh::extract_primitives(pack.get(&id)?)?);
+    let colormap = pack.get("car.colormap")?;
+    let root = kit_tr_s(
+        root_pos,
+        train.yaw + tractor.yaw_nudge,
+        tractor.scale.max(1e-3),
+    );
+    let color = local.2;
+    let merged = mesh::merge_transformed_prims(vec![(local, root)], color);
+    Ok(Some(mesh::upload_batch(
+        gpu,
+        colormap,
+        vec![merged],
+        Mat4::IDENTITY,
+        "map-a-yard-tractor",
+    )?))
+}
+
 #[cfg(target_arch = "wasm32")]
 fn merge_kit_prims(prims: Vec<mesh::CpuPrim>) -> mesh::CpuPrim {
     let color = prims.first().map(|p| p.2).unwrap_or([1.0, 1.0, 1.0, 1.0]);
@@ -1032,36 +1215,40 @@ fn map_world_from_def(def: &MapDef) -> MapWorld {
     let train_n = def
         .train
         .as_ref()
-        .map(|t| t.units.len() + usize::from(t.ground_cargo.is_some()))
+        .map(|t| {
+            t.units.len() + usize::from(t.ground_cargo.is_some()) + usize::from(t.tractor.is_some())
+        })
         .unwrap_or(0);
     let mut boxes = Vec::with_capacity(1 + def.boxes.len() + train_n);
+    let mut ramps = Vec::with_capacity(1 + usize::from(def.train.is_some()));
     boxes.push(MapBox {
         center: Vec3::from_array(def.shipment_container.position),
         half: Vec3::from_array(def.shipment_container.half_extents),
+        yaw: 0.0,
     });
     for b in &def.boxes {
         boxes.push(MapBox {
             center: Vec3::from_array(b.position),
             half: Vec3::from_array(b.half_extents),
+            yaw: 0.0,
         });
     }
     if let Some(train) = &def.train {
-        boxes.extend(train_collide_boxes(train));
+        let (train_boxes, train_ramps) = train_collide_solids(train);
+        boxes.extend(train_boxes);
+        ramps.extend(train_ramps);
     }
-    let ramps = def
-        .ramp
-        .as_ref()
-        .map(|r| {
-            vec![MapRamp {
-                center_x: r.position[0],
-                center_z: r.position[2],
-                half_x: r.half_extents[0],
-                half_z: r.half_extents[1],
-                height: r.height,
-                yaw: r.yaw,
-            }]
-        })
-        .unwrap_or_default();
+    if let Some(r) = &def.ramp {
+        ramps.push(MapRamp {
+            center_x: r.position[0],
+            center_z: r.position[2],
+            half_x: r.half_extents[0],
+            half_z: r.half_extents[1],
+            height: r.height,
+            base_y: 0.0,
+            yaw: r.yaw,
+        });
+    }
     MapWorld { boxes, ramps }
 }
 
@@ -1084,6 +1271,7 @@ fn foot_surfaces_from_def(def: &MapDef) -> Result<FootSurfaces, String> {
             center_z: p.position[2],
             half_x: p.half_extents[0],
             half_z: p.half_extents[1],
+            yaw: 0.0,
             draw: true,
         });
     }
@@ -1100,6 +1288,7 @@ fn foot_surfaces_from_def(def: &MapDef) -> Result<FootSurfaces, String> {
                 center_z,
                 half_x,
                 half_z,
+                yaw: 0.0,
                 draw: false,
             });
         }
@@ -1111,30 +1300,35 @@ fn foot_surfaces_from_def(def: &MapDef) -> Result<FootSurfaces, String> {
             if stem != "train-carriage-flatbed" {
                 continue;
             }
-            let b = boxes[i];
-            patches.push(FootPatch {
-                kind: FootKind::Steel,
-                center_x: b.center.x,
-                center_z: b.center.z,
-                half_x: b.half.x,
-                half_z: b.half.z,
-                draw: false,
-            });
+            patches.push(undrawn_foot_from_box(FootKind::Steel, boxes[i]));
         }
+        let mut prop_i = unit_n;
         if train.ground_cargo.is_some() {
-            if let Some(cargo_box) = boxes.get(unit_n) {
-                patches.push(FootPatch {
-                    kind: FootKind::Cement,
-                    center_x: cargo_box.center.x,
-                    center_z: cargo_box.center.z,
-                    half_x: cargo_box.half.x,
-                    half_z: cargo_box.half.z,
-                    draw: false,
-                });
+            if let Some(&cargo_box) = boxes.get(prop_i) {
+                patches.push(undrawn_foot_from_box(FootKind::Cement, cargo_box));
+            }
+            prop_i += 1;
+        }
+        if train.tractor.is_some() {
+            if let Some(&tractor_box) = boxes.get(prop_i) {
+                patches.push(undrawn_foot_from_box(FootKind::Steel, tractor_box));
             }
         }
     }
     Ok(FootSurfaces { patches })
+}
+
+/// Undrawn foot voice matching a (possibly yawed) collide box — oriented, not world-AABB.
+fn undrawn_foot_from_box(kind: FootKind, b: MapBox) -> FootPatch {
+    FootPatch {
+        kind,
+        center_x: b.center.x,
+        center_z: b.center.z,
+        half_x: b.half.x,
+        half_z: b.half.z,
+        yaw: b.yaw,
+        draw: false,
+    }
 }
 
 #[cfg(test)]
@@ -1182,7 +1376,17 @@ mod tests {
         );
         let cargo = train.ground_cargo.as_ref().expect("map a has ground cargo");
         assert_eq!(cargo.mesh, "lumber-cargo");
-        assert_eq!(cargo.beside_unit, 2);
+        assert_eq!(cargo.beside_unit, 1);
+        let tractor = train.tractor.as_ref().expect("map a has yard tractor");
+        assert_eq!(tractor.mesh, "tractor");
+        assert_eq!(tractor.beside_unit, 2);
+        let roots = train_unit_roots(train);
+        assert_eq!(roots.len(), 5);
+        // Full-length packing: tank stays west of lumber (not merged into it).
+        assert!(
+            roots[4].0 < roots[3].0 - 4.0,
+            "tank root must stay a full car west of lumber"
+        );
         let rail = def.rail.as_ref().expect("map a has rail");
         assert!((train.yaw - rail.yaw).abs() < 1e-5);
         assert!((train.centerline_z - rail.centerlines_z[0]).abs() < 1e-5);
@@ -1195,29 +1399,80 @@ mod tests {
         assert!((cargo.seat_y - (-0.55)).abs() < 1e-5);
         let world = map_world_from_def(&def);
         let train_boxes = train_collide_boxes(train);
-        assert_eq!(train_boxes.len(), train.units.len() + 1);
+        assert_eq!(train_boxes.len(), train.units.len() + 2);
         assert!(world.boxes.len() >= 1 + def.boxes.len() + train_boxes.len());
-        let cargo_box = train_boxes.last().copied().unwrap();
+        let cargo_box = train_boxes[train.units.len()];
+        let tractor_box = train_boxes[train.units.len() + 1];
         assert!(cargo_box.max_y() > 0.4 && cargo_box.max_y() < 0.7);
         assert!(cargo_box.min_y() < -0.4);
-        let flat_top = train_boxes[2].max_y();
+        let flat_top = train_boxes[1].max_y();
+        let lumber_top = train_boxes[3].max_y();
+        let tractor_top = tractor_box.max_y();
         assert!(flat_top > 1.0 && flat_top < 1.3);
         assert!(flat_top - cargo_box.max_y() < 1.1);
+        assert!(tractor_top > flat_top && tractor_top < lumber_top);
+        assert!(tractor_top - flat_top < 1.1);
+        assert!(lumber_top - tractor_top < 1.1);
+        assert!(tractor_box.center.z < cargo_box.center.z);
+        assert!(tractor_box.center.x < cargo_box.center.x);
+        assert!(cargo_box.yaw.abs() > 0.1);
+        // Local half stays tight; yaw must not inflate into a world AABB.
+        assert!(cargo_box.half.x < 1.1);
+        assert!(cargo_box.half.z > 2.0);
+        let (cmin_x, cmax_x, _cmin_z, cmax_z) = cargo_box.world_aabb_xz();
+        assert!(cmax_x - cmin_x > cargo_box.half.x * 2.0 + 0.2);
+        // World-AABB north tip is outside the oriented pile.
+        assert!(
+            (world.support_y(cargo_box.center.x, cmax_z - 0.05) - cargo_box.max_y()).abs() > 0.2
+        );
+        // Unit boxes seal along-track except lumber→tank (nose ramp fills that joint).
         for i in 0..train.units.len() - 1 {
+            if train.units[i + 1] == "train-carriage-tank" {
+                continue;
+            }
             let a = train_boxes[i];
             let b = train_boxes[i + 1];
-            let a_min_x = a.center.x - a.half.x;
-            let a_max_x = a.center.x + a.half.x;
-            let b_min_x = b.center.x - b.half.x;
-            let b_max_x = b.center.x + b.half.x;
+            let (a_min_x, a_max_x, _, _) = a.world_aabb_xz();
+            let (b_min_x, b_max_x, _, _) = b.world_aabb_xz();
             assert!(a_min_x <= b_max_x + 1e-3 && b_min_x <= a_max_x + 1e-3);
         }
+        let (_boxes, train_ramps) = train_collide_solids(train);
+        assert_eq!(train_ramps.len(), 2, "tank nose + rear ramps");
+        let nose = train_ramps[0];
+        let rear = train_ramps[1];
+        assert!(nose.base_y > lumber_top && nose.base_y - lumber_top < 1.1);
+        assert!((rear.base_y - nose.base_y).abs() < 1e-3);
+        // Nose: yaw=consist+π → local −Z is east (lumber) = low end.
+        let nose_east = nose.center_x + nose.half_z;
+        let nose_mid = nose.center_x - nose.half_z;
+        let nose_y = world.support_y(nose_east, train.centerline_z);
+        let nose_mid_y = world.support_y(nose_mid, train.centerline_z);
+        assert!((nose_y - nose.base_y).abs() < 0.05);
+        assert!(nose_mid_y > nose_y + 0.5);
+        // Rear: consist yaw → local −Z is west tip = low end.
+        let rear_west = rear.center_x - rear.half_z;
+        let rear_mid = rear.center_x + rear.half_z;
+        let rear_y = world.support_y(rear_west, train.centerline_z);
+        let rear_mid_y = world.support_y(rear_mid, train.centerline_z);
+        assert!((rear_y - rear.base_y).abs() < 0.05);
+        assert!(rear_mid_y > rear_y + 0.5);
         let feet = foot_surfaces_from_def(&def).unwrap();
         assert_eq!(
             feet.at(cargo_box.center.x, cargo_box.center.z),
             FootKind::Cement
         );
-        let flat = &train_boxes[2];
+        assert_eq!(
+            feet.at(tractor_box.center.x, tractor_box.center.z),
+            FootKind::Steel
+        );
+        // World-AABB corners of a yawed tractor must not voice steel on gravel.
+        let (_tmin_x, tmax_x, _tmin_z, tmax_z) = tractor_box.world_aabb_xz();
+        assert_ne!(
+            feet.at(tmax_x - 0.05, tmax_z - 0.05),
+            FootKind::Steel,
+            "tractor foot patch must be oriented, not world-AABB"
+        );
+        let flat = &train_boxes[1];
         assert_eq!(feet.at(flat.center.x, flat.center.z), FootKind::Steel);
     }
 
@@ -1230,6 +1485,7 @@ mod tests {
                 center_z: 0.0,
                 half_x: 1.0,
                 half_z: 1.0,
+                yaw: 0.0,
                 draw: true,
             }],
         };
