@@ -16,6 +16,7 @@ Depends on **091** (consist + ground cargo pose), **066** (map solids), **090** 
 | Train collide | One AABB per unit + the ground cargo; flatbed tops are **deck** height (not stake tips) so a cargo jump can land |
 | Escape beat | Ground → jump onto logs → jump onto mid empty flatbed; walking through the consist is blocked |
 | Jump | Peak **1.1 m** so a ground hop misses the flatbed deck (~1.12 m); cargo top still clears |
+| Foot SFX | Rail corridor strip → **cement**; empty flatbed decks → **steel**; ground lumber → **cement** (timber stand-in); SFX-only, no pads drawn |
 | Rail | Still present-only (unchanged from **090**) |
 
 ## Collide volumes
@@ -41,6 +42,7 @@ Layout truth stays the map def (`train.*` / `ground_cargo.*`). Present does not 
 ## Acceptance
 
 - Figures cannot walk through the stationed train or the ground lumber pile.
+- Rail corridor plants voice **cement**; empty flatbeds **steel**; ground lumber **cement**.
 - Ground cargo reads as a half-buried top layer; its top is standable.
 - From that top, a normal jump can reach a mid empty flatbed deck; flatbed stakes do not define support height.
 - Loco / tank / lumber car remain tall blocks (not the intended on-foot crossing).

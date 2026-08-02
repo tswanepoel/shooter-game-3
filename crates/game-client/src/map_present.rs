@@ -245,6 +245,7 @@ pub enum FootKind {
     Cement,
     WetCement,
     Grass,
+    Steel,
 }
 
 impl FootKind {
@@ -255,6 +256,7 @@ impl FootKind {
             Self::Cement => [1.0, 1.0, 1.0, 1.0],
             Self::WetCement => [0.42, 0.48, 0.52, 1.0],
             Self::Grass => [1.0, 1.0, 1.0, 1.0],
+            Self::Steel => [1.0, 1.0, 1.0, 1.0],
         }
     }
 }
@@ -266,6 +268,7 @@ struct FootPatch {
     center_z: f32,
     half_x: f32,
     half_z: f32,
+    draw: bool,
 }
 
 impl FootPatch {
@@ -274,7 +277,7 @@ impl FootPatch {
     }
 }
 
-/// Present-only foot surface patches (`gravel` / `cement` / `wet_cement` / `grass`). Outside → gravel.
+/// Present-only foot surface patches (`gravel` / `cement` / `wet_cement` / `grass` / `steel`). Outside → gravel.
 #[derive(Clone, Debug, Default)]
 pub struct FootSurfaces {
     patches: Vec<FootPatch>,
@@ -444,7 +447,7 @@ fn kit_map_box(root: Vec3, yaw: f32, scale: f32, min: [f32; 3], max: [f32; 3]) -
 fn train_collide_boxes(train: &TrainDef) -> Vec<MapBox> {
     let scale = train.scale.max(1e-3);
     let roots = train_unit_roots(train);
-    // Ground probes are point-sampled (066); seal visual `unit_gap` so bodies don't slip between cars.
+    // Seal `unit_gap` — ground support is point-sampled.
     let pad_z = (train.unit_gap * 0.5 + 0.05) / scale;
     let mut boxes = Vec::with_capacity(roots.len() + 1);
     for (stem, &(x, z)) in train.units.iter().zip(roots.iter()) {
@@ -593,6 +596,9 @@ impl MapGpu {
         // Pads sit on the ground top to avoid z-fight with the gravel slab.
         let pad_center_y = FOOT_PATCH_HALF_Y * 3.0;
         for (i, p) in feet.patches.iter().enumerate() {
+            if !p.draw {
+                continue;
+            }
             let color = p.kind.albedo();
             let half = Vec3::new(p.half_x, FOOT_PATCH_HALF_Y, p.half_z);
             let root = Mat4::from_translation(Vec3::new(p.center_x, pad_center_y, p.center_z));
@@ -1052,13 +1058,14 @@ fn map_world_from_def(def: &MapDef) -> MapWorld {
 }
 
 fn foot_surfaces_from_def(def: &MapDef) -> Result<FootSurfaces, String> {
-    let mut patches = Vec::with_capacity(def.foot_patches.len());
+    let mut patches = Vec::with_capacity(def.foot_patches.len() + 1);
     for p in &def.foot_patches {
         let kind = match p.kind.as_str() {
             "gravel" => FootKind::Gravel,
             "cement" => FootKind::Cement,
             "wet_cement" => FootKind::WetCement,
             "grass" => FootKind::Grass,
+            "steel" => FootKind::Steel,
             other => {
                 return Err(format!("map-a.def foot_patch kind: unknown {other:?}"));
             }
@@ -1069,7 +1076,51 @@ fn foot_surfaces_from_def(def: &MapDef) -> Result<FootSurfaces, String> {
             center_z: p.position[2],
             half_x: p.half_extents[0],
             half_z: p.half_extents[1],
+            draw: true,
         });
+    }
+    // Rail / train foot voices (undrawn). Later patches win.
+    if let Some(rail) = &def.rail {
+        let span = (rail.x_max - rail.x_min).max(0.0);
+        let half_z = 0.5 * rail.scale.max(1e-3);
+        patches.push(FootPatch {
+            kind: FootKind::Cement,
+            center_x: rail.x_min + span * 0.5,
+            center_z: rail.centerline_z,
+            half_x: span * 0.5,
+            half_z,
+            draw: false,
+        });
+    }
+    if let Some(train) = &def.train {
+        let boxes = train_collide_boxes(train);
+        let unit_n = train.units.len();
+        for (i, stem) in train.units.iter().enumerate() {
+            if stem != "train-carriage-flatbed" {
+                continue;
+            }
+            let b = boxes[i];
+            patches.push(FootPatch {
+                kind: FootKind::Steel,
+                center_x: b.center.x,
+                center_z: b.center.z,
+                half_x: b.half.x,
+                half_z: b.half.z,
+                draw: false,
+            });
+        }
+        if train.ground_cargo.is_some() {
+            if let Some(cargo_box) = boxes.get(unit_n) {
+                patches.push(FootPatch {
+                    kind: FootKind::Cement,
+                    center_x: cargo_box.center.x,
+                    center_z: cargo_box.center.z,
+                    half_x: cargo_box.half.x,
+                    half_z: cargo_box.half.z,
+                    draw: false,
+                });
+            }
+        }
     }
     Ok(FootSurfaces { patches })
 }
@@ -1082,7 +1133,7 @@ mod tests {
     fn map_a_rail_deserializes() {
         let json = include_str!("../../../assets/source/map-a.json");
         let def: MapDef = serde_json::from_str(json).unwrap();
-        let rail = def.rail.expect("map a has rail");
+        let rail = def.rail.as_ref().expect("map a has rail");
         assert!((rail.centerline_z - (-8.0)).abs() < 1e-5);
         assert!((def.ground.half_extents[0] - 24.0).abs() < 1e-5);
         assert!((def.ground.half_extents[1] - 24.0).abs() < 1e-5);
@@ -1093,6 +1144,8 @@ mod tests {
         for p in &def.foot_patches {
             assert!(p.position[2] - p.half_extents[1] > -8.0);
         }
+        let feet = foot_surfaces_from_def(&def).unwrap();
+        assert_eq!(feet.at(18.0, -8.0), FootKind::Cement);
     }
 
     #[test]
@@ -1135,7 +1188,6 @@ mod tests {
         let flat_top = train_boxes[2].max_y();
         assert!(flat_top > 1.0 && flat_top < 1.3);
         assert!(flat_top - cargo_box.max_y() < 1.1);
-        // Adjacent unit boxes overlap / meet along X (gap sealed).
         for i in 0..train.units.len() - 1 {
             let a = train_boxes[i];
             let b = train_boxes[i + 1];
@@ -1145,6 +1197,13 @@ mod tests {
             let b_max_x = b.center.x + b.half.x;
             assert!(a_min_x <= b_max_x + 1e-3 && b_min_x <= a_max_x + 1e-3);
         }
+        let feet = foot_surfaces_from_def(&def).unwrap();
+        assert_eq!(
+            feet.at(cargo_box.center.x, cargo_box.center.z),
+            FootKind::Cement
+        );
+        let flat = &train_boxes[2];
+        assert_eq!(feet.at(flat.center.x, flat.center.z), FootKind::Steel);
     }
 
     #[test]
@@ -1156,6 +1215,7 @@ mod tests {
                 center_z: 0.0,
                 half_x: 1.0,
                 half_z: 1.0,
+                draw: true,
             }],
         };
         assert_eq!(feet.at(0.0, 0.0), FootKind::Cement);

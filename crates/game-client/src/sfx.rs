@@ -14,8 +14,8 @@ const BANG_GAIN: f32 = 0.55;
 const HIT_GAIN: f32 = 1.6;
 /// Hit click is ~40 ms; nudge it past the bang attack so it is not masked.
 const HIT_OFFSET_S: f64 = 0.04;
-const WALK_STEP_GAIN: f32 = 0.12;
-const SPRINT_STEP_GAIN: f32 = 0.28;
+const WALK_STEP_GAIN: f32 = 0.10;
+const SPRINT_STEP_GAIN: f32 = 0.36;
 const LAND_STEP_GAIN: f32 = 0.2;
 /// Second sole on jump/fall land — parallel plant, randomized stagger.
 const LAND_STEP_OFFSET_MIN_S: f64 = 0.015;
@@ -33,11 +33,13 @@ pub struct Sfx {
     cement_steps: [AudioBuffer; 3],
     wet_cement_steps: [AudioBuffer; 3],
     grass_steps: [AudioBuffer; 3],
+    steel_steps: [AudioBuffer; 3],
     foot_prev: Option<f32>,
     last_gravel: u8,
     last_cement: u8,
     last_wet_cement: u8,
     last_grass: u8,
+    last_steel: u8,
     was_air: bool,
 }
 
@@ -82,6 +84,11 @@ impl Sfx {
             load_wav(&ctx, &pack, "grass-step-b.wav").await?,
             load_wav(&ctx, &pack, "grass-step-c.wav").await?,
         ];
+        let steel_steps = [
+            load_wav(&ctx, &pack, "steel-step-a.wav").await?,
+            load_wav(&ctx, &pack, "steel-step-b.wav").await?,
+            load_wav(&ctx, &pack, "steel-step-c.wav").await?,
+        ];
         Ok(Self {
             ctx,
             bangs,
@@ -94,11 +101,13 @@ impl Sfx {
             cement_steps,
             wet_cement_steps,
             grass_steps,
+            steel_steps,
             foot_prev: None,
             last_gravel: 0,
             last_cement: 0,
             last_wet_cement: 0,
             last_grass: 0,
+            last_steel: 0,
             was_air: false,
         })
     }
@@ -187,6 +196,10 @@ impl Sfx {
             FootKind::Grass => {
                 let idx = pick_variant(self.grass_steps.len() as u8, &mut self.last_grass);
                 self.play_buf(&self.grass_steps[idx as usize], gain, when_s);
+            }
+            FootKind::Steel => {
+                let idx = pick_variant(self.steel_steps.len() as u8, &mut self.last_steel);
+                self.play_buf(&self.steel_steps[idx as usize], gain, when_s);
             }
         }
     }

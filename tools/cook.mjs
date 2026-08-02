@@ -196,6 +196,9 @@ const PACKS = [
         wav('wet-cement-step-a.wav'),
         wav('wet-cement-step-b.wav'),
         wav('wet-cement-step-c.wav'),
+        wav('steel-step-a.wav'),
+        wav('steel-step-b.wav'),
+        wav('steel-step-c.wav'),
       ];
     },
   },
