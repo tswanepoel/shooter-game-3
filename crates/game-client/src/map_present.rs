@@ -58,8 +58,8 @@ const CONTAINER_FRONT_PIN_R: f32 = 0.025;
 /// Pin on frame inside-edge X (matches closed-end cylinders).
 const CONTAINER_FRONT_PIN_X_INSET: f32 = 0.010;
 /// Asymmetric open (outward). Left wide, right ajar.
-const CONTAINER_LEFT_DOOR_OPEN_RAD: f32 = 1.85; // ~106°
-const CONTAINER_RIGHT_DOOR_OPEN_RAD: f32 = 0.30; // ~17°
+const CONTAINER_LEFT_DOOR_OPEN_RAD: f32 = 0.30; // ~17°
+const CONTAINER_RIGHT_DOOR_OPEN_RAD: f32 = 1.85; // ~106°
 /// Hinge door-strap half-thickness (095 bar).
 const CONTAINER_HINGE_STRAP_HZ: f32 = 0.006;
 /// Strap along door face: half-length, half-Y at pin, half-Y at tip (tapers away from pin).
@@ -69,8 +69,28 @@ const CONTAINER_HINGE_STRAP_HALF_Y_TIP: f32 = 0.035;
 /// Pin barrel half-height — matches strap width at the pin.
 const CONTAINER_HINGE_PIN_HALF_Y: f32 = CONTAINER_HINGE_STRAP_HALF_Y_PIN;
 const CONTAINER_FRAME_COLOR: [f32; 4] = [0.39, 0.17, 0.14, 1.0];
+const CONTAINER_FRAME_COLOR_GREEN: [f32; 4] = [0.24, 0.38, 0.27, 1.0];
 const CONTAINER_GASKET_COLOR: [f32; 4] = [0.025, 0.028, 0.026, 1.0];
 const CONTAINER_HARDWARE_COLOR: [f32; 4] = [0.42, 0.44, 0.41, 1.0];
+
+fn paint_red() -> String {
+    "red".into()
+}
+
+/// Side / door pack ids for a container paint (`red` default, `green`).
+fn container_albedo_ids(paint: &str) -> (&'static str, &'static str) {
+    match paint {
+        "green" => ("container-side-green.albedo", "container-door-green.albedo"),
+        _ => ("container-side-red.albedo", "container-door-red.albedo"),
+    }
+}
+
+fn container_frame_paint(paint: &str) -> [f32; 4] {
+    match paint {
+        "green" => CONTAINER_FRAME_COLOR_GREEN,
+        _ => CONTAINER_FRAME_COLOR,
+    }
+}
 
 /// Swivel pin XZ — rests on the Front frame outer face, on the inside edge.
 fn front_hinge_pin_xz(half: Vec3, side: f32) -> (f32, f32) {
@@ -150,64 +170,73 @@ fn rear_leaf_poses(half: Vec3) -> [FrontLeafPose; 2] {
 }
 
 /// Open-door shell volumes from the map-def outer AABB (095). Floor first.
-fn shipment_container_shell(center: Vec3, half: Vec3) -> Vec<MapBox> {
+fn shipment_container_shell(center: Vec3, half: Vec3, yaw: f32) -> Vec<MapBox> {
     let t = CONTAINER_SHELL_T;
+    let place = |local: Vec3, box_half: Vec3, local_yaw: f32| {
+        let (s, c) = yaw.sin_cos();
+        MapBox {
+            center: center
+                + Vec3::new(
+                    c * local.x + s * local.z,
+                    local.y,
+                    -s * local.x + c * local.z,
+                ),
+            half: box_half,
+            yaw: yaw + local_yaw,
+        }
+    };
     let mut out = Vec::with_capacity(11);
-    out.push(MapBox {
-        center: Vec3::new(center.x, center.y - half.y + t * 0.5, center.z),
-        half: Vec3::new(half.x, t * 0.5, half.z),
-        yaw: 0.0,
-    });
-    out.push(MapBox {
-        center: Vec3::new(center.x, center.y + half.y - t * 0.5, center.z),
-        half: Vec3::new(half.x, t * 0.5, half.z),
-        yaw: 0.0,
-    });
-    out.push(MapBox {
-        center: Vec3::new(center.x - half.x + t * 0.5, center.y, center.z),
-        half: Vec3::new(t * 0.5, half.y, half.z),
-        yaw: 0.0,
-    });
-    out.push(MapBox {
-        center: Vec3::new(center.x + half.x - t * 0.5, center.y, center.z),
-        half: Vec3::new(t * 0.5, half.y, half.z),
-        yaw: 0.0,
-    });
+    out.push(place(
+        Vec3::new(0.0, -half.y + t * 0.5, 0.0),
+        Vec3::new(half.x, t * 0.5, half.z),
+        0.0,
+    ));
+    out.push(place(
+        Vec3::new(0.0, half.y - t * 0.5, 0.0),
+        Vec3::new(half.x, t * 0.5, half.z),
+        0.0,
+    ));
+    out.push(place(
+        Vec3::new(-half.x + t * 0.5, 0.0, 0.0),
+        Vec3::new(t * 0.5, half.y, half.z),
+        0.0,
+    ));
+    out.push(place(
+        Vec3::new(half.x - t * 0.5, 0.0, 0.0),
+        Vec3::new(t * 0.5, half.y, half.z),
+        0.0,
+    ));
     // Closed rear (+Z).
-    out.push(MapBox {
-        center: Vec3::new(center.x, center.y, center.z + half.z - t * 0.5),
-        half: Vec3::new(half.x, half.y, t * 0.5),
-        yaw: 0.0,
-    });
+    out.push(place(
+        Vec3::new(0.0, 0.0, half.z - t * 0.5),
+        Vec3::new(half.x, half.y, t * 0.5),
+        0.0,
+    ));
     let jamb = t * 0.5;
-    let mouth_z = center.z - half.z + t * 0.5;
+    let mouth_z = -half.z + t * 0.5;
     // Front jambs / header / sill (−Z mouth).
-    out.push(MapBox {
-        center: Vec3::new(center.x - half.x + t + jamb, center.y, mouth_z),
-        half: Vec3::new(jamb, half.y - t, t * 0.5),
-        yaw: 0.0,
-    });
-    out.push(MapBox {
-        center: Vec3::new(center.x + half.x - t - jamb, center.y, mouth_z),
-        half: Vec3::new(jamb, half.y - t, t * 0.5),
-        yaw: 0.0,
-    });
-    out.push(MapBox {
-        center: Vec3::new(center.x, center.y + half.y - t * 0.5, mouth_z),
-        half: Vec3::new(half.x - t, t * 0.5, t * 0.5),
-        yaw: 0.0,
-    });
-    out.push(MapBox {
-        center: Vec3::new(center.x, center.y - half.y + t * 0.5, mouth_z),
-        half: Vec3::new(half.x - t, t * 0.5, t * 0.5),
-        yaw: 0.0,
-    });
+    out.push(place(
+        Vec3::new(-half.x + t + jamb, 0.0, mouth_z),
+        Vec3::new(jamb, half.y - t, t * 0.5),
+        0.0,
+    ));
+    out.push(place(
+        Vec3::new(half.x - t - jamb, 0.0, mouth_z),
+        Vec3::new(jamb, half.y - t, t * 0.5),
+        0.0,
+    ));
+    out.push(place(
+        Vec3::new(0.0, half.y - t * 0.5, mouth_z),
+        Vec3::new(half.x - t, t * 0.5, t * 0.5),
+        0.0,
+    ));
+    out.push(place(
+        Vec3::new(0.0, -half.y + t * 0.5, mouth_z),
+        Vec3::new(half.x - t, t * 0.5, t * 0.5),
+        0.0,
+    ));
     for leaf in front_leaf_poses(half) {
-        out.push(MapBox {
-            center: center + leaf.center,
-            half: leaf.half,
-            yaw: leaf.yaw,
-        });
+        out.push(place(leaf.center, leaf.half, leaf.yaw));
     }
     out
 }
@@ -610,7 +639,8 @@ struct MapDef {
     rail: Option<RailDef>,
     #[serde(default)]
     train: Option<TrainDef>,
-    shipment_container: SolidBoxDef,
+    #[serde(default)]
+    shipment_containers: Vec<SolidBoxDef>,
     #[serde(default)]
     boxes: Vec<SolidBoxDef>,
     #[serde(default)]
@@ -923,6 +953,12 @@ struct GroundDef {
 struct SolidBoxDef {
     position: [f32; 3],
     half_extents: [f32; 3],
+    /// Container paint grade: `red` (default) or `green` — selects side/door albedos.
+    #[serde(default = "paint_red")]
+    paint: String,
+    /// Yaw about +Y (radians). Positive = CCW from above.
+    #[serde(default)]
+    yaw: f32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1079,150 +1115,175 @@ impl MapGpu {
             batches.push(batch);
         }
 
-        let half = Vec3::from_array(def.shipment_container.half_extents);
-        let root = Mat4::from_translation(Vec3::from_array(def.shipment_container.position));
-        let container_tint = [1.0, 1.0, 1.0, 1.0];
-        let side_metres_per_tile = half.y * 2.0 / CONTAINER_SIDE_TILES_HIGH;
-        let upload_container_part = |albedo_id: &str,
-                                     group: mesh::BoxFaceGroup,
-                                     metres_per_tile: f32,
-                                     uv_layout: SolidUvLayout,
-                                     label: &str|
-         -> Result<_, String> {
-            let png = pack.get(albedo_id)?;
-            mesh::upload_textured_solid_batch(
-                &gpu,
-                png,
-                mesh::box_face_group_prim(half, container_tint, Some(group)),
-                root,
-                container_tint,
-                metres_per_tile,
-                uv_layout,
-                mesh::SolidShading::Lit,
-                label,
-            )
-        };
-        // Open Front mouth (095); rear is flush door leaves.
-        let sides = upload_container_part(
-            "container-side.albedo",
-            mesh::BoxFaceGroup::Sides,
-            side_metres_per_tile,
-            SolidUvLayout::BoxFace,
-            "map-a-shipment-container-sides",
-        );
-        let lids = upload_container_part(
-            "container-side.albedo",
-            mesh::BoxFaceGroup::Lids,
-            side_metres_per_tile,
-            SolidUvLayout::BoxFace,
-            "map-a-shipment-container-lids",
-        );
-        match (sides, lids) {
-            (Ok(sides), Ok(lids)) => {
-                batches.push(sides);
-                batches.push(lids);
-                if let Ok(side_png) = pack.get("container-side.albedo") {
+        for (ci, container) in def.shipment_containers.iter().enumerate() {
+            let half = Vec3::from_array(container.half_extents);
+            let root = Mat4::from_translation(Vec3::from_array(container.position))
+                * Mat4::from_rotation_y(container.yaw);
+            let container_tint = [1.0, 1.0, 1.0, 1.0];
+            let (side_albedo, door_albedo) = container_albedo_ids(&container.paint);
+            let frame_paint = container_frame_paint(&container.paint);
+            let side_metres_per_tile = half.y * 2.0 / CONTAINER_SIDE_TILES_HIGH;
+            let upload_container_part = |albedo_id: &str,
+                                         group: mesh::BoxFaceGroup,
+                                         metres_per_tile: f32,
+                                         uv_layout: SolidUvLayout,
+                                         label: &str|
+             -> Result<_, String> {
+                let png = pack.get(albedo_id)?;
+                mesh::upload_textured_solid_batch(
+                    &gpu,
+                    png,
+                    mesh::box_face_group_prim(half, container_tint, Some(group)),
+                    root,
+                    container_tint,
+                    metres_per_tile,
+                    uv_layout,
+                    mesh::SolidShading::Lit,
+                    label,
+                )
+            };
+            // Open Front mouth (095); rear is flush door leaves.
+            let sides = upload_container_part(
+                side_albedo,
+                mesh::BoxFaceGroup::Sides,
+                side_metres_per_tile,
+                SolidUvLayout::BoxFace,
+                &format!("map-a-shipment-container-{ci}-sides"),
+            );
+            let lids = upload_container_part(
+                side_albedo,
+                mesh::BoxFaceGroup::Lids,
+                side_metres_per_tile,
+                SolidUvLayout::BoxFace,
+                &format!("map-a-shipment-container-{ci}-lids"),
+            );
+            match (sides, lids) {
+                (Ok(sides), Ok(lids)) => {
+                    batches.push(sides);
+                    batches.push(lids);
+                    if let Ok(side_png) = pack.get(side_albedo) {
+                        let (floor_prim, floor_local) = container_interior_floor(half);
+                        match mesh::upload_textured_solid_batch(
+                            &gpu,
+                            side_png,
+                            floor_prim,
+                            root * floor_local,
+                            container_tint,
+                            side_metres_per_tile,
+                            SolidUvLayout::BoxFace,
+                            mesh::SolidShading::Lit,
+                            &format!("map-a-shipment-container-{ci}-floor"),
+                        ) {
+                            Ok(batch) => batches.push(batch),
+                            Err(e) => web_sys::console::warn_1(
+                                &format!("map: container {ci} floor unusable ({e})").into(),
+                            ),
+                        }
+                    }
+                    if let Ok(door_png) = pack.get(door_albedo) {
+                        for (i, (prim, local)) in
+                            container_closed_rear_leaves(half).into_iter().enumerate()
+                        {
+                            match mesh::upload_textured_solid_batch(
+                                &gpu,
+                                door_png,
+                                prim,
+                                root * local,
+                                container_tint,
+                                1.0,
+                                SolidUvLayout::RearDoors,
+                                mesh::SolidShading::Lit,
+                                &format!("map-a-shipment-container-{ci}-rear-leaf-{i}"),
+                            ) {
+                                Ok(batch) => batches.push(batch),
+                                Err(e) => web_sys::console::warn_1(
+                                    &format!("map: container {ci} rear door leaf unusable ({e})")
+                                        .into(),
+                                ),
+                            }
+                        }
+                        for (i, (prim, local)) in
+                            container_open_front_leaves(half).into_iter().enumerate()
+                        {
+                            match mesh::upload_textured_solid_batch(
+                                &gpu,
+                                door_png,
+                                prim,
+                                root * local,
+                                container_tint,
+                                1.0,
+                                SolidUvLayout::RearDoors,
+                                mesh::SolidShading::Lit,
+                                &format!("map-a-shipment-container-{ci}-open-leaf-{i}"),
+                            ) {
+                                Ok(batch) => batches.push(batch),
+                                Err(e) => web_sys::console::warn_1(
+                                    &format!("map: container {ci} open door leaf unusable ({e})")
+                                        .into(),
+                                ),
+                            }
+                        }
+                    }
+                }
+                (s, l) => {
+                    let err = s
+                        .err()
+                        .or(l.err())
+                        .unwrap_or_else(|| "container albedo".into());
+                    web_sys::console::warn_1(
+                        &format!("map: container {ci} albedo unusable ({err}); flat container")
+                            .into(),
+                    );
+                    for group in [mesh::BoxFaceGroup::Sides, mesh::BoxFaceGroup::Lids] {
+                        batches.push(
+                            mesh::upload_solid_batch(
+                                &gpu,
+                                mesh::box_face_group_prim(
+                                    half,
+                                    CONTAINER_FALLBACK_COLOR,
+                                    Some(group),
+                                ),
+                                root,
+                                CONTAINER_FALLBACK_COLOR,
+                                mesh::SolidShading::Lit,
+                                &format!("map-a-shipment-container-{ci}"),
+                            )
+                            .map_err(|e| JsValue::from_str(&e))?,
+                        );
+                    }
                     let (floor_prim, floor_local) = container_interior_floor(half);
-                    match mesh::upload_textured_solid_batch(
-                        &gpu,
-                        side_png,
-                        floor_prim,
-                        root * floor_local,
-                        container_tint,
-                        side_metres_per_tile,
-                        SolidUvLayout::BoxFace,
-                        mesh::SolidShading::Lit,
-                        "map-a-shipment-container-floor",
-                    ) {
-                        Ok(batch) => batches.push(batch),
-                        Err(e) => web_sys::console::warn_1(
-                            &format!("map: container floor unusable ({e})").into(),
-                        ),
-                    }
-                }
-                if let Ok(door_png) = pack.get("container-door.albedo") {
-                    for (i, (prim, local)) in
-                        container_closed_rear_leaves(half).into_iter().enumerate()
-                    {
-                        match mesh::upload_textured_solid_batch(
-                            &gpu,
-                            door_png,
-                            prim,
-                            root * local,
-                            container_tint,
-                            1.0,
-                            SolidUvLayout::RearDoors,
-                            mesh::SolidShading::Lit,
-                            &format!("map-a-shipment-container-rear-leaf-{i}"),
-                        ) {
-                            Ok(batch) => batches.push(batch),
-                            Err(e) => web_sys::console::warn_1(
-                                &format!("map: rear door leaf unusable ({e})").into(),
-                            ),
-                        }
-                    }
-                    for (i, (prim, local)) in
-                        container_open_front_leaves(half).into_iter().enumerate()
-                    {
-                        match mesh::upload_textured_solid_batch(
-                            &gpu,
-                            door_png,
-                            prim,
-                            root * local,
-                            container_tint,
-                            1.0,
-                            SolidUvLayout::RearDoors,
-                            mesh::SolidShading::Lit,
-                            &format!("map-a-shipment-container-open-leaf-{i}"),
-                        ) {
-                            Ok(batch) => batches.push(batch),
-                            Err(e) => web_sys::console::warn_1(
-                                &format!("map: open door leaf unusable ({e})").into(),
-                            ),
-                        }
-                    }
-                }
-            }
-            (s, l) => {
-                let err = s
-                    .err()
-                    .or(l.err())
-                    .unwrap_or_else(|| "container albedo".into());
-                web_sys::console::warn_1(
-                    &format!("map: container albedo unusable ({err}); flat container").into(),
-                );
-                for group in [mesh::BoxFaceGroup::Sides, mesh::BoxFaceGroup::Lids] {
                     batches.push(
                         mesh::upload_solid_batch(
                             &gpu,
-                            mesh::box_face_group_prim(half, CONTAINER_FALLBACK_COLOR, Some(group)),
-                            root,
+                            floor_prim,
+                            root * floor_local,
                             CONTAINER_FALLBACK_COLOR,
                             mesh::SolidShading::Lit,
-                            "map-a-shipment-container",
+                            &format!("map-a-shipment-container-{ci}-floor"),
                         )
                         .map_err(|e| JsValue::from_str(&e))?,
                     );
                 }
-                let (floor_prim, floor_local) = container_interior_floor(half);
+            }
+            for (prim, color, label) in container_door_hardware(half) {
+                // Frame / hinge straps are painted; gasket + latch hardware stay bare.
+                let upload_color = if label.contains("frame") {
+                    frame_paint
+                } else {
+                    color
+                };
                 batches.push(
                     mesh::upload_solid_batch(
                         &gpu,
-                        floor_prim,
-                        root * floor_local,
-                        CONTAINER_FALLBACK_COLOR,
+                        prim,
+                        root,
+                        upload_color,
                         mesh::SolidShading::Lit,
-                        "map-a-shipment-container-floor",
+                        &format!("{label}-{ci}"),
                     )
                     .map_err(|e| JsValue::from_str(&e))?,
                 );
             }
-        }
-        for (prim, color, label) in container_door_hardware(half) {
-            batches.push(
-                mesh::upload_solid_batch(&gpu, prim, root, color, mesh::SolidShading::Lit, label)
-                    .map_err(|e| JsValue::from_str(&e))?,
-            );
         }
 
         for (i, b) in def.boxes.iter().enumerate() {
@@ -1573,13 +1634,16 @@ fn map_world_from_def(def: &MapDef) -> MapWorld {
             t.units.len() + usize::from(t.ground_cargo.is_some()) + usize::from(t.tractor.is_some())
         })
         .unwrap_or(0);
-    let shell = shipment_container_shell(
-        Vec3::from_array(def.shipment_container.position),
-        Vec3::from_array(def.shipment_container.half_extents),
-    );
-    let mut boxes = Vec::with_capacity(shell.len() + def.boxes.len() + train_n);
+    let mut boxes =
+        Vec::with_capacity(def.shipment_containers.len() * 11 + def.boxes.len() + train_n);
     let mut ramps = Vec::with_capacity(1 + usize::from(def.train.is_some()));
-    boxes.extend(shell);
+    for c in &def.shipment_containers {
+        boxes.extend(shipment_container_shell(
+            Vec3::from_array(c.position),
+            Vec3::from_array(c.half_extents),
+            c.yaw,
+        ));
+    }
     for b in &def.boxes {
         boxes.push(MapBox {
             center: Vec3::from_array(b.position),
@@ -1669,12 +1733,15 @@ fn foot_surfaces_from_def(def: &MapDef) -> Result<FootSurfaces, String> {
             }
         }
     }
-    let shell = shipment_container_shell(
-        Vec3::from_array(def.shipment_container.position),
-        Vec3::from_array(def.shipment_container.half_extents),
-    );
-    if let Some(&floor) = shell.first() {
-        patches.push(undrawn_foot_from_box(FootKind::Steel, floor));
+    for c in &def.shipment_containers {
+        let shell = shipment_container_shell(
+            Vec3::from_array(c.position),
+            Vec3::from_array(c.half_extents),
+            c.yaw,
+        );
+        if let Some(&floor) = shell.first() {
+            patches.push(undrawn_foot_from_box(FootKind::Steel, floor));
+        }
     }
     Ok(FootSurfaces { patches })
 }
@@ -1706,7 +1773,16 @@ mod tests {
         assert!((rail.centerlines_z[1] - (-4.8)).abs() < 1e-5);
         assert!((def.ground.half_extents[0] - 24.0).abs() < 1e-5);
         assert!((def.ground.half_extents[1] - 24.0).abs() < 1e-5);
-        assert!(def.shipment_container.position[2] > -8.0);
+        assert_eq!(def.shipment_containers.len(), 2);
+        assert!((def.shipment_containers[0].position[0] - 8.0).abs() < 1e-5);
+        assert!((def.shipment_containers[0].position[2] - 12.0).abs() < 1e-5);
+        assert!((def.shipment_containers[1].position[0] - (-16.3)).abs() < 1e-5);
+        assert!((def.shipment_containers[1].position[2] - (-14.0)).abs() < 1e-5);
+        assert_eq!(def.shipment_containers[0].paint, "red");
+        assert_eq!(def.shipment_containers[1].paint, "green");
+        assert!((def.shipment_containers[1].yaw - 2.3561945).abs() < 1e-5);
+        // Yard cluster stays north of the home rail; tanker-side container sits south.
+        assert!(def.shipment_containers[0].position[2] > -8.0);
         for b in &def.boxes {
             assert!(b.position[2] > -8.0);
         }
@@ -1868,7 +1944,7 @@ mod tests {
     fn map_def_requires_ground() {
         let json = r#"{
             "ground": { "position": [0.0, 0.0, 0.0], "half_extents": [12.0, 12.0] },
-            "shipment_container": { "position": [0.0, 1.0, 0.0], "half_extents": [1.0, 1.0, 1.0] }
+            "shipment_containers": [{ "position": [0.0, 1.0, 0.0], "half_extents": [1.0, 1.0, 1.0] }]
         }"#;
         let def: MapDef = serde_json::from_str(json).unwrap();
         assert_eq!(def.ground.half_extents, [12.0, 12.0]);
@@ -1890,7 +1966,7 @@ mod tests {
     fn shipment_container_shell_is_walkable_pocket() {
         let center = Vec3::new(8.0, 1.22, 12.0);
         let half = Vec3::new(1.22, 1.22, 3.04);
-        let shell = shipment_container_shell(center, half);
+        let shell = shipment_container_shell(center, half, 0.0);
         assert_eq!(shell.len(), 11);
         let world = MapWorld {
             boxes: shell,

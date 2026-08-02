@@ -87,8 +87,10 @@ const PACKS = [
       const gravel = pickAlbedo('gravel');
       const cement = pickAlbedo('cement');
       const grass = pickAlbedo('grass');
-      const containerSide = pickAlbedo('container-side');
-      const containerDoor = pickAlbedo('container-door');
+      const containerSideRed = pickAlbedo('container-side-red');
+      const containerDoorRed = pickAlbedo('container-door-red');
+      const containerSideGreen = pickAlbedo('container-side-green');
+      const containerDoorGreen = pickAlbedo('container-door-green');
       return [
         {
           id: 'map-a.def',
@@ -111,14 +113,24 @@ const PACKS = [
           kind: grass.kind,
         },
         {
-          id: 'container-side.albedo',
-          path: path.join(materialsDir, containerSide.file),
-          kind: containerSide.kind,
+          id: 'container-side-red.albedo',
+          path: path.join(materialsDir, containerSideRed.file),
+          kind: containerSideRed.kind,
         },
         {
-          id: 'container-door.albedo',
-          path: path.join(materialsDir, containerDoor.file),
-          kind: containerDoor.kind,
+          id: 'container-door-red.albedo',
+          path: path.join(materialsDir, containerDoorRed.file),
+          kind: containerDoorRed.kind,
+        },
+        {
+          id: 'container-side-green.albedo',
+          path: path.join(materialsDir, containerSideGreen.file),
+          kind: containerSideGreen.kind,
+        },
+        {
+          id: 'container-door-green.albedo',
+          path: path.join(materialsDir, containerDoorGreen.file),
+          kind: containerDoorGreen.kind,
         },
         {
           id: 'spline-segment.mesh',

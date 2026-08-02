@@ -260,6 +260,19 @@ impl SelfState {
             return GroundStep::Blocked;
         }
 
+        // Thin walls (shell skins): support is point-sampled, so an 8 cm slab can be
+        // stepped over in one frame. Radius overlap with no standable rise → block
+        // (same capsule air uses). A low lip within step-up still auto-climbs.
+        if dy <= 1e-4 && world.inside_solid(nx, self.position.y, nz) {
+            if let Some(top) = world.reachable_overlap_top(nx, self.position.y, nz) {
+                self.position.x = nx;
+                self.position.z = nz;
+                self.position.y = top;
+                return GroundStep::Moved { fell: false };
+            }
+            return GroundStep::Blocked;
+        }
+
         if dy < -STEP_DOWN_M {
             self.position.x = nx;
             self.position.z = nz;
@@ -313,11 +326,19 @@ impl SelfState {
         let dz = self.air_vel_z * dt;
         self.displace_air_xz(dx, dz, world);
 
+        let y_before = self.position.y;
         self.velocity_y -= JUMP_GRAVITY_M_S2 * dt;
         self.position.y += self.velocity_y * dt;
         self.locomotion = LocomotionMode::Air;
 
-        let floor = world.support_y(self.position.x, self.position.z, self.position.y);
+        // Thin roofs: one tick can fall through an 8 cm slab. Probe support from the
+        // pre-fall sole so a crossed top still wins over an interior floor below.
+        let support_sole = if self.velocity_y <= 0.0 {
+            y_before.max(self.position.y)
+        } else {
+            self.position.y
+        };
+        let floor = world.support_y(self.position.x, self.position.z, support_sole);
         if self.position.y <= floor && self.velocity_y <= 0.0 {
             self.position.y = floor;
             self.velocity_y = 0.0;

@@ -909,3 +909,65 @@ fn walk_up_ramp_to_height() {
         s.position.y
     );
 }
+
+#[test]
+fn thin_wall_blocks_ground_walk() {
+    use crate::{MapBox, MapWorld};
+    // 8 cm skin at z=2 — thinner than a walk step; point support alone would tunnel.
+    let world = MapWorld {
+        boxes: vec![MapBox {
+            center: Vec3::new(0.0, 1.0, 2.0),
+            half: Vec3::new(2.0, 1.0, 0.04),
+            yaw: 0.0,
+        }],
+        ramps: vec![],
+    };
+    let mut s = SelfState::default_loadout();
+    for _ in 0..180 {
+        s.apply_move_world(1.0 / 60.0, 1.0, 0.0, false, &world);
+    }
+    assert!(s.position.y.abs() < 0.05, "y={}", s.position.y);
+    assert!(
+        s.position.z < 1.8,
+        "should not walk through thin wall, z={}",
+        s.position.z
+    );
+}
+
+#[test]
+fn thin_roof_catches_fast_fall() {
+    use crate::{MapBox, MapWorld};
+    let roof_top = 2.44_f32;
+    let world = MapWorld {
+        boxes: vec![
+            MapBox {
+                center: Vec3::new(0.0, 0.04, 0.0),
+                half: Vec3::new(1.22, 0.04, 3.04),
+                yaw: 0.0,
+            },
+            MapBox {
+                center: Vec3::new(0.0, roof_top - 0.04, 0.0),
+                half: Vec3::new(1.22, 0.04, 3.04),
+                yaw: 0.0,
+            },
+        ],
+        ramps: vec![],
+    };
+    let mut s = SelfState::default_loadout();
+    // Drop from above the roof with tank-scale fall speed so one tick tunnels 8 cm.
+    s.position = Vec3::new(0.0, 3.5, 0.0);
+    s.velocity_y = -8.0;
+    s.locomotion = LocomotionMode::Air;
+    for _ in 0..120 {
+        s.apply_move_world(1.0 / 60.0, 0.0, 0.0, false, &world);
+        if s.is_grounded() {
+            break;
+        }
+    }
+    assert!(s.is_grounded(), "should land");
+    assert!(
+        (s.position.y - roof_top).abs() < 0.05,
+        "should land on thin roof, y={} want ~{roof_top}",
+        s.position.y
+    );
+}

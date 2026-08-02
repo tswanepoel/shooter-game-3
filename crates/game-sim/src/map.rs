@@ -242,6 +242,33 @@ impl MapWorld {
         }
         false
     }
+
+    /// Highest solid top within step-up of `sole_y` that the figure capsule overlaps.
+    ///
+    /// Used when the feet centre is still off a low box top but the radius already
+    /// hits its side — allows the usual auto step-up without tunneling thin walls.
+    pub fn reachable_overlap_top(&self, x: f32, sole_y: f32, z: f32) -> Option<f32> {
+        let r = FIGURE_RADIUS_M;
+        let reach = sole_y + STEP_UP_M;
+        let mut best: Option<f32> = None;
+        for b in &self.boxes {
+            if !b.hits_circle_xz(x, z, r) {
+                continue;
+            }
+            let top = b.max_y();
+            if top > sole_y + 1e-4 && top <= reach + 1e-4 {
+                best = Some(best.map_or(top, |t| t.max(top)));
+            }
+        }
+        for ramp in &self.ramps {
+            if let Some(surface) = ramp.hits_circle_xz(x, z, r) {
+                if surface > sole_y + 1e-4 && surface <= reach + 1e-4 {
+                    best = Some(best.map_or(surface, |t| t.max(surface)));
+                }
+            }
+        }
+        best
+    }
 }
 
 #[cfg(test)]
