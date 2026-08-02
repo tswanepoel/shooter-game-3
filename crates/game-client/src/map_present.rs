@@ -1,4 +1,4 @@
-//! Cooked map load and draw (064 shipment container, 066 solids, 070/072/073 foot patches, 082 ground, 083 gravel, 084 cement, 085 grass, 086 container albedo, 087 closed door hardware, 088 lit map solids, 089 morning light, 090 rail corridor, 091 stationed train, 092 train collide).
+//! Cooked map load and draw (064 shipment container, 066 solids, 070/072/073 foot patches, 082 ground, 083 gravel, 084 cement, 085 grass, 086 container albedo, 087 closed door hardware, 088 lit map solids, 089 morning light, 090 rail corridor, 091 stationed train, 092 train collide, 093 parallel rail).
 
 #[cfg(target_arch = "wasm32")]
 use glam::Mat4;
@@ -315,10 +315,11 @@ struct MapDef {
     foot_patches: Vec<FootPatchDef>,
 }
 
-/// Straight east–west rail corridor (090). Present only — no collide.
+/// Straight east–west rail corridor (090; parallel tracks 093). Present only — no collide.
 #[derive(Debug, Deserialize)]
 struct RailDef {
-    centerline_z: f32,
+    /// World-Z centerlines for each parallel track (map **a**: home −8, north twin −4.8).
+    centerlines_z: Vec<f32>,
     x_min: f32,
     x_max: f32,
     /// Along-track spacing of wooden tracks in world metres; metal segments use half this.
@@ -817,13 +818,17 @@ impl MapGpu {
     }
 }
 
-/// Tile Kenney spline atoms along the rail corridor and upload two lit batches (090).
+/// Tile Kenney spline atoms along each rail centerline and upload two lit batches (090 / 093).
 #[cfg(target_arch = "wasm32")]
 fn upload_rail_corridor(
     gpu: &mesh::UploadCtx<'_>,
     pack: &pack::Pack,
     rail: &RailDef,
 ) -> Result<Vec<mesh::MeshBatch>, String> {
+    if rail.centerlines_z.is_empty() {
+        return Err("rail.centerlines_z is empty".into());
+    }
+
     let colormap = pack.get("train.colormap")?;
     let segment_glb = pack.get("spline-segment.mesh")?;
     let sleeper_glb = pack.get("spline-track.mesh")?;
@@ -1010,11 +1015,14 @@ fn sole_on_plane(plane_y: f32, min_y: f32) -> f32 {
 fn instance_rail_atom(local: &mesh::CpuPrim, rail: &RailDef, xs: &[f32], y: f32) -> mesh::CpuPrim {
     let color = local.2;
     let scale = rail.scale.max(1e-3);
-    let parts = xs
+    let parts = rail
+        .centerlines_z
         .iter()
-        .map(|&x| {
-            let root = kit_tr_s(Vec3::new(x, y, rail.centerline_z), rail.yaw, scale);
-            (local.clone(), root)
+        .flat_map(|&centerline_z| {
+            xs.iter().map(move |&x| {
+                let root = kit_tr_s(Vec3::new(x, y, centerline_z), rail.yaw, scale);
+                (local.clone(), root)
+            })
         })
         .collect();
     mesh::merge_transformed_prims(parts, color)
@@ -1083,14 +1091,18 @@ fn foot_surfaces_from_def(def: &MapDef) -> Result<FootSurfaces, String> {
     if let Some(rail) = &def.rail {
         let span = (rail.x_max - rail.x_min).max(0.0);
         let half_z = 0.5 * rail.scale.max(1e-3);
-        patches.push(FootPatch {
-            kind: FootKind::Cement,
-            center_x: rail.x_min + span * 0.5,
-            center_z: rail.centerline_z,
-            half_x: span * 0.5,
-            half_z,
-            draw: false,
-        });
+        let center_x = rail.x_min + span * 0.5;
+        let half_x = span * 0.5;
+        for &center_z in &rail.centerlines_z {
+            patches.push(FootPatch {
+                kind: FootKind::Cement,
+                center_x,
+                center_z,
+                half_x,
+                half_z,
+                draw: false,
+            });
+        }
     }
     if let Some(train) = &def.train {
         let boxes = train_collide_boxes(train);
@@ -1134,7 +1146,9 @@ mod tests {
         let json = include_str!("../../../assets/source/map-a.json");
         let def: MapDef = serde_json::from_str(json).unwrap();
         let rail = def.rail.as_ref().expect("map a has rail");
-        assert!((rail.centerline_z - (-8.0)).abs() < 1e-5);
+        assert_eq!(rail.centerlines_z.len(), 2);
+        assert!((rail.centerlines_z[0] - (-8.0)).abs() < 1e-5);
+        assert!((rail.centerlines_z[1] - (-4.8)).abs() < 1e-5);
         assert!((def.ground.half_extents[0] - 24.0).abs() < 1e-5);
         assert!((def.ground.half_extents[1] - 24.0).abs() < 1e-5);
         assert!(def.shipment_container.position[2] > -8.0);
@@ -1146,6 +1160,7 @@ mod tests {
         }
         let feet = foot_surfaces_from_def(&def).unwrap();
         assert_eq!(feet.at(18.0, -8.0), FootKind::Cement);
+        assert_eq!(feet.at(18.0, -4.8), FootKind::Cement);
     }
 
     #[test]
@@ -1170,7 +1185,7 @@ mod tests {
         assert_eq!(cargo.beside_unit, 2);
         let rail = def.rail.as_ref().expect("map a has rail");
         assert!((train.yaw - rail.yaw).abs() < 1e-5);
-        assert!((train.centerline_z - rail.centerline_z).abs() < 1e-5);
+        assert!((train.centerline_z - rail.centerlines_z[0]).abs() < 1e-5);
         assert!((train.scale - 2.0).abs() < 1e-5);
         assert!((rail.scale - 2.4).abs() < 1e-5);
         assert!((rail.stride - rail.scale).abs() < 1e-5);

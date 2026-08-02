@@ -38,7 +38,7 @@ Project world axes (shared with character / blaster kits):
 
 `spline-segment` Y bands (authored): sole **0**, deck **0.05**, rail-head detail **0.075**. Wooden tracks seat on the **deck**, not the rail-head `max_y`. Seating uses scaled local bands (`T · R · S`).
 
-Map **a** rail corridor (**090**) runs world **+X**. Instances use yaw **+π/2** so kit **+Z → world +X** and gauge sits on world **Z** about the centerline. `rail.stride` is world metres and must equal authored sleeper length × `rail.scale` (1.0 × 2.4 → **2.4**). Metal **segments** tile at half-stride on the gravel; wooden **tracks** tile at full stride with soles on the segment **deck**.
+Map **a** rail corridor (**090** / **093**) runs world **+X**. Instances use yaw **+π/2** so kit **+Z → world +X** and gauge sits on world **Z** about each centerline. `rail.centerlines_z` lists parallel tracks (home `−8`, north twin `−4.8`). `rail.stride` is world metres and must equal authored sleeper length × `rail.scale` (1.0 × 2.4 → **2.4**). Metal **segments** tile at half-stride on the gravel; wooden **tracks** tile at full stride with soles on the segment **deck**.
 
 Map **a** stationed train (**091**): same yaw as the rail, own `train.scale`; consist packed front→back (east→west) with `unit_gap` between cars; midpoint at `mid_x`. Optional `ground_cargo` places the lumber pile beside a unit (unloaded story). Tune `train.seat_y`, `train.loco_z_nudge`, `train.unit_gap`, and `ground_cargo.*` on the map def.
 

@@ -5,7 +5,7 @@
     "half_extents": [24.0, 24.0]
   },
   "rail": {
-    "centerline_z": -8.0,
+    "centerlines_z": [-8.0, -4.8],
     "x_min": -24.0,
     "x_max": 24.0,
     "stride": 2.4,
